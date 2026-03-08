@@ -173,6 +173,8 @@ class ShareServer:
         self.trigger_clip_cb: Optional[Callable[[], Coroutine]] = None
         # Injected so /api/status can report live state
         self.get_status_cb: Optional[Callable[[], dict]] = None
+        # Injected so config changes can be applied without restart when possible.
+        self.apply_config_cb: Optional[Callable[[], Coroutine]] = None
 
         self._setup_routes()
 
@@ -593,9 +595,16 @@ class ShareServer:
             }),
         )
         save_cfg(new_cfg)
-        # Apply live (takes effect on next daemon restart for recording settings)
+        # Apply live (some settings still require daemon restart, e.g. recorder backend).
         for field in ("recording", "hotkeys", "output", "sharing"):
             setattr(self.cfg, field, getattr(new_cfg, field))
+
+        if self.apply_config_cb:
+            try:
+                await self.apply_config_cb()
+            except Exception as exc:
+                log.warning("Live config apply failed: %s", exc)
+
         return web.json_response({"ok": True})
 
     async def _api_status(self, _: web.Request) -> web.Response:
