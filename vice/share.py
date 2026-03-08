@@ -99,10 +99,15 @@ async def _make_thumb(path: Path) -> Path:
     if thumb.exists():
         return thumb
     try:
+        # Seek a little after the start so we avoid intro black frames.
+        # Keep -ss after -i for accurate frame selection.
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-ss", "2", "-i", str(path),
-            "-vframes", "1", "-vf", "scale=640:-2", "-q:v", "4",
+            "-i", str(path),
+            "-ss", "0.75",
+            "-frames:v", "1",
+            "-vf", "thumbnail,scale=640:-2",
+            "-q:v", "4",
             str(thumb),
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
@@ -279,7 +284,7 @@ class ShareServer:
         return self._meta[slug]
 
     def _clip_json(self, slug: str, path: Path, meta: dict) -> dict:
-        base = self._tunnel_url or self._base_url
+        public_base = self._tunnel_url or self._base_url
         try:
             st = path.stat()
             size = st.st_size
@@ -294,9 +299,11 @@ class ShareServer:
             "duration":   meta.get("duration", 0),
             "width":      meta.get("width",    0),
             "height":     meta.get("height",   0),
-            "share_url":  f"{base}/c/{slug}",
-            "video_url":  f"{base}/v/{slug}",
-            "thumb_url":  f"{base}/t/{slug}",
+            # Keep share links public, but serve media via local relative URLs
+            # so the app UI never fetches video through an external tunnel.
+            "share_url":  f"{public_base}/c/{slug}",
+            "video_url":  f"/v/{slug}",
+            "thumb_url":  f"/t/{slug}",
         }
 
     # ── route handlers ────────────────────────────────────────────────────────

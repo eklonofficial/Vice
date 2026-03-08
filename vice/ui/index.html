@@ -1263,7 +1263,7 @@
     </div>
 
     <div class="viewer-video-wrap">
-      <video id="viewer-video" preload="metadata" controls></video>
+      <video id="viewer-video" preload="auto" playsinline controls></video>
       <button class="viewer-arrow viewer-arrow-prev" id="viewer-prev" onclick="viewerPrev()" title="Previous clip (←)">
         <svg data-lucide="chevron-left"></svg>
       </button>
@@ -1982,6 +1982,18 @@ let viewerSlug       = null;
 let viewerIdx        = -1;
 let viewerHighlights = [];
 
+function seekViewerTo(seconds) {
+  const vid = document.getElementById('viewer-video');
+  if (!vid) return;
+  const target = Math.max(0, Number(seconds) || 0);
+  try {
+    if (typeof vid.fastSeek === 'function') vid.fastSeek(target);
+    else vid.currentTime = target;
+  } catch (_) {
+    vid.currentTime = target;
+  }
+}
+
 function openViewer(slug) {
   const idx = clips.findIndex(c => c.slug === slug);
   if (idx < 0) return;
@@ -2002,7 +2014,11 @@ function openViewer(slug) {
     clips.length > 1 ? `${idx + 1} / ${clips.length}` : '';
 
   const vid = document.getElementById('viewer-video');
-  vid.src = c.video_url;
+  if (vid.src !== c.video_url) {
+    vid.pause();
+    vid.src = c.video_url;
+    vid.load();
+  }
   document.getElementById('viewer-progress').style.width = '0%';
   document.getElementById('viewer-playhead').style.left  = '0%';
   document.getElementById('viewer-prev').disabled = idx === 0;
@@ -2031,7 +2047,7 @@ function viewerTimelineClick(e) {
   const vid = document.getElementById('viewer-video');
   if (!vid.duration) return;
   const rect = document.getElementById('viewer-timeline').getBoundingClientRect();
-  vid.currentTime = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) * vid.duration;
+  seekViewerTo(Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) * vid.duration);
 }
 
 (function() {
@@ -2093,7 +2109,7 @@ function renderViewerHighlights() {
     m.style.left = pct + '%';
     m.style.background = color;
     m.title      = `${hl.label} — ${fmtSec(hl.time, true)}`;
-    m.onclick    = ev => { ev.stopPropagation(); vid.currentTime = hl.time; };
+    m.onclick    = ev => { ev.stopPropagation(); seekViewerTo(hl.time); };
     markersEl.appendChild(m);
   });
 
@@ -2124,7 +2140,7 @@ function renderViewerHighlights() {
     const timeEl = document.createElement('span');
     timeEl.className   = 'hl-time';
     timeEl.textContent = fmtSec(hl.time, true);
-    timeEl.onclick     = ev => { ev.stopPropagation(); vid.currentTime = hl.time; };
+    timeEl.onclick     = ev => { ev.stopPropagation(); seekViewerTo(hl.time); };
 
     const labelWrap = document.createElement('span');
     labelWrap.className = 'hl-label-wrap';
@@ -2144,7 +2160,7 @@ function renderViewerHighlights() {
     item.appendChild(timeEl);
     item.appendChild(labelWrap);
     item.appendChild(delBtn);
-    item.onclick = () => { vid.currentTime = hl.time; };
+    item.onclick = () => { seekViewerTo(hl.time); };
     listEl.appendChild(item);
   });
   lucide.createIcons();

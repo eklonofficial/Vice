@@ -161,6 +161,7 @@ class ViceDaemon:
             entry   = {"time": round(elapsed, 3), "label": label, "color": color}
             self._session_highlights.append(entry)
             click.echo(f"[Vice] Session highlight at {elapsed:.1f}s", err=True)
+            audio.play_highlight()
             if self.share:
                 asyncio.create_task(
                     self.share.broadcast({
