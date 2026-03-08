@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.vice.Vice</id>
+  <name>Vice</name>
+  <summary>Linux game clip recorder</summary>
+  <metadata_license>FSFAP</metadata_license>
+  <project_license>MIT</project_license>
+
+  <description>
+    <p>
+      Vice is a Medal.tv-style game clip recorder for Linux. Press a hotkey
+      during gameplay to instantly save the last 30 seconds as an MP4.
+    </p>
+    <ul>
+      <li>Hotkey-triggered rolling replay buffer (like ShadowPlay)</li>
+      <li>Supports Hyprland, GNOME, KDE, and all Wayland compositors</li>
+      <li>NVIDIA NVENC, AMD VAAPI, and software encoding</li>
+      <li>One-click Discord-embeddable share links</li>
+      <li>Built-in clip trimmer</li>
+    </ul>
+  </description>
+
+  <categories>
+    <category>Game</category>
+    <category>Video</category>
+    <category>AudioVideo</category>
+  </categories>
+
+  <keywords>
+    <keyword>clip</keyword>
+    <keyword>record</keyword>
+    <keyword>game</keyword>
+    <keyword>capture</keyword>
+    <keyword>gameplay</keyword>
+    <keyword>shadowplay</keyword>
+    <keyword>medal</keyword>
+  </keywords>
+
+  <url type="homepage">https://github.com/eklonofficial/Vice</url>
+  <url type="bugtracker">https://github.com/eklonofficial/Vice/issues</url>
+
+  <releases>
+    <release version="0.1.0" date="2026-03-07"/>
+  </releases>
+
+  <content_rating type="oars-1.1"/>
+</component>

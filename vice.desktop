@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Vice
+GenericName=Game Clip Recorder
+Comment=Record and share gameplay clips on Linux — like Medal.tv
+Exec=vice-app %u
+Icon=vice
+Terminal=false
+Categories=Game;Video;Recorder;AudioVideo;
+Keywords=clip;record;game;capture;gameplay;screenshot;streaming;
+StartupNotify=true
+StartupWMClass=Vice
+MimeType=

@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0f1a2e"/>
+      <stop offset="100%" stop-color="#080d1a"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#60a5fa"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="dot" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#93c5fd"/>
+      <stop offset="100%" stop-color="#1d4ed8"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Rounded square background -->
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+
+  <!-- Subtle inner border -->
+  <rect x="2" y="2" width="508" height="508" rx="110"
+        fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="2"/>
+
+  <!-- Outer record ring -->
+  <circle cx="256" cy="256" r="168" fill="none"
+          stroke="url(#ring)" stroke-width="22" opacity="0.9" filter="url(#glow)"/>
+
+  <!-- Mid ring (thin, subtle) -->
+  <circle cx="256" cy="256" r="130" fill="none"
+          stroke="rgba(147,197,253,0.2)" stroke-width="2"/>
+
+  <!-- Inner filled circle (the record button) -->
+  <circle cx="256" cy="256" r="96" fill="url(#dot)" filter="url(#glow)"/>
+
+  <!-- Center hole (gives depth) -->
+  <circle cx="256" cy="256" r="36" fill="#0d0d1a"/>
+
+  <!-- Recording indicator dot (top-right of center circle) -->
+  <circle cx="295" cy="220" r="14" fill="#f43f5e" opacity="0.9"/>
+</svg>
