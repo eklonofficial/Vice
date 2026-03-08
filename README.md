@@ -138,6 +138,7 @@ fps             = 60
 encoder         = "auto"   # auto | h264_nvenc | libx264 | hevc_nvenc | h264_vaapi
 backend         = "auto"   # auto | gsr | wf-recorder | ffmpeg
 capture_audio   = true
+apply_watermark = false   # enable only if you want watermark text on exports
 
 [hotkeys]
 clip = "KEY_F9"

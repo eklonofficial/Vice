@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -61,6 +62,43 @@ def _run_ok(cmd: list[str]) -> bool:
 
 def _has(tool: str) -> bool:
     return shutil.which(tool) is not None
+
+
+def _desktop_audio_source(preferred: str) -> str:
+    """
+    Resolve a Pulse/PipeWire source name that captures desktop output audio.
+
+    When users leave audio_sink as "default", ffmpeg/wf-recorder may record
+    the current default *input* source (microphone) on some setups. We prefer
+    the default sink's monitor source so clips contain system/game audio.
+    """
+    if preferred and preferred != "default":
+        return preferred
+
+    if not _has("pactl"):
+        return preferred
+
+    try:
+        sink = subprocess.check_output(
+            ["pactl", "get-default-sink"], text=True, stderr=subprocess.DEVNULL
+        ).strip()
+        if sink:
+            return f"{sink}.monitor"
+    except Exception:
+        pass
+
+    try:
+        out = subprocess.check_output(
+            ["pactl", "list", "short", "sources"], text=True, stderr=subprocess.DEVNULL
+        )
+        for line in out.splitlines():
+            cols = re.split(r"\s+", line.strip())
+            if len(cols) > 1 and cols[1].endswith(".monitor"):
+                return cols[1]
+    except Exception:
+        pass
+
+    return preferred
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -229,7 +267,8 @@ class Recorder(ABC):
             log.error("Session file not found after stop: %s", path)
             return None
 
-        await _apply_watermark(path)
+        if self.cfg.recording.apply_watermark:
+            await _apply_watermark(path)
         log.info("Session clip saved: %s", path)
         self._emit(path)
         return path
@@ -240,11 +279,15 @@ class Recorder(ABC):
         encoder = choose_encoder(rc.encoder)
 
         if _is_wayland():
-            # wf-recorder is the most reliable direct-to-file tool on Wayland
+            # Prefer gpu-screen-recorder on Wayland (especially smoother on NVIDIA).
+            if _has("gpu-screen-recorder"):
+                return self._gsr_session_cmd(out_path, rc)
+
+            # Fallback: wf-recorder direct-to-file on Wayland.
             if _has("wf-recorder"):
                 cmd = ["wf-recorder", "--force-yuv", "-f", str(out_path)]
                 if rc.capture_audio:
-                    cmd += ["--audio"]
+                    cmd += [f"--audio={_desktop_audio_source(rc.audio_sink)}"]
                 if encoder in ("h264_nvenc", "hevc_nvenc"):
                     cmd += ["-c", encoder]
                 elif encoder == "h264_vaapi":
@@ -252,8 +295,8 @@ class Recorder(ABC):
                 else:
                     cmd += ["-c", "libx264"]
                 return cmd
-            # Fall through to ffmpeg (Wayland capture via pipewire portal or kmsgrab)
-            # For simplicity, use x11grab if DISPLAY is also set (XWayland)
+
+            # Last resort on XWayland sessions.
             if os.environ.get("DISPLAY") and _has("ffmpeg"):
                 return self._ffmpeg_session_cmd(out_path, encoder, rc)
             return None
@@ -262,6 +305,17 @@ class Recorder(ABC):
             return self._ffmpeg_session_cmd(out_path, encoder, rc)
 
         return None
+
+    @staticmethod
+    def _gsr_session_cmd(out_path: Path, rc) -> list[str]:
+        cmd = ["gpu-screen-recorder"]
+        cmd += ["-w", "screen" if _is_wayland() else os.environ.get("DISPLAY", ":0")]
+        cmd += ["-f", str(rc.fps)]
+        cmd += ["-c", "mp4"]
+        if rc.capture_audio:
+            cmd += ["-a", "default_output"]
+        cmd += ["-o", str(out_path)]
+        return cmd
 
     @staticmethod
     def _ffmpeg_session_cmd(out_path: Path, encoder: str, rc) -> list[str]:
@@ -284,7 +338,7 @@ class Recorder(ABC):
             cmd += ["-s", res]
         cmd += ["-i", display]
         if rc.capture_audio:
-            cmd += ["-f", "pulse", "-i", rc.audio_sink]
+            cmd += ["-f", "pulse", "-i", _desktop_audio_source(rc.audio_sink)]
         cmd += _encoder_flags(encoder, rc.crf)
         if rc.capture_audio:
             cmd += ["-c:a", "aac", "-b:a", "128k"]
@@ -296,14 +350,11 @@ class Recorder(ABC):
 # Clip trimming helper (used by GSR backend)
 # ──────────────────────────────────────────────────────────────────────────────
 
-import re as _re
-
-
 def _next_clip_path(out_dir: Path) -> Path:
     """Return the next available Vice_Clip_N.mp4 path in out_dir."""
     max_n = 0
     for f in out_dir.glob("Vice_Clip_*.mp4"):
-        m = _re.match(r"^Vice_Clip_(\d+)\.mp4$", f.name)
+        m = re.match(r"^Vice_Clip_(\d+)\.mp4$", f.name)
         if m:
             n = int(m.group(1))
             if n > max_n:
@@ -315,7 +366,7 @@ def _next_session_path(out_dir: Path) -> Path:
     """Return the next available Vice_Session_N.mp4 path in out_dir."""
     max_n = 0
     for f in out_dir.glob("Vice_Session_*.mp4"):
-        m = _re.match(r"^Vice_Session_(\d+)\.mp4$", f.name)
+        m = re.match(r"^Vice_Session_(\d+)\.mp4$", f.name)
         if m:
             n = int(m.group(1))
             if n > max_n:
@@ -528,7 +579,8 @@ class GSRRecorder(Recorder):
                 self._seen_files = {f.name for f in self._out_dir.glob("*.mp4")}
                 # GSR saves the entire buffer; trim to the requested clip duration.
                 trimmed = await _trim_to_last_n_seconds(newest, self.cfg.recording.clip_duration)
-                await _apply_watermark(trimmed)
+                if self.cfg.recording.apply_watermark:
+                    await _apply_watermark(trimmed)
                 log.info("Clip saved: %s", trimmed)
                 self._emit(trimmed)
                 return trimmed
@@ -577,7 +629,7 @@ class SegmentRecorder(Recorder):
             # wf-recorder geometry flag
             pass  # resolution is auto by default; geometry can be set with -g
         if rc.capture_audio:
-            cmd += ["--audio"]
+            cmd += [f"--audio={_desktop_audio_source(rc.audio_sink)}"]
         # Use ffmpeg codec flags via wf-recorder's -c option
         codec = self._encoder
         if codec in ("h264_nvenc", "hevc_nvenc"):
@@ -600,7 +652,7 @@ class SegmentRecorder(Recorder):
         cmd += ["-i", display]
 
         if rc.capture_audio:
-            cmd += ["-f", "pulse", "-i", rc.audio_sink]
+            cmd += ["-f", "pulse", "-i", _desktop_audio_source(rc.audio_sink)]
 
         enc_flags = _encoder_flags(self._encoder, rc.crf)
         cmd += enc_flags
@@ -774,7 +826,8 @@ class SegmentRecorder(Recorder):
             log.error("ffmpeg timed out during clip extraction")
             return None
 
-        await _apply_watermark(out_path)
+        if self.cfg.recording.apply_watermark:
+            await _apply_watermark(out_path)
         log.info("Clip saved: %s", out_path)
         self._emit(out_path)
         return out_path
