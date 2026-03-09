@@ -67,6 +67,7 @@ class ViceDaemon:
             self.share = ShareServer(self.cfg)
             self.share.trigger_clip_cb = self._handle_clip_hotkey
             self.share.get_status_cb   = self._get_status
+            self.share.apply_config_cb = self._apply_live_config
             await self.share.start()
 
         # Recorder callback — fires for both normal clips and session clips
@@ -84,18 +85,15 @@ class ViceDaemon:
                         "type": "status", "recording": True,
                         "backend": self.recorder.name,
                         "session_active": self._session_active,
+                        "clip_key": self.cfg.hotkeys.clip,
                     })
                 )
 
         self.recorder.on_clip_saved(_on_clip_saved)
 
         # Hotkeys
+        self._bind_hotkeys()
         clip_key = self.cfg.hotkeys.clip
-        if clip_key:
-            # Single tap → save clip (or add session highlight)
-            self.hotkeys.on(clip_key, self._handle_clip_hotkey)
-            # Double tap → toggle session recording
-            self.hotkeys.on_double(clip_key, self._handle_session_toggle)
 
         PID_FILE.write_text(str(os.getpid()))
 
@@ -130,12 +128,35 @@ class ViceDaemon:
         await stop_event.wait()
         await self._shutdown(server)
 
+    def _bind_hotkeys(self) -> None:
+        """(Re)bind runtime hotkeys from current config."""
+        self.hotkeys.clear_bindings()
+        clip_key = self.cfg.hotkeys.clip
+        if clip_key:
+            # Single tap → save clip (or add session highlight)
+            self.hotkeys.on(clip_key, self._handle_clip_hotkey)
+            # Double tap → toggle session recording
+            self.hotkeys.on_double(clip_key, self._handle_session_toggle)
+
+    async def _apply_live_config(self) -> None:
+        """Apply config changes that can be updated without daemon restart."""
+        self._bind_hotkeys()
+        if self.share:
+            await self.share.broadcast({
+                "type": "status",
+                "recording": True,
+                "backend": self.recorder.name,
+                "session_active": self._session_active,
+                "clip_key": self.cfg.hotkeys.clip,
+            })
+
     def _get_status(self) -> dict:
         return {
             "recording":      True,
             "backend":        self.recorder.name,
             "clips":          self._clip_count,
             "session_active": self._session_active,
+            "clip_key": self.cfg.hotkeys.clip,
         }
 
     async def _shutdown(self, server) -> None:
@@ -161,6 +182,7 @@ class ViceDaemon:
             entry   = {"time": round(elapsed, 3), "label": label, "color": color}
             self._session_highlights.append(entry)
             click.echo(f"[Vice] Session highlight at {elapsed:.1f}s", err=True)
+            audio.play_highlight()
             if self.share:
                 asyncio.create_task(
                     self.share.broadcast({
@@ -257,6 +279,7 @@ class ViceDaemon:
                     "output":         self.cfg.output.directory,
                     "share_url":      self.share.base_url() if self.share else None,
                     "session_active": self._session_active,
+                    "clip_key":       self.cfg.hotkeys.clip,
                 }).encode() + b"\n")
             elif cmd == "url":
                 url = self.share.base_url() if self.share else ""

@@ -99,10 +99,15 @@ async def _make_thumb(path: Path) -> Path:
     if thumb.exists():
         return thumb
     try:
+        # Seek a little after the start so we avoid intro black frames.
+        # Keep -ss after -i for accurate frame selection.
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-ss", "2", "-i", str(path),
-            "-vframes", "1", "-vf", "scale=640:-2", "-q:v", "4",
+            "-i", str(path),
+            "-ss", "0.75",
+            "-frames:v", "1",
+            "-vf", "thumbnail,scale=640:-2",
+            "-q:v", "4",
             str(thumb),
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
@@ -168,6 +173,8 @@ class ShareServer:
         self.trigger_clip_cb: Optional[Callable[[], Coroutine]] = None
         # Injected so /api/status can report live state
         self.get_status_cb: Optional[Callable[[], dict]] = None
+        # Injected so config changes can be applied without restart when possible.
+        self.apply_config_cb: Optional[Callable[[], Coroutine]] = None
 
         self._setup_routes()
 
@@ -279,7 +286,7 @@ class ShareServer:
         return self._meta[slug]
 
     def _clip_json(self, slug: str, path: Path, meta: dict) -> dict:
-        base = self._tunnel_url or self._base_url
+        public_base = self._tunnel_url or self._base_url
         try:
             st = path.stat()
             size = st.st_size
@@ -294,9 +301,11 @@ class ShareServer:
             "duration":   meta.get("duration", 0),
             "width":      meta.get("width",    0),
             "height":     meta.get("height",   0),
-            "share_url":  f"{base}/c/{slug}",
-            "video_url":  f"{base}/v/{slug}",
-            "thumb_url":  f"{base}/t/{slug}",
+            # Keep share links public, but serve media via local relative URLs
+            # so the app UI never fetches video through an external tunnel.
+            "share_url":  f"{public_base}/c/{slug}",
+            "video_url":  f"/v/{slug}",
+            "thumb_url":  f"/t/{slug}",
         }
 
     # ── route handlers ────────────────────────────────────────────────────────
@@ -432,6 +441,8 @@ class ShareServer:
 
         # Sanitise — no path separators; always .mp4
         new_name = new_name.replace("/", "").replace("\\", "").replace("\0", "")
+        if " " in new_name:
+            return web.json_response({"ok": False, "error": "Clip name cannot contain spaces"})
         if not new_name.lower().endswith(".mp4"):
             new_name += ".mp4"
 
@@ -501,6 +512,12 @@ class ShareServer:
                     h["label"] = (body["label"] or "Highlight").strip() or "Highlight"
                 if "color" in body:
                     h["color"] = body["color"]
+                if "time" in body:
+                    try:
+                        h["time"] = round(max(0.0, float(body["time"])), 3)
+                    except (TypeError, ValueError):
+                        pass
+                hl.sort(key=lambda x: float(x.get("time", 0)))
                 _save_highlights(slug, hl)
                 return web.json_response({"ok": True})
         return web.json_response({"ok": False, "error": "highlight not found"})
@@ -586,9 +603,16 @@ class ShareServer:
             }),
         )
         save_cfg(new_cfg)
-        # Apply live (takes effect on next daemon restart for recording settings)
+        # Apply live (some settings still require daemon restart, e.g. recorder backend).
         for field in ("recording", "hotkeys", "output", "sharing"):
             setattr(self.cfg, field, getattr(new_cfg, field))
+
+        if self.apply_config_cb:
+            try:
+                await self.apply_config_cb()
+            except Exception as exc:
+                log.warning("Live config apply failed: %s", exc)
+
         return web.json_response({"ok": True})
 
     async def _api_status(self, _: web.Request) -> web.Response:

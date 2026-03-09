@@ -67,6 +67,14 @@ class HotkeyListener:
         """
         self._double_bindings.setdefault(key_name, []).append(callback)
 
+    def clear_bindings(self) -> None:
+        """Remove all hotkey bindings and cancel pending single-tap timers."""
+        self._bindings.clear()
+        self._double_bindings.clear()
+        for t in self._pending.values():
+            t.cancel()
+        self._pending.clear()
+
     async def start(self) -> None:
         """Discover keyboards and spawn a listener task per device."""
         keyboards = _find_keyboards()

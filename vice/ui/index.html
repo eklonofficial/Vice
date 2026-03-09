@@ -802,6 +802,7 @@
       transition: transform .12s;
     }
     .hl-marker:hover { transform: translate(-50%,-50%) scale(1.45); }
+    .hl-marker.dragging { transform: translate(-50%,-50%) scale(1.35); box-shadow: 0 0 0 2px rgba(255,255,255,.15); }
 
     /* Highlight list */
     .viewer-hl-list { display: flex; flex-direction: column; gap: 3px; max-height: 136px; overflow-y: auto; }
@@ -1263,7 +1264,7 @@
     </div>
 
     <div class="viewer-video-wrap">
-      <video id="viewer-video" controls></video>
+      <video id="viewer-video" preload="auto" playsinline controls></video>
       <button class="viewer-arrow viewer-arrow-prev" id="viewer-prev" onclick="viewerPrev()" title="Previous clip (←)">
         <svg data-lucide="chevron-left"></svg>
       </button>
@@ -1598,6 +1599,44 @@ async function fetchClips() {
   }
 }
 
+
+let activePreviewVideo = null;
+
+function stopActivePreview(resetTime = true) {
+  if (!activePreviewVideo) return;
+  try {
+    activePreviewVideo.pause();
+    if (resetTime) activePreviewVideo.currentTime = 0;
+  } catch (_) {}
+  activePreviewVideo = null;
+}
+
+function startPreview(slug) {
+  const card = document.getElementById('card-' + slug);
+  if (!card) return;
+  const vid = card.querySelector('video.preview-video');
+  if (!vid) return;
+
+  if (activePreviewVideo && activePreviewVideo !== vid) {
+    stopActivePreview(true);
+  }
+
+  activePreviewVideo = vid;
+  const maybe = vid.play();
+  if (maybe && typeof maybe.catch === 'function') maybe.catch(() => {});
+}
+
+function stopPreview(slug) {
+  const card = document.getElementById('card-' + slug);
+  const vid = card?.querySelector('video.preview-video');
+  if (!vid) return;
+  try {
+    vid.pause();
+    vid.currentTime = 0;
+  } catch (_) {}
+  if (activePreviewVideo === vid) activePreviewVideo = null;
+}
+
 function renderClips() {
   const grid  = document.getElementById('clips-grid');
   const empty = document.getElementById('clips-empty');
@@ -1607,6 +1646,7 @@ function renderClips() {
   sub.textContent = n === 0 ? 'No clips saved yet' : `${n} clip${n !== 1 ? 's' : ''}`;
   empty.style.display = n === 0 ? 'block' : 'none';
 
+  stopActivePreview(true);
   grid.innerHTML = clips.map(c => cardHTML(c)).join('');
   lucide.createIcons();
 }
@@ -1622,11 +1662,10 @@ function cardHTML(c) {
 
   return `
   <div class="clip-card" id="card-${escAttr(c.slug)}">
-    <div class="thumb-wrap" onclick="openViewer('${escAttr(c.slug)}')" style="cursor:pointer">
+    <div class="thumb-wrap" onclick="openViewer('${escAttr(c.slug)}')" onmouseenter="startPreview('${escAttr(c.slug)}')" onmouseleave="stopPreview('${escAttr(c.slug)}')" style="cursor:pointer">
       ${c.thumb_url
         ? `<img src="${c.thumb_url}" loading="lazy" alt="">
-           <video src="${c.video_url}" muted loop preload="none"
-                  onmouseenter="this.play()" onmouseleave="this.pause();this.currentTime=0"></video>`
+           <video class="preview-video" src="${c.video_url}" muted loop playsinline preload="none"></video>`
         : `<div class="thumb-placeholder"><svg data-lucide="film" width="24" height="24"></svg></div>`}
       ${durStr ? `<span class="clip-dur-badge">${durStr}</span>` : ''}
       ${isNew  ? `<span class="clip-new-badge">NEW</span>`       : ''}
@@ -1981,8 +2020,22 @@ function escAttr(s) { return String(s).replace(/&/g,'&amp;').replace(/'/g,'&#39;
 let viewerSlug       = null;
 let viewerIdx        = -1;
 let viewerHighlights = [];
+let draggingHighlight = null;
+
+function seekViewerTo(seconds) {
+  const vid = document.getElementById('viewer-video');
+  if (!vid) return;
+  const target = Math.max(0, Number(seconds) || 0);
+  try {
+    if (typeof vid.fastSeek === 'function') vid.fastSeek(target);
+    else vid.currentTime = target;
+  } catch (_) {
+    vid.currentTime = target;
+  }
+}
 
 function openViewer(slug) {
+  stopActivePreview(true);
   const idx = clips.findIndex(c => c.slug === slug);
   if (idx < 0) return;
   viewerSlug = slug;
@@ -2002,7 +2055,11 @@ function openViewer(slug) {
     clips.length > 1 ? `${idx + 1} / ${clips.length}` : '';
 
   const vid = document.getElementById('viewer-video');
-  vid.src = c.video_url;
+  if (vid.src !== c.video_url) {
+    vid.pause();
+    vid.src = c.video_url;
+    vid.load();
+  }
   document.getElementById('viewer-progress').style.width = '0%';
   document.getElementById('viewer-playhead').style.left  = '0%';
   document.getElementById('viewer-prev').disabled = idx === 0;
@@ -2014,6 +2071,7 @@ function openViewer(slug) {
 }
 
 function closeViewer() {
+  stopActivePreview(true);
   document.getElementById('viewer-modal').classList.remove('open');
   const vid = document.getElementById('viewer-video');
   vid.pause(); vid.src = '';
@@ -2031,7 +2089,7 @@ function viewerTimelineClick(e) {
   const vid = document.getElementById('viewer-video');
   if (!vid.duration) return;
   const rect = document.getElementById('viewer-timeline').getBoundingClientRect();
-  vid.currentTime = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) * vid.duration;
+  seekViewerTo(Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) * vid.duration);
 }
 
 (function() {
@@ -2092,8 +2150,9 @@ function renderViewerHighlights() {
     m.className  = 'hl-marker';
     m.style.left = pct + '%';
     m.style.background = color;
-    m.title      = `${hl.label} — ${fmtSec(hl.time, true)}`;
-    m.onclick    = ev => { ev.stopPropagation(); vid.currentTime = hl.time; };
+    m.title      = `${hl.label} — ${fmtSec(hl.time, true)} (drag to move)`;
+    m.onpointerdown = ev => beginHighlightDrag(ev, hl, m);
+    m.onclick    = ev => { if (!draggingHighlight) { ev.stopPropagation(); seekViewerTo(hl.time); } };
     markersEl.appendChild(m);
   });
 
@@ -2124,7 +2183,7 @@ function renderViewerHighlights() {
     const timeEl = document.createElement('span');
     timeEl.className   = 'hl-time';
     timeEl.textContent = fmtSec(hl.time, true);
-    timeEl.onclick     = ev => { ev.stopPropagation(); vid.currentTime = hl.time; };
+    timeEl.onclick     = ev => { ev.stopPropagation(); seekViewerTo(hl.time); };
 
     const labelWrap = document.createElement('span');
     labelWrap.className = 'hl-label-wrap';
@@ -2144,10 +2203,80 @@ function renderViewerHighlights() {
     item.appendChild(timeEl);
     item.appendChild(labelWrap);
     item.appendChild(delBtn);
-    item.onclick = () => { vid.currentTime = hl.time; };
+    item.onclick = () => { seekViewerTo(hl.time); };
     listEl.appendChild(item);
   });
   lucide.createIcons();
+}
+
+function dragTimeFromPointer(ev) {
+  const vid = document.getElementById('viewer-video');
+  const tl  = document.getElementById('viewer-timeline');
+  if (!vid || !tl || !vid.duration) return null;
+  const rect = tl.getBoundingClientRect();
+  const x = Math.max(rect.left, Math.min(rect.right, ev.clientX));
+  const ratio = Math.max(0, Math.min(1, (x - rect.left) / rect.width));
+  return ratio * vid.duration;
+}
+
+function beginHighlightDrag(ev, hl, markerEl) {
+  if (ev.button !== undefined && ev.button !== 0) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  const t = dragTimeFromPointer(ev);
+  draggingHighlight = { id: hl.id, markerEl, startTime: hl.time, time: t ?? hl.time };
+  markerEl.classList.add('dragging');
+
+  const onMove = moveEv => {
+    if (!draggingHighlight) return;
+    const next = dragTimeFromPointer(moveEv);
+    if (next == null) return;
+    draggingHighlight.time = next;
+    const item = viewerHighlights.find(h => h.id === draggingHighlight.id);
+    if (item) {
+      item.time = Number(next.toFixed(3));
+      viewerHighlights.sort((a, b) => a.time - b.time);
+      renderViewerHighlights();
+    }
+  };
+
+  const onUp = async upEv => {
+    window.removeEventListener('pointermove', onMove, true);
+    window.removeEventListener('pointerup', onUp, true);
+    window.removeEventListener('pointercancel', onUp, true);
+
+    const cur = draggingHighlight;
+    draggingHighlight = null;
+    if (cur?.markerEl) cur.markerEl.classList.remove('dragging');
+
+    if (!cur) return;
+    const finalTime = dragTimeFromPointer(upEv);
+    const applied = Number((finalTime ?? cur.time).toFixed(3));
+    const item = viewerHighlights.find(h => h.id === cur.id);
+    if (item) item.time = applied;
+    viewerHighlights.sort((a, b) => a.time - b.time);
+    renderViewerHighlights();
+
+    if (!viewerSlug) return;
+    try {
+      await fetch(`/api/clips/${viewerSlug}/highlights/${cur.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ time: applied }),
+      });
+      toast(`Highlight moved to ${fmtSec(applied, true)}`, 'ok');
+    } catch (_) {
+      const old = viewerHighlights.find(h => h.id === cur.id);
+      if (old) old.time = cur.startTime;
+      viewerHighlights.sort((a, b) => a.time - b.time);
+      renderViewerHighlights();
+      toast('Failed to move highlight', 'err');
+    }
+  };
+
+  window.addEventListener('pointermove', onMove, true);
+  window.addEventListener('pointerup', onUp, true);
+  window.addEventListener('pointercancel', onUp, true);
 }
 
 function showColorPicker(hlId, currentColor, anchorEl) {
@@ -2316,6 +2445,13 @@ function startRename(slug) {
     const newName = input.value.trim();
     if (!newName || newName === current) {
       input.replaceWith(nameEl);
+      return;
+    }
+    if (newName.includes(' ')) {
+      toast('Clip name cannot contain spaces', 'err');
+      submitted = false;
+      input.focus();
+      input.select();
       return;
     }
     try {
