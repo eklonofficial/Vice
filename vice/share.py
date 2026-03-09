@@ -56,6 +56,23 @@ def _save_highlights(slug: str, highlights: list) -> None:
     (HIGHLIGHTS_DIR / f"{slug}.json").write_text(json.dumps(highlights))
 
 
+def _thumb_path(path: Path) -> Path:
+    """Return cache path unique to this clip file content/version."""
+    try:
+        st = path.stat()
+        key = f"{path.stem}_{st.st_size}_{st.st_mtime_ns}"
+    except OSError:
+        key = path.stem
+    return THUMB_DIR / f"{key}.jpg"
+
+
+def _purge_slug_thumbs(slug: str) -> None:
+    """Remove any cached thumbs for a slug (legacy + versioned variants)."""
+    THUMB_DIR.mkdir(parents=True, exist_ok=True)
+    for t in THUMB_DIR.glob(f"{slug}*.jpg"):
+        t.unlink(missing_ok=True)
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _local_ip() -> str:
@@ -95,7 +112,7 @@ async def _ffprobe(path: Path) -> dict:
 async def _make_thumb(path: Path) -> Path:
     """Lazily generate a 640px-wide JPEG thumbnail stored in THUMB_DIR."""
     THUMB_DIR.mkdir(parents=True, exist_ok=True)
-    thumb = THUMB_DIR / f"{path.stem}.jpg"
+    thumb = _thumb_path(path)
     if thumb.exists():
         return thumb
     try:
@@ -381,7 +398,7 @@ class ShareServer:
         path = self._clips.pop(slug, None)
         if path and path.exists():
             path.unlink()
-        (THUMB_DIR      / f"{slug}.jpg" ).unlink(missing_ok=True)
+        _purge_slug_thumbs(slug)
         (HIGHLIGHTS_DIR / f"{slug}.json").unlink(missing_ok=True)
         self._meta.pop(slug, None)
         await self.broadcast({"type": "clip_deleted", "slug": slug})
@@ -423,7 +440,7 @@ class ShareServer:
 
         tmp.replace(path)
         # Clear cached thumbnail and metadata so they regenerate on next access
-        (THUMB_DIR / f"{slug}.jpg").unlink(missing_ok=True)
+        _purge_slug_thumbs(slug)
         self._meta.pop(slug, None)
         asyncio.create_task(self._broadcast_clip(slug, path))
         return web.json_response({"ok": True, "slug": slug})
@@ -456,7 +473,7 @@ class ShareServer:
         # Update internal state
         self._clips.pop(slug, None)
         self._clips[new_slug] = new_path
-        (THUMB_DIR / f"{slug}.jpg").unlink(missing_ok=True)
+        _purge_slug_thumbs(slug)
         self._meta.pop(slug, None)
 
         # Rename highlights file if it exists
