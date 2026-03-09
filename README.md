@@ -1,3 +1,5 @@
+
+```markdown
 <p align="center">
   <img src="assets/vice.svg" width="96" alt="Vice icon"/>
 </p>
@@ -9,17 +11,23 @@ Press a hotkey — instantly save the last 15 seconds of gameplay.
 
 ---
 
-## Quick Start
+## Installation
+
+### Arch Linux / Manjaro / Arch-based (AUR)
 
 ```bash
-# To install:
+yay -S vice-clipper
+# or
+paru -S vice-clipper
+```
+
+Then launch **Vice** from your app launcher or run `vice-app`.
+
+### Other Distros (git clone)
+
+```bash
 git clone https://github.com/eklonofficial/Vice
 cd Vice
-./install.sh
-
-# To update:
-cd Vice
-git pull
 ./install.sh
 ```
 
@@ -27,7 +35,25 @@ After the installer finishes, **restart your terminal**, then launch **Vice** fr
 
 > If the `vice` command isn't found after restart, run `exec $SHELL` (or `exec fish` on fish shell).
 
-### How it works
+### Updating
+
+**AUR:** Your AUR helper handles updates automatically.
+```bash
+yay -Syu
+# or
+paru -Syu
+```
+
+**Git clone:**
+```bash
+cd Vice
+git pull
+./install.sh
+```
+
+---
+
+## How It Works
 
 | Action | What happens |
 |---|---|
@@ -173,11 +199,15 @@ cloudflare_tunnel = true
 
 ### Uninstall
 
+**AUR:**
+```bash
+sudo pacman -Rns vice-clipper
+```
+
+**Git clone:**
 ```bash
 vice uninstall
-# If installed using git clone, then also run:
 rm -rf Vice
-# Replace Vice with path to where the repo was cloned
 ```
 
 ---
@@ -185,3 +215,4 @@ rm -rf Vice
 ## License
 
 [GPL-3.0](LICENSE)
+```
