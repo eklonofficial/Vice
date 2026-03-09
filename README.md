@@ -152,20 +152,6 @@ port              = 8765
 cloudflare_tunnel = true
 ```
 
-### Alternative Install Methods
-
-**AppImage (portable — no install needed):**
-```bash
-chmod +x Vice-1.0.0-x86_64.AppImage
-./Vice-1.0.0-x86_64.AppImage
-```
-
-**Flatpak (build yourself):**
-```bash
-./packaging/flatpak/build.sh
-flatpak run com.vice.Vice
-```
-
 ### Troubleshooting
 
 **`vice: command not found` after install**
@@ -189,6 +175,9 @@ flatpak run com.vice.Vice
 
 ```bash
 vice uninstall
+# If installed using git clone, then also run:
+rm -rf Vice
+# Replace Vice with path to where the repo was cloned
 ```
 
 ---
