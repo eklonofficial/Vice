@@ -38,6 +38,9 @@ class RecordingConfig:
     backend: str = "auto"
     # Include desktop audio in clips.
     capture_audio: bool = True
+    # Burn the "Clipped with Vice" watermark into exported clips.
+    # Disabled by default to avoid encoding spikes while gaming.
+    apply_watermark: bool = False
     # PulseAudio/PipeWire sink name. "default" works for most setups.
     audio_sink: str = "default"
 

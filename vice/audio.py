@@ -6,6 +6,7 @@ Three sounds are pre-generated at import time:
   CLIP_SOUND     — quick two-note ascending ping (clip saved)
   SESSION_START  — three ascending tones (session recording started)
   SESSION_END    — three descending tones (session recording stopped)
+  HIGHLIGHT_SOUND — soft single chime (session highlight marked)
 
 All playback is non-blocking (asyncio task).
 No external audio files needed — pure Python + stdlib wave module.
@@ -85,6 +86,7 @@ def _make_wav(*tones: tuple[float, float], gap: float = 0.012) -> bytes:
 CLIP_SOUND    = _make_wav((880, 0.07), (1109, 0.11))
 SESSION_START = _make_wav((523, 0.09), (659, 0.09), (784, 0.13))
 SESSION_END   = _make_wav((784, 0.09), (659, 0.09), (523, 0.14))
+HIGHLIGHT_SOUND = _make_wav((988, 0.06))
 
 
 # ── Playback ───────────────────────────────────────────────────────────────────
@@ -94,12 +96,14 @@ _TMP_DIR   = Path("/tmp/vice")
 _TMP_CLIP  = _TMP_DIR / "snd_clip.wav"
 _TMP_START = _TMP_DIR / "snd_session_start.wav"
 _TMP_END   = _TMP_DIR / "snd_session_end.wav"
+_TMP_HL    = _TMP_DIR / "snd_highlight.wav"
 
 # Map sound bytes → stable temp path (written once, reused)
 _SOUND_MAP: dict[int, Path] = {
     id(CLIP_SOUND):    _TMP_CLIP,
     id(SESSION_START): _TMP_START,
     id(SESSION_END):   _TMP_END,
+    id(HIGHLIGHT_SOUND): _TMP_HL,
 }
 
 
@@ -166,3 +170,8 @@ def play_session_start() -> None:
 def play_session_end() -> None:
     """Fire-and-forget: play the session-ended notification sound."""
     asyncio.create_task(_play(SESSION_END))
+
+
+def play_highlight() -> None:
+    """Fire-and-forget: play the session-highlight marker sound."""
+    asyncio.create_task(_play(HIGHLIGHT_SOUND))

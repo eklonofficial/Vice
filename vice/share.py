@@ -56,6 +56,23 @@ def _save_highlights(slug: str, highlights: list) -> None:
     (HIGHLIGHTS_DIR / f"{slug}.json").write_text(json.dumps(highlights))
 
 
+def _thumb_path(path: Path) -> Path:
+    """Return cache path unique to this clip file content/version."""
+    try:
+        st = path.stat()
+        key = f"{path.stem}_{st.st_size}_{st.st_mtime_ns}"
+    except OSError:
+        key = path.stem
+    return THUMB_DIR / f"{key}.jpg"
+
+
+def _purge_slug_thumbs(slug: str) -> None:
+    """Remove any cached thumbs for a slug (legacy + versioned variants)."""
+    THUMB_DIR.mkdir(parents=True, exist_ok=True)
+    for t in THUMB_DIR.glob(f"{slug}*.jpg"):
+        t.unlink(missing_ok=True)
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _local_ip() -> str:
@@ -95,14 +112,19 @@ async def _ffprobe(path: Path) -> dict:
 async def _make_thumb(path: Path) -> Path:
     """Lazily generate a 640px-wide JPEG thumbnail stored in THUMB_DIR."""
     THUMB_DIR.mkdir(parents=True, exist_ok=True)
-    thumb = THUMB_DIR / f"{path.stem}.jpg"
+    thumb = _thumb_path(path)
     if thumb.exists():
         return thumb
     try:
+        # Seek a little after the start so we avoid intro black frames.
+        # Keep -ss after -i for accurate frame selection.
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-ss", "2", "-i", str(path),
-            "-vframes", "1", "-vf", "scale=640:-2", "-q:v", "4",
+            "-i", str(path),
+            "-ss", "0.75",
+            "-frames:v", "1",
+            "-vf", "thumbnail,scale=640:-2",
+            "-q:v", "4",
             str(thumb),
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
@@ -168,6 +190,8 @@ class ShareServer:
         self.trigger_clip_cb: Optional[Callable[[], Coroutine]] = None
         # Injected so /api/status can report live state
         self.get_status_cb: Optional[Callable[[], dict]] = None
+        # Injected so config changes can be applied without restart when possible.
+        self.apply_config_cb: Optional[Callable[[], Coroutine]] = None
 
         self._setup_routes()
 
@@ -279,13 +303,16 @@ class ShareServer:
         return self._meta[slug]
 
     def _clip_json(self, slug: str, path: Path, meta: dict) -> dict:
-        base = self._tunnel_url or self._base_url
+        public_base = self._tunnel_url or self._base_url
         try:
             st = path.stat()
             size = st.st_size
+            mtime_ns = st.st_mtime_ns
             created_at = datetime.fromtimestamp(st.st_mtime).isoformat()
         except OSError:
-            size, created_at = 0, ""
+            size, mtime_ns, created_at = 0, 0, ""
+
+        thumb_rev = f"{size}-{mtime_ns}"
         return {
             "slug":       slug,
             "name":       path.name,
@@ -294,9 +321,12 @@ class ShareServer:
             "duration":   meta.get("duration", 0),
             "width":      meta.get("width",    0),
             "height":     meta.get("height",   0),
-            "share_url":  f"{base}/c/{slug}",
-            "video_url":  f"{base}/v/{slug}",
-            "thumb_url":  f"{base}/t/{slug}",
+            # Keep share links public, but serve media via local relative URLs
+            # so the app UI never fetches video through an external tunnel.
+            "share_url":  f"{public_base}/c/{slug}",
+            "video_url":  f"/v/{slug}",
+            # Cache-bust by clip file identity to avoid stale thumbs when slugs are reused.
+            "thumb_url":  f"/t/{slug}?v={thumb_rev}",
         }
 
     # ── route handlers ────────────────────────────────────────────────────────
@@ -372,7 +402,7 @@ class ShareServer:
         path = self._clips.pop(slug, None)
         if path and path.exists():
             path.unlink()
-        (THUMB_DIR      / f"{slug}.jpg" ).unlink(missing_ok=True)
+        _purge_slug_thumbs(slug)
         (HIGHLIGHTS_DIR / f"{slug}.json").unlink(missing_ok=True)
         self._meta.pop(slug, None)
         await self.broadcast({"type": "clip_deleted", "slug": slug})
@@ -414,7 +444,7 @@ class ShareServer:
 
         tmp.replace(path)
         # Clear cached thumbnail and metadata so they regenerate on next access
-        (THUMB_DIR / f"{slug}.jpg").unlink(missing_ok=True)
+        _purge_slug_thumbs(slug)
         self._meta.pop(slug, None)
         asyncio.create_task(self._broadcast_clip(slug, path))
         return web.json_response({"ok": True, "slug": slug})
@@ -432,6 +462,8 @@ class ShareServer:
 
         # Sanitise — no path separators; always .mp4
         new_name = new_name.replace("/", "").replace("\\", "").replace("\0", "")
+        if " " in new_name:
+            return web.json_response({"ok": False, "error": "Clip name cannot contain spaces"})
         if not new_name.lower().endswith(".mp4"):
             new_name += ".mp4"
 
@@ -445,7 +477,7 @@ class ShareServer:
         # Update internal state
         self._clips.pop(slug, None)
         self._clips[new_slug] = new_path
-        (THUMB_DIR / f"{slug}.jpg").unlink(missing_ok=True)
+        _purge_slug_thumbs(slug)
         self._meta.pop(slug, None)
 
         # Rename highlights file if it exists
@@ -501,6 +533,12 @@ class ShareServer:
                     h["label"] = (body["label"] or "Highlight").strip() or "Highlight"
                 if "color" in body:
                     h["color"] = body["color"]
+                if "time" in body:
+                    try:
+                        h["time"] = round(max(0.0, float(body["time"])), 3)
+                    except (TypeError, ValueError):
+                        pass
+                hl.sort(key=lambda x: float(x.get("time", 0)))
                 _save_highlights(slug, hl)
                 return web.json_response({"ok": True})
         return web.json_response({"ok": False, "error": "highlight not found"})
@@ -586,9 +624,16 @@ class ShareServer:
             }),
         )
         save_cfg(new_cfg)
-        # Apply live (takes effect on next daemon restart for recording settings)
+        # Apply live (some settings still require daemon restart, e.g. recorder backend).
         for field in ("recording", "hotkeys", "output", "sharing"):
             setattr(self.cfg, field, getattr(new_cfg, field))
+
+        if self.apply_config_cb:
+            try:
+                await self.apply_config_cb()
+            except Exception as exc:
+                log.warning("Live config apply failed: %s", exc)
+
         return web.json_response({"ok": True})
 
     async def _api_status(self, _: web.Request) -> web.Response:
