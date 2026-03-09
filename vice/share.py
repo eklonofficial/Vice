@@ -441,6 +441,8 @@ class ShareServer:
 
         # Sanitise — no path separators; always .mp4
         new_name = new_name.replace("/", "").replace("\\", "").replace("\0", "")
+        if " " in new_name:
+            return web.json_response({"ok": False, "error": "Clip name cannot contain spaces"})
         if not new_name.lower().endswith(".mp4"):
             new_name += ".mp4"
 
