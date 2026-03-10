@@ -29,8 +29,7 @@ makedepends=(
     'python-wheel'
 )
 source=("$pkgname-$pkgver.tar.gz::https://github.com/eklonofficial/Vice/archive/refs/tags/v$pkgver.tar.gz")
-# NOTE: Replace SKIP with the release tarball checksum when publishing from a networked packager host.
-sha256sums=('SKIP')
+sha256sums=('d57bc415acf3f80e62a9fcfc98d70654037d904c6c58d26916f3e751c127e492')
 
 build() {
     cd "$srcdir/Vice-$pkgver"
