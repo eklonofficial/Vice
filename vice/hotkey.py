@@ -7,8 +7,9 @@ display server entirely. This means hotkeys work on:
   • Wayland (Hyprland, GNOME, KDE, sway — any compositor)
   • Even TTY sessions
 
-Requirement: the running user must be in the `input` group, or Vice must
-run with appropriate permissions. The installer script handles this.
+Requirement: the running user must have read access to /dev/input/event*
+(typically via the packaged udev rule that tags input devices with uaccess).
+If that rule is missing, hotkeys will not trigger.
 
 Usage:
     listener = HotkeyListener(cfg)
@@ -27,8 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
-from typing import Callable, Coroutine, Optional
+from typing import Callable, Coroutine
 
 import evdev
 from evdev import InputDevice, categorize, ecodes
@@ -50,6 +50,7 @@ class HotkeyListener:
         self._running = False
         # Per-key pending single-tap timer tasks
         self._pending: dict[str, asyncio.Task] = {}
+        self.available = False
 
     def on(self, key_name: str, callback: AsyncCallback) -> None:
         """
@@ -78,11 +79,12 @@ class HotkeyListener:
     async def start(self) -> None:
         """Discover keyboards and spawn a listener task per device."""
         keyboards = _find_keyboards()
+        self.available = bool(keyboards)
         if not keyboards:
             log.warning(
                 "No keyboard devices found in /dev/input/. "
-                "Make sure your user is in the 'input' group: "
-                "sudo usermod -aG input $USER  (then log out/in)"
+                "Ensure the udev uaccess rule is installed, then run: "
+                "sudo udevadm control --reload && sudo udevadm trigger"
             )
             return
 
@@ -188,6 +190,11 @@ def _find_keyboards() -> list[InputDevice]:
             pass
     return devices
 
+
+
+def can_access_hotkeys() -> bool:
+    """Return True when at least one keyboard input device is readable."""
+    return bool(_find_keyboards())
 
 def list_available_keys() -> list[str]:
     """Return all KEY_* names evdev knows about (for documentation/config help)."""

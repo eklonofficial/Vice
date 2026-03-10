@@ -8,6 +8,7 @@ url="https://github.com/eklonofficial/Vice"
 license=('GPL-3.0-or-later')
 depends=(
     'python'
+    'systemd'
     'python-evdev'
     'python-aiohttp'
     'python-click'
@@ -52,10 +53,6 @@ package() {
     install -Dm644 assets/vice.svg \
         "$pkgdir/usr/share/icons/hicolor/scalable/apps/vice.svg"
 
-    install -Dm644 /dev/stdin \
-        "$pkgdir/usr/share/doc/vice-clipper/README" <<'DOC'
-Vice requires the user to be in the 'input' group for global hotkeys:
-  sudo usermod -aG input $USER
-Then log out and back in.
-DOC
+    install -Dm644 packaging/vice.rules \
+        "$pkgdir/usr/lib/udev/rules.d/70-vice-input.rules"
 }

@@ -213,6 +213,29 @@
     .btn-sm { padding: 5px 10px; font-size: 12px; }
     .btn:disabled { opacity: .35; cursor: not-allowed; transform: none; }
 
+
+    .perm-warning {
+      display: none;
+      margin-bottom: 14px;
+      padding: 10px 12px;
+      border-radius: var(--r-sm);
+      border: 1px solid rgba(245, 158, 11, 0.45);
+      background: rgba(245, 158, 11, 0.10);
+      color: #fcd34d;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    .perm-warning.show { display: block; }
+    .perm-warning code {
+      background: rgba(0,0,0,.35);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: var(--r-xs);
+      padding: 1px 5px;
+      font-size: 11px;
+      color: #fde68a;
+      white-space: nowrap;
+    }
+
     /* ── Clips view ─────────────────────────────────────────────────── */
     #clips-empty {
       text-align: center; padding: 72px 0;
@@ -947,6 +970,15 @@
         </button>
       </div>
 
+
+      <div class="perm-warning" id="hotkey-perm-warning">
+        <strong>Global hotkeys are unavailable.</strong> Vice can still save clips from this button, but keyboard hotkeys cannot read
+        <code>/dev/input/event*</code> right now.
+        Ensure the packaged udev rule is installed, then run
+        <code>sudo udevadm control --reload && sudo udevadm trigger</code>
+        (or log out and back in).
+      </div>
+
       <div id="clips-empty">
         <div class="empty-icon">
           <svg data-lucide="film" width="26" height="26"></svg>
@@ -1473,6 +1505,7 @@ let cfg       = {};
 let ws        = null;
 let recentNew = new Set();
 let tunnelUrl = null;
+let hotkeysAvailable = true;
 
 // Trim state
 let trimSlug  = null;
@@ -1495,6 +1528,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   fetchClips();
   fetchConfig();
+  fetchStatus();
   connectWS();
 
   if (IS_NATIVE) document.getElementById('quit-row').style.display = 'flex';
@@ -1559,6 +1593,7 @@ function handleWS(msg) {
     renderClips();
   } else if (msg.type === 'status') {
     setRecStatus(msg.recording, msg.backend, msg.session_active);
+    applyHotkeyAvailability(msg.hotkeys_available);
   } else if (msg.type === 'tunnel_url') {
     tunnelUrl = msg.url;
     const pill = document.getElementById('tunnel-pill');
@@ -1587,6 +1622,23 @@ function copyTunnelUrl() {
   navigator.clipboard.writeText(tunnelUrl)
     .then(() => toast('Public URL copied!', 'ok'))
     .catch(() => toast('Could not copy', 'err'));
+}
+
+
+async function fetchStatus() {
+  try {
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    setRecStatus(d.recording, d.backend, d.session_active);
+    applyHotkeyAvailability(d.hotkeys_available);
+  } catch (_) {}
+}
+
+function applyHotkeyAvailability(available) {
+  hotkeysAvailable = available !== false;
+  const warn = document.getElementById('hotkey-perm-warning');
+  if (!warn) return;
+  warn.classList.toggle('show', !hotkeysAvailable);
 }
 
 // ═══════════════════════════════════════════════════════════════════

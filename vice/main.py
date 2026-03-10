@@ -30,7 +30,7 @@ import click
 
 from . import __version__
 from .config import load as load_config, save as save_config, CONFIG_PATH, CONFIG_DIR
-from .hotkey import HotkeyListener, list_available_keys
+from .hotkey import HotkeyListener, can_access_hotkeys, list_available_keys
 from .recorder import create_recorder
 from .share import ShareServer
 from . import audio
@@ -51,6 +51,7 @@ class ViceDaemon:
         self.recorder = create_recorder(self.cfg)
         self.hotkeys  = HotkeyListener()
         self.share:   Optional[ShareServer] = None
+        self.hotkeys_available = can_access_hotkeys()
         self._clip_lock  = asyncio.Lock()
         self._clip_count = 0
         # Session recording state
@@ -86,6 +87,7 @@ class ViceDaemon:
                         "backend": self.recorder.name,
                         "session_active": self._session_active,
                         "clip_key": self.cfg.hotkeys.clip,
+                        "hotkeys_available": self.hotkeys_available,
                     })
                 )
 
@@ -102,6 +104,7 @@ class ViceDaemon:
         )
 
         await self.hotkeys.start()
+        self.hotkeys_available = self.hotkeys.available
         await self.recorder.start()
 
         if self.share:
@@ -109,6 +112,9 @@ class ViceDaemon:
                 self.share.broadcast({
                     "type": "status", "recording": True,
                     "backend": self.recorder.name,
+                    "session_active": self._session_active,
+                    "clip_key": self.cfg.hotkeys.clip,
+                    "hotkeys_available": self.hotkeys_available,
                 })
             )
 
@@ -148,15 +154,17 @@ class ViceDaemon:
                 "backend": self.recorder.name,
                 "session_active": self._session_active,
                 "clip_key": self.cfg.hotkeys.clip,
+                "hotkeys_available": self.hotkeys_available,
             })
 
     def _get_status(self) -> dict:
         return {
             "recording":      True,
-            "backend":        self.recorder.name,
-            "clips":          self._clip_count,
-            "session_active": self._session_active,
-            "clip_key": self.cfg.hotkeys.clip,
+            "backend":          self.recorder.name,
+            "clips":            self._clip_count,
+            "session_active":   self._session_active,
+            "clip_key":         self.cfg.hotkeys.clip,
+            "hotkeys_available": self.hotkeys_available,
         }
 
     async def _shutdown(self, server) -> None:
@@ -278,8 +286,9 @@ class ViceDaemon:
                     "clips":          self._clip_count,
                     "output":         self.cfg.output.directory,
                     "share_url":      self.share.base_url() if self.share else None,
-                    "session_active": self._session_active,
-                    "clip_key":       self.cfg.hotkeys.clip,
+                    "session_active":  self._session_active,
+                    "clip_key":        self.cfg.hotkeys.clip,
+                    "hotkeys_available": self.hotkeys_available,
                 }).encode() + b"\n")
             elif cmd == "url":
                 url = self.share.base_url() if self.share else ""
