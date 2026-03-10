@@ -57,6 +57,7 @@ def _is_wayland() -> bool:
 
         if stat.S_ISSOCK(mode):
             os.environ["WAYLAND_DISPLAY"] = candidate.name
+            os.environ.setdefault("XDG_RUNTIME_DIR", str(runtime_dir))
             log.info(
                 "Detected Wayland socket fallback: %s/%s",
                 runtime_dir,

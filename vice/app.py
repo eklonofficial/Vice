@@ -76,8 +76,42 @@ def _vice_cmd() -> list[str]:
     return [sys.executable, "-m", "vice.main"]
 
 
+def _load_user_systemd_env() -> None:
+    """Hydrate key graphical env vars from the user systemd manager when absent."""
+    keys = ("WAYLAND_DISPLAY", "DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS")
+    if any(os.environ.get(k) for k in ("WAYLAND_DISPLAY", "DISPLAY")) and os.environ.get("XDG_RUNTIME_DIR"):
+        return
+
+    if shutil.which("systemctl") is None:
+        return
+
+    try:
+        out = subprocess.check_output(
+            ["systemctl", "--user", "show-environment"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+    except Exception:
+        return
+
+    loaded: list[str] = []
+    for line in out.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key in keys and value and not os.environ.get(key):
+            os.environ[key] = value
+            loaded.append(key)
+
+    if loaded:
+        log.info("Loaded graphical env vars from systemd user env: %s", ", ".join(loaded))
+
+
 def _start_daemon() -> None:
     """Launch the daemon as a detached background process (no-op if running)."""
+    _load_user_systemd_env()
+
     if SOCKET_FILE.exists():
         log.info("Daemon already running (socket found)")
         return
