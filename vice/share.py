@@ -32,9 +32,28 @@ from aiohttp import WSMsgType, web
 
 log = logging.getLogger("vice.share")
 
-# Use importlib.resources so the UI is found regardless of how vice is
-# installed (editable, wheel, venv, system) or where the source lives.
-UI_DIR = _pkg_files("vice") / "ui"
+
+def _resolve_ui_index() -> Path | None:
+    """Resolve the web UI index path across installed and source checkouts."""
+    candidates: list[Path] = []
+
+    # Preferred path for packaged installs.
+    try:
+        ui = _pkg_files("vice") / "ui" / "index.html"
+        candidates.append(Path(str(ui)))
+    except Exception:
+        pass
+
+    # Fallback for source checkouts / direct execution.
+    candidates.append(Path(__file__).resolve().parent / "ui" / "index.html")
+
+    for cand in candidates:
+        try:
+            if cand.exists() and cand.is_file():
+                return cand
+        except OSError:
+            continue
+    return None
 
 # Thumbnails go in the cache dir — separate from the clip files.
 THUMB_DIR      = Path.home() / ".cache" / "vice" / "thumbs"
@@ -332,11 +351,25 @@ class ShareServer:
     # ── route handlers ────────────────────────────────────────────────────────
 
     async def _ui(self, _: web.Request) -> web.Response:
+        ui_index = _resolve_ui_index()
+        if not ui_index:
+            log.error("Vice UI not found (missing vice/ui/index.html)")
+            return web.Response(
+                text="<h1>Vice UI not found</h1><p>Reinstall Vice from this checkout or AUR package.</p>",
+                content_type="text/html",
+                status=500,
+            )
+
         try:
-            content = (UI_DIR / "index.html").read_text(encoding="utf-8")
+            content = ui_index.read_text(encoding="utf-8")
             return web.Response(text=content, content_type="text/html")
-        except Exception:
-            return web.Response(text="<h1>Vice UI not found</h1>", content_type="text/html")
+        except Exception as exc:
+            log.error("Failed reading UI file %s: %s", ui_index, exc)
+            return web.Response(
+                text="<h1>Vice UI failed to load</h1><p>Check vice logs for details.</p>",
+                content_type="text/html",
+                status=500,
+            )
 
     async def _embed_page(self, req: web.Request) -> web.Response:
         slug = req.match_info["slug"]

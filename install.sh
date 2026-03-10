@@ -189,11 +189,11 @@ mkdir -p "$USER_BIN"
 
 install_vice_user_site() {
     if command -v python3 &>/dev/null; then
-        if python3 -m pip install --user -e "$SCRIPT_DIR"; then
+        if python3 -m pip install --user "$SCRIPT_DIR"; then
             return 0
         fi
     else
-        if pip install --user -e "$SCRIPT_DIR"; then
+        if pip install --user "$SCRIPT_DIR"; then
             return 0
         fi
     fi
@@ -209,7 +209,7 @@ install_vice_venv() {
     rm -rf "$VENV_DIR"
     python3 -m venv --system-site-packages "$VENV_DIR"
     "$VENV_DIR/bin/python" -m pip install --upgrade pip
-    "$VENV_DIR/bin/pip" install -e "$SCRIPT_DIR"
+    "$VENV_DIR/bin/pip" install "$SCRIPT_DIR"
 
     ln -sf "$VENV_DIR/bin/vice" "$USER_BIN/vice"
     ln -sf "$VENV_DIR/bin/vice-app" "$USER_BIN/vice-app"
