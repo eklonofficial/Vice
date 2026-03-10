@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import time
 from abc import ABC, abstractmethod
@@ -39,7 +40,31 @@ log = logging.getLogger("vice.recorder")
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _is_wayland() -> bool:
-    return bool(os.environ.get("WAYLAND_DISPLAY"))
+    if os.environ.get("WAYLAND_DISPLAY"):
+        return True
+
+    runtime_dir = Path(
+        os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    )
+    if not runtime_dir.exists():
+        return False
+
+    for candidate in sorted(runtime_dir.glob("wayland-*")):
+        try:
+            mode = candidate.stat().st_mode
+        except OSError:
+            continue
+
+        if stat.S_ISSOCK(mode):
+            os.environ["WAYLAND_DISPLAY"] = candidate.name
+            log.info(
+                "Detected Wayland socket fallback: %s/%s",
+                runtime_dir,
+                candidate.name,
+            )
+            return True
+
+    return False
 
 
 def _is_x11() -> bool:
@@ -844,6 +869,14 @@ def create_recorder(cfg: Config) -> Recorder:
     """
     pref = cfg.recording.backend
 
+    if pref != "ffmpeg" and not _is_wayland() and not _is_x11():
+        # Some packaged launches can race desktop-session startup env exports.
+        # Briefly retry Wayland/X11 detection before giving up.
+        for _ in range(5):
+            time.sleep(0.2)
+            if _is_wayland() or _is_x11():
+                break
+
     if pref == "gsr" or (pref == "auto" and _has("gpu-screen-recorder")):
         log.info("Selected backend: gpu-screen-recorder")
         return GSRRecorder(cfg)
@@ -862,6 +895,7 @@ def create_recorder(cfg: Config) -> Recorder:
         return SegmentRecorder(cfg, use_wf_recorder=False)
 
     raise RuntimeError(
-        "Cannot determine display server (WAYLAND_DISPLAY and DISPLAY are both unset). "
+        "Cannot determine display server (WAYLAND_DISPLAY and DISPLAY are both unset, "
+        "and no Wayland socket was found in XDG_RUNTIME_DIR). "
         "Are you running in a graphical session?"
     )
