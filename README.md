@@ -13,9 +13,6 @@ Website: https://viceclipper.framer.website/
 
 ## Installation
 
-## If you're having issues with the AUR package on Arch, try the manual installation.
-This is a known bug and I'm working on fixing it ASAP.
-
 ### Arch Linux / Manjaro / Arch-based (AUR)
 
 ```bash
