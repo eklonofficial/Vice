@@ -60,6 +60,8 @@ class ViceDaemon:
         self._session_path:    Optional[Path] = None
         self._session_highlights: list[dict] = []  # {time, label, color}
         self._recording_sig = self._recording_signature()
+        self._pending_recording_apply = False
+        self._config_apply_lock = asyncio.Lock()
 
     async def run(self) -> None:
         Path("/tmp/vice").mkdir(parents=True, exist_ok=True)
@@ -140,17 +142,32 @@ class ViceDaemon:
                 })
             )
 
-    async def _restart_recorder_for_config(self) -> None:
-        """Restart recorder to apply recording settings that require process restart."""
+    async def _restart_recorder_for_config(self) -> bool:
+        """Restart recorder without running two capture processes at once."""
         if self._session_active:
+            self._pending_recording_apply = True
             log.info("Recording config changed during active session; applying after session ends")
-            return
+            return False
 
-        await self.recorder.stop()
-        self.recorder = create_recorder(self.cfg)
-        self.recorder.on_clip_saved(self._on_clip_saved)
-        await self.recorder.start()
+        old_recorder = self.recorder
+        new_recorder = create_recorder(self.cfg)
+        new_recorder.on_clip_saved(self._on_clip_saved)
+
+        await old_recorder.stop()
+        try:
+            await new_recorder.start()
+        except Exception:
+            # Try to restore the previous recorder so capture keeps running.
+            try:
+                await old_recorder.start()
+            except Exception as restore_exc:
+                log.error("Failed to restore previous recorder: %s", restore_exc)
+            raise
+
+        self.recorder = new_recorder
         self._recording_sig = self._recording_signature()
+        self._pending_recording_apply = False
+        return True
 
     def _bind_hotkeys(self) -> None:
         """(Re)bind runtime hotkeys from current config."""
@@ -164,20 +181,22 @@ class ViceDaemon:
 
     async def _apply_live_config(self) -> None:
         """Apply config changes and restart recorder when recording settings changed."""
-        self._bind_hotkeys()
+        async with self._config_apply_lock:
+            self._bind_hotkeys()
 
-        if self._recording_signature() != self._recording_sig:
-            await self._restart_recorder_for_config()
+            async with self._clip_lock:
+                if self._recording_signature() != self._recording_sig:
+                    await self._restart_recorder_for_config()
 
-        if self.share:
-            await self.share.broadcast({
-                "type": "status",
-                "recording": True,
-                "backend": self.recorder.name,
-                "session_active": self._session_active,
-                "clip_key": self.cfg.hotkeys.clip,
-                "hotkeys_available": self.hotkeys_available,
-            })
+            if self.share:
+                await self.share.broadcast({
+                    "type": "status",
+                    "recording": True,
+                    "backend": self.recorder.name,
+                    "session_active": self._session_active,
+                    "clip_key": self.cfg.hotkeys.clip,
+                    "hotkeys_available": self.hotkeys_available,
+                })
 
     def _get_status(self) -> dict:
         return {
@@ -287,6 +306,13 @@ class ViceDaemon:
                     "type": "session_stop",
                 })
             )
+
+        # Apply deferred recording config changes after session ends.
+        if self._pending_recording_apply and self._recording_signature() != self._recording_sig:
+            try:
+                await self._apply_live_config()
+            except Exception as exc:
+                log.error("Deferred recording config apply failed: %s", exc)
 
     async def _handle_ipc(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter

@@ -1516,6 +1516,7 @@ let ws        = null;
 let recentNew = new Set();
 let tunnelUrl = null;
 let hotkeysAvailable = true;
+let _gsrArgsSaveTimer = null;
 
 // Trim state
 let trimSlug  = null;
@@ -1543,9 +1544,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const gsrArgsInput = document.getElementById('s-gsr-args');
   if (gsrArgsInput) {
+    gsrArgsInput.addEventListener('input', () => {
+      clearTimeout(_gsrArgsSaveTimer);
+      _gsrArgsSaveTimer = setTimeout(() => { saveGsrArgsOnly(); }, 600);
+    });
     gsrArgsInput.addEventListener('change', () => { saveGsrArgsOnly(); });
     gsrArgsInput.addEventListener('blur', () => { saveGsrArgsOnly(); });
   }
+
+  window.addEventListener('beforeunload', () => {
+    const el = document.getElementById('s-gsr-args');
+    if (!el) return;
+    const payload = JSON.stringify({ recording: { gsr_args: el.value.trim() } });
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon('/api/config', new Blob([payload], { type: 'application/json' }));
+    }
+  });
 
   if (IS_NATIVE) document.getElementById('quit-row').style.display = 'flex';
 
@@ -1860,11 +1874,15 @@ async function saveSettings() {
     },
   };
   try {
-    await fetch('/api/config', {
+    const resp = await fetch('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.error || 'save failed');
+    }
     const el = document.getElementById('saved-msg');
     el.classList.add('show');
     setTimeout(() => el.classList.remove('show'), 2400);
@@ -1875,11 +1893,15 @@ async function saveSettings() {
 async function saveGsrArgsOnly() {
   const gsrArgs = document.getElementById('s-gsr-args').value.trim();
   try {
-    await fetch('/api/config', {
+    const resp = await fetch('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ recording: { gsr_args: gsrArgs } }),
     });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.error || 'save failed');
+    }
   } catch (_) {
     toast('Failed to save gpu-screen-recorder args', 'err');
   }
