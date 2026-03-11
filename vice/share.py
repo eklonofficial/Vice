@@ -663,26 +663,33 @@ class ShareServer:
         for field in ("recording", "hotkeys", "output", "sharing"):
             setattr(self.cfg, field, getattr(new_cfg, field))
 
+        apply_error: str | None = None
         if self.apply_config_cb:
             try:
                 await self.apply_config_cb()
             except Exception as exc:
-                # Roll back in-memory config when runtime apply fails.
+                # Keep runtime state stable, but still persist new settings.
                 for field in ("recording", "hotkeys", "output", "sharing"):
                     setattr(self.cfg, field, getattr(old_cfg, field))
 
-                # Re-apply reverted config to restore runtime side effects
-                # such as hotkey bindings and recorder state.
                 try:
                     await self.apply_config_cb()
                 except Exception as rollback_exc:
                     log.warning("Rollback apply failed: %s", rollback_exc)
 
-                log.warning("Live config apply failed: %s", exc)
-                return web.json_response({"ok": False, "error": str(exc)}, status=400)
+                apply_error = str(exc)
+                log.warning("Live config apply failed; settings saved for next restart: %s", exc)
 
         save_cfg(new_cfg)
-        return web.json_response({"ok": True})
+        if apply_error:
+            return web.json_response({
+                "ok": True,
+                "applied": False,
+                "warning": "Settings saved but could not be applied live. Restart Vice to apply them.",
+                "error": apply_error,
+            })
+
+        return web.json_response({"ok": True, "applied": True})
 
     async def _api_status(self, _: web.Request) -> web.Response:
         extra = self.get_status_cb() if self.get_status_cb else {}
