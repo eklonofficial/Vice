@@ -16,6 +16,7 @@ WebSocket event types (server → client):
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import shutil
@@ -656,7 +657,8 @@ class ShareServer:
                 if k in SharingConfig.__dataclass_fields__
             }),
         )
-        save_cfg(new_cfg)
+        old_cfg = copy.deepcopy(self.cfg)
+
         # Apply live (some settings still require daemon restart, e.g. recorder backend).
         for field in ("recording", "hotkeys", "output", "sharing"):
             setattr(self.cfg, field, getattr(new_cfg, field))
@@ -665,8 +667,21 @@ class ShareServer:
             try:
                 await self.apply_config_cb()
             except Exception as exc:
-                log.warning("Live config apply failed: %s", exc)
+                # Roll back in-memory config when runtime apply fails.
+                for field in ("recording", "hotkeys", "output", "sharing"):
+                    setattr(self.cfg, field, getattr(old_cfg, field))
 
+                # Re-apply reverted config to restore runtime side effects
+                # such as hotkey bindings and recorder state.
+                try:
+                    await self.apply_config_cb()
+                except Exception as rollback_exc:
+                    log.warning("Rollback apply failed: %s", rollback_exc)
+
+                log.warning("Live config apply failed: %s", exc)
+                return web.json_response({"ok": False, "error": str(exc)}, status=400)
+
+        save_cfg(new_cfg)
         return web.json_response({"ok": True})
 
     async def _api_status(self, _: web.Request) -> web.Response:

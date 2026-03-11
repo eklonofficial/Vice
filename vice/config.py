@@ -43,6 +43,9 @@ class RecordingConfig:
     apply_watermark: bool = False
     # PulseAudio/PipeWire sink name. "default" works for most setups.
     audio_sink: str = "default"
+    # Optional extra flags appended to gpu-screen-recorder commands.
+    # Example: "-k hevc -bm cbr -q 20000 -fm cfr"
+    gsr_args: str = ""
 
 
 @dataclass
