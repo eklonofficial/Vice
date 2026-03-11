@@ -168,6 +168,7 @@ encoder         = "auto"   # auto | h264_nvenc | libx264 | hevc_nvenc | h264_vaa
 backend         = "auto"   # auto | gsr | wf-recorder | ffmpeg
 capture_audio   = true
 apply_watermark = false   # enable only if you want watermark text on exports
+gsr_args        = ""      # optional extra gpu-screen-recorder flags, e.g. "-k hevc -bm cbr -q 20000 -fm cfr -a {default_sink_monitor}"
 
 [hotkeys]
 clip = "KEY_F9"
@@ -180,6 +181,8 @@ enabled           = true
 port              = 8765
 cloudflare_tunnel = true
 ```
+
+`recording.gsr_args` supports environment/tilde expansion and a `{default_sink_monitor}` placeholder for desktop audio capture.
 
 ### Troubleshooting
 

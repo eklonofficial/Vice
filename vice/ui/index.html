@@ -1087,6 +1087,16 @@
             <div class="s-label"><strong>Capture Audio</strong><span>Include desktop audio in clips</span></div>
             <label class="toggle"><input type="checkbox" id="s-audio"><span class="toggle-track"></span></label>
           </div>
+
+        </div>
+
+        <!-- Advanced gpu-screen-recorder -->
+        <div class="settings-card">
+          <div class="settings-card-hd"><svg data-lucide="sliders-horizontal"></svg> Advanced (gpu-screen-recorder)</div>
+          <div class="settings-row">
+            <div class="s-label"><strong>Extra Args</strong><span>Optional flags appended to gpu-screen-recorder (example: <code>-k hevc -bm cbr -q 20000 -fm cfr -a {default_sink_monitor}</code>)</span></div>
+            <input type="text" id="s-gsr-args" placeholder="-k hevc -bm cbr -q 20000 -fm cfr -a {default_sink_monitor}">
+          </div>
         </div>
 
         <!-- Hotkeys -->
@@ -1810,6 +1820,7 @@ function populateSettings(c) {
   pick('s-enc',     r.encoder        ?? 'auto');
   pick('s-backend', r.backend        ?? 'auto');
   document.getElementById('s-audio').checked = r.capture_audio !== false;
+  document.getElementById('s-gsr-args').value = r.gsr_args ?? '';
   const clipKey = h.clip ?? 'KEY_F9';
   document.getElementById('s-key').value = clipKey;
   document.getElementById('s-key-btn').textContent = clipKey;
@@ -1833,6 +1844,7 @@ async function saveSettings() {
       encoder:         document.getElementById('s-enc').value,
       backend:         document.getElementById('s-backend').value,
       capture_audio:   document.getElementById('s-audio').checked,
+      gsr_args:        document.getElementById('s-gsr-args').value.trim(),
     },
     hotkeys: { clip: document.getElementById('s-key').value },
     output:  { directory: document.getElementById('s-dir').value },
