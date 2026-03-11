@@ -21,6 +21,7 @@ import asyncio
 import logging
 import os
 import re
+import shlex
 import shutil
 import signal
 import stat
@@ -88,6 +89,25 @@ def _run_ok(cmd: list[str]) -> bool:
 
 def _has(tool: str) -> bool:
     return shutil.which(tool) is not None
+
+
+def _extra_gsr_args(raw: str) -> list[str]:
+    """Parse user-provided gpu-screen-recorder CLI args."""
+    if not raw.strip():
+        return []
+
+    # Allow env var + tilde expansion so users can reference shell-style values.
+    expanded = os.path.expanduser(os.path.expandvars(raw))
+
+    try:
+        args = shlex.split(expanded)
+    except ValueError as exc:
+        log.warning("Invalid recording.gsr_args ignored: %s", exc)
+        return []
+
+    # Convenience placeholder for desktop monitor source.
+    monitor = _desktop_audio_source("default")
+    return [arg.replace("{default_sink_monitor}", monitor) for arg in args]
 
 
 def _desktop_audio_source(preferred: str) -> str:
@@ -340,6 +360,7 @@ class Recorder(ABC):
         cmd += ["-c", "mp4"]
         if rc.capture_audio:
             cmd += ["-a", "default_output"]
+        cmd += _extra_gsr_args(rc.gsr_args)
         cmd += ["-o", str(out_path)]
         return cmd
 
@@ -537,6 +558,8 @@ class GSRRecorder(Recorder):
         if rc.capture_audio:
             # 'default_output' captures desktop audio via PipeWire/PulseAudio
             cmd += ["-a", "default_output"]
+
+        cmd += _extra_gsr_args(rc.gsr_args)
 
         # Quality — gsr uses its own quality flags
         # (encoder selection is automatic in gsr based on detected GPU)
