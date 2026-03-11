@@ -108,13 +108,43 @@ def _load_user_systemd_env() -> None:
         log.info("Loaded graphical env vars from systemd user env: %s", ", ".join(loaded))
 
 
+def _daemon_responds(timeout: float = 1.0) -> bool:
+    """Return True when the Unix socket accepts an IPC request."""
+    if not SOCKET_FILE.exists():
+        return False
+
+    async def _probe() -> bool:
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_unix_connection(str(SOCKET_FILE)),
+                timeout=timeout,
+            )
+            writer.write(b"status\n")
+            await writer.drain()
+            resp = await asyncio.wait_for(reader.readline(), timeout=timeout)
+            writer.close()
+            await writer.wait_closed()
+            return bool(resp)
+        except Exception:
+            return False
+
+    return asyncio.run(_probe())
+
+
 def _start_daemon() -> None:
     """Launch the daemon as a detached background process (no-op if running)."""
     _load_user_systemd_env()
 
     if SOCKET_FILE.exists():
-        log.info("Daemon already running (socket found)")
-        return
+        if _daemon_responds():
+            log.info("Daemon already running (socket is responsive)")
+            return
+        log.warning("Found stale daemon socket at %s; removing it", SOCKET_FILE)
+        try:
+            SOCKET_FILE.unlink()
+        except OSError as exc:
+            log.error("Could not remove stale socket %s: %s", SOCKET_FILE, exc)
+            raise
     cmd = _vice_cmd() + ["start", "--no-open-ui"]
     log.info("Starting daemon: %s", " ".join(cmd))
     try:

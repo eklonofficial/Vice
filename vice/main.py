@@ -395,8 +395,17 @@ def start(debug: bool, open_ui: bool) -> None:
     )
 
     if SOCKET_FILE.exists():
-        click.echo("Vice is already running. Use `vice stop` or `vice status`.", err=True)
-        sys.exit(1)
+        resp = asyncio.run(_ipc("status", timeout=1.5))
+        if resp is not None:
+            click.echo("Vice is already running. Use `vice stop` or `vice status`.", err=True)
+            sys.exit(1)
+
+        log.warning("Found stale IPC socket at %s, removing it", SOCKET_FILE)
+        try:
+            SOCKET_FILE.unlink()
+        except OSError as exc:
+            click.echo(f"Found stale socket at {SOCKET_FILE}, but could not remove it: {exc}", err=True)
+            sys.exit(1)
 
     daemon = ViceDaemon()
 
