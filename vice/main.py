@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import asdict
 import os
 import shutil
 import signal
@@ -58,6 +59,7 @@ class ViceDaemon:
         self._session_active   = False
         self._session_path:    Optional[Path] = None
         self._session_highlights: list[dict] = []  # {time, label, color}
+        self._recording_sig = self._recording_signature()
 
     async def run(self) -> None:
         Path("/tmp/vice").mkdir(parents=True, exist_ok=True)
@@ -72,26 +74,7 @@ class ViceDaemon:
             await self.share.start()
 
         # Recorder callback — fires for both normal clips and session clips
-        def _on_clip_saved(path: Path) -> None:
-            self._clip_count += 1
-            click.echo(f"\n[Vice] Clip saved: {path}")
-            if self.share:
-                # Session clips are added to the share server inside _stop_session;
-                # only add here for regular replay-buffer clips (not sessions).
-                if not path.name.startswith("Vice_Session_"):
-                    url = self.share.add_clip(path)
-                    click.echo(f"[Vice] Share URL:  {url}\n")
-                asyncio.create_task(
-                    self.share.broadcast({
-                        "type": "status", "recording": True,
-                        "backend": self.recorder.name,
-                        "session_active": self._session_active,
-                        "clip_key": self.cfg.hotkeys.clip,
-                        "hotkeys_available": self.hotkeys_available,
-                    })
-                )
-
-        self.recorder.on_clip_saved(_on_clip_saved)
+        self.recorder.on_clip_saved(self._on_clip_saved)
 
         # Hotkeys
         self._bind_hotkeys()
@@ -134,6 +117,41 @@ class ViceDaemon:
         await stop_event.wait()
         await self._shutdown(server)
 
+    def _recording_signature(self) -> str:
+        """Stable representation of recording config for live-apply checks."""
+        return json.dumps(asdict(self.cfg.recording), sort_keys=True)
+
+    def _on_clip_saved(self, path: Path) -> None:
+        self._clip_count += 1
+        click.echo(f"\n[Vice] Clip saved: {path}")
+        if self.share:
+            # Session clips are added to the share server inside _stop_session;
+            # only add here for regular replay-buffer clips (not sessions).
+            if not path.name.startswith("Vice_Session_"):
+                url = self.share.add_clip(path)
+                click.echo(f"[Vice] Share URL:  {url}\n")
+            asyncio.create_task(
+                self.share.broadcast({
+                    "type": "status", "recording": True,
+                    "backend": self.recorder.name,
+                    "session_active": self._session_active,
+                    "clip_key": self.cfg.hotkeys.clip,
+                    "hotkeys_available": self.hotkeys_available,
+                })
+            )
+
+    async def _restart_recorder_for_config(self) -> None:
+        """Restart recorder to apply recording settings that require process restart."""
+        if self._session_active:
+            log.info("Recording config changed during active session; applying after session ends")
+            return
+
+        await self.recorder.stop()
+        self.recorder = create_recorder(self.cfg)
+        self.recorder.on_clip_saved(self._on_clip_saved)
+        await self.recorder.start()
+        self._recording_sig = self._recording_signature()
+
     def _bind_hotkeys(self) -> None:
         """(Re)bind runtime hotkeys from current config."""
         self.hotkeys.clear_bindings()
@@ -145,8 +163,12 @@ class ViceDaemon:
             self.hotkeys.on_double(clip_key, self._handle_session_toggle)
 
     async def _apply_live_config(self) -> None:
-        """Apply config changes that can be updated without daemon restart."""
+        """Apply config changes and restart recorder when recording settings changed."""
         self._bind_hotkeys()
+
+        if self._recording_signature() != self._recording_sig:
+            await self._restart_recorder_for_config()
+
         if self.share:
             await self.share.broadcast({
                 "type": "status",

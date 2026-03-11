@@ -1541,6 +1541,12 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchStatus();
   connectWS();
 
+  const gsrArgsInput = document.getElementById('s-gsr-args');
+  if (gsrArgsInput) {
+    gsrArgsInput.addEventListener('change', () => { saveGsrArgsOnly(); });
+    gsrArgsInput.addEventListener('blur', () => { saveGsrArgsOnly(); });
+  }
+
   if (IS_NATIVE) document.getElementById('quit-row').style.display = 'flex';
 
   const vid = document.getElementById('trim-video');
@@ -1864,6 +1870,19 @@ async function saveSettings() {
     setTimeout(() => el.classList.remove('show'), 2400);
     lucide.createIcons();
   } catch (_) { toast('Failed to save settings', 'err'); }
+}
+
+async function saveGsrArgsOnly() {
+  const gsrArgs = document.getElementById('s-gsr-args').value.trim();
+  try {
+    await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recording: { gsr_args: gsrArgs } }),
+    });
+  } catch (_) {
+    toast('Failed to save gpu-screen-recorder args', 'err');
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════
