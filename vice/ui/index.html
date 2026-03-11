@@ -1517,6 +1517,9 @@ let recentNew = new Set();
 let tunnelUrl = null;
 let hotkeysAvailable = true;
 let _gsrArgsSaveTimer = null;
+let _gsrArgsSaveInFlight = false;
+let _gsrArgsSavePending = null;
+let _lastSavedGsrArgs = null;
 
 // Trim state
 let trimSlug  = null;
@@ -1548,8 +1551,14 @@ document.addEventListener('DOMContentLoaded', () => {
       clearTimeout(_gsrArgsSaveTimer);
       _gsrArgsSaveTimer = setTimeout(() => { saveGsrArgsOnly(); }, 600);
     });
-    gsrArgsInput.addEventListener('change', () => { saveGsrArgsOnly(); });
-    gsrArgsInput.addEventListener('blur', () => { saveGsrArgsOnly(); });
+    gsrArgsInput.addEventListener('change', () => {
+      clearTimeout(_gsrArgsSaveTimer);
+      saveGsrArgsOnly();
+    });
+    gsrArgsInput.addEventListener('blur', () => {
+      clearTimeout(_gsrArgsSaveTimer);
+      saveGsrArgsOnly();
+    });
   }
 
   window.addEventListener('beforeunload', () => {
@@ -1841,6 +1850,7 @@ function populateSettings(c) {
   pick('s-backend', r.backend        ?? 'auto');
   document.getElementById('s-audio').checked = r.capture_audio !== false;
   document.getElementById('s-gsr-args').value = r.gsr_args ?? '';
+  _lastSavedGsrArgs = (r.gsr_args ?? '').trim();
   const clipKey = h.clip ?? 'KEY_F9';
   document.getElementById('s-key').value = clipKey;
   document.getElementById('s-key-btn').textContent = clipKey;
@@ -1883,6 +1893,7 @@ async function saveSettings() {
       const err = await resp.json().catch(() => ({}));
       throw new Error(err.error || 'save failed');
     }
+    _lastSavedGsrArgs = document.getElementById('s-gsr-args').value.trim();
     const el = document.getElementById('saved-msg');
     el.classList.add('show');
     setTimeout(() => el.classList.remove('show'), 2400);
@@ -1892,6 +1903,14 @@ async function saveSettings() {
 
 async function saveGsrArgsOnly() {
   const gsrArgs = document.getElementById('s-gsr-args').value.trim();
+
+  if (gsrArgs === _lastSavedGsrArgs && !_gsrArgsSaveInFlight) return;
+  if (_gsrArgsSaveInFlight) {
+    _gsrArgsSavePending = gsrArgs;
+    return;
+  }
+
+  _gsrArgsSaveInFlight = true;
   try {
     const resp = await fetch('/api/config', {
       method: 'POST',
@@ -1902,8 +1921,16 @@ async function saveGsrArgsOnly() {
       const err = await resp.json().catch(() => ({}));
       throw new Error(err.error || 'save failed');
     }
+    _lastSavedGsrArgs = gsrArgs;
   } catch (_) {
     toast('Failed to save gpu-screen-recorder args', 'err');
+  } finally {
+    _gsrArgsSaveInFlight = false;
+    const pending = _gsrArgsSavePending;
+    _gsrArgsSavePending = null;
+    if (pending !== null && pending !== _lastSavedGsrArgs) {
+      saveGsrArgsOnly();
+    }
   }
 }
 

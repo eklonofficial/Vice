@@ -677,7 +677,7 @@ class ShareServer:
                 except Exception as rollback_exc:
                     log.warning("Rollback apply failed: %s", rollback_exc)
 
-                apply_error = str(exc)
+                apply_error = str(exc) or exc.__class__.__name__
                 log.warning("Live config apply failed; settings saved for next restart: %s", exc)
 
         save_cfg(new_cfg)

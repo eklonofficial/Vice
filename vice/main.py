@@ -16,6 +16,7 @@ Commands:
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 from dataclasses import asdict
@@ -150,6 +151,9 @@ class ViceDaemon:
             return False
 
         old_recorder = self.recorder
+        # Snapshot config before live-apply mutates recorder behavior.
+        old_cfg = copy.deepcopy(self.cfg)
+
         new_recorder = create_recorder(self.cfg)
         new_recorder.on_clip_saved(self._on_clip_saved)
 
@@ -157,6 +161,10 @@ class ViceDaemon:
         try:
             await new_recorder.start()
         except Exception:
+            # Restore old config on the current recorder object before restart.
+            for field in ("recording", "hotkeys", "output", "sharing"):
+                setattr(self.cfg, field, getattr(old_cfg, field))
+
             # Try to restore the previous recorder so capture keeps running.
             try:
                 await old_recorder.start()
