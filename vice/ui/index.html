@@ -615,6 +615,33 @@
     .tutorial-step-text span  { font-size: 11px; color: var(--muted); }
     .tutorial-footer { display: flex; justify-content: flex-end; }
 
+    
+    /* ── Restart-required popup ───────────────────────────────────── */
+    #restart-modal {
+      position: fixed; inset: 0; display: grid; place-items: center;
+      background: rgba(5,8,14,.72); z-index: 120;
+    }
+    #restart-modal.hidden { display: none; }
+    .restart-box {
+      width: min(460px, calc(100% - 28px));
+      background: var(--surface-2);
+      border: 1px solid var(--border-hi);
+      border-radius: 14px;
+      box-shadow: 0 20px 60px rgba(0,0,0,.55);
+      padding: 16px 16px 14px;
+      display: grid; gap: 12px;
+    }
+    .restart-title { font-size: 16px; font-weight: 700; }
+    .restart-sub { font-size: 13px; color: var(--muted); line-height: 1.45; }
+    .restart-cmd {
+      font: 600 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+      border: 1px solid var(--border); border-radius: 10px;
+      background: rgba(0,0,0,.25); padding: 10px 12px;
+      user-select: all;
+    }
+    .restart-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+
     /* ── Trim modal ─────────────────────────────────────────────────── */
     .backdrop {
       position: fixed; inset: 0;
@@ -1243,6 +1270,21 @@
 </div>
 
 <!-- ── Tutorial Modal (first run only) ────────────────────────────── -->
+
+<div id="restart-modal" class="hidden">
+  <div class="restart-box" role="dialog" aria-modal="true" aria-labelledby="restart-title">
+    <div class="restart-title" id="restart-title">Restart required</div>
+    <div class="restart-sub">
+      Some saved settings apply only after Vice fully restarts. Run this command, then launch Vice again.
+    </div>
+    <div class="restart-cmd" id="restart-cmd">killall vice-app</div>
+    <div class="restart-actions">
+      <button class="btn" onclick="copyRestartCmd()"><svg data-lucide="copy"></svg> Copy command</button>
+      <button class="btn btn-primary" onclick="closeRestartModal()">Got it</button>
+    </div>
+  </div>
+</div>
+
 <div id="tutorial-modal" class="hidden">
   <div class="tutorial-box">
     <h2>Welcome to Vice</h2>
@@ -1516,10 +1558,8 @@ let ws        = null;
 let recentNew = new Set();
 let tunnelUrl = null;
 let hotkeysAvailable = true;
-let _gsrArgsSaveTimer = null;
-let _gsrArgsSaveInFlight = false;
-let _gsrArgsSavePending = null;
 let _lastSavedGsrArgs = null;
+let _lastRestartPromptedGsrArgs = null;
 
 // Trim state
 let trimSlug  = null;
@@ -1545,30 +1585,6 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchStatus();
   connectWS();
 
-  const gsrArgsInput = document.getElementById('s-gsr-args');
-  if (gsrArgsInput) {
-    gsrArgsInput.addEventListener('input', () => {
-      clearTimeout(_gsrArgsSaveTimer);
-      _gsrArgsSaveTimer = setTimeout(() => { saveGsrArgsOnly(); }, 600);
-    });
-    gsrArgsInput.addEventListener('change', () => {
-      clearTimeout(_gsrArgsSaveTimer);
-      saveGsrArgsOnly();
-    });
-    gsrArgsInput.addEventListener('blur', () => {
-      clearTimeout(_gsrArgsSaveTimer);
-      saveGsrArgsOnly();
-    });
-  }
-
-  window.addEventListener('beforeunload', () => {
-    const el = document.getElementById('s-gsr-args');
-    if (!el) return;
-    const payload = JSON.stringify({ recording: { gsr_args: el.value.trim() } });
-    if (navigator.sendBeacon) {
-      navigator.sendBeacon('/api/config', new Blob([payload], { type: 'application/json' }));
-    }
-  });
 
   if (IS_NATIVE) document.getElementById('quit-row').style.display = 'flex';
 
@@ -1755,13 +1771,20 @@ function cardHTML(c) {
     : '';
   const isNew = recentNew.has(c.slug);
 
+  const hoverHandlers = IS_NATIVE
+    ? ''
+    : `onmouseenter="startPreview('${escAttr(c.slug)}')" onmouseleave="stopPreview('${escAttr(c.slug)}')"`;
+  const mediaHtml = c.thumb_url
+    ? (IS_NATIVE
+      ? `<img src="${c.thumb_url}" loading="lazy" alt="">`
+      : `<img src="${c.thumb_url}" loading="lazy" alt="">
+           <video class="preview-video" src="${c.video_url}" muted loop playsinline preload="none"></video>`)
+    : `<div class="thumb-placeholder"><svg data-lucide="film" width="24" height="24"></svg></div>`;
+
   return `
   <div class="clip-card" id="card-${escAttr(c.slug)}">
-    <div class="thumb-wrap" onclick="openViewer('${escAttr(c.slug)}')" onmouseenter="startPreview('${escAttr(c.slug)}')" onmouseleave="stopPreview('${escAttr(c.slug)}')" style="cursor:pointer">
-      ${c.thumb_url
-        ? `<img src="${c.thumb_url}" loading="lazy" alt="">
-           <video class="preview-video" src="${c.video_url}" muted loop playsinline preload="none"></video>`
-        : `<div class="thumb-placeholder"><svg data-lucide="film" width="24" height="24"></svg></div>`}
+    <div class="thumb-wrap" onclick="openViewer('${escAttr(c.slug)}')" ${hoverHandlers} style="cursor:pointer">
+      ${mediaHtml}
       ${durStr ? `<span class="clip-dur-badge">${durStr}</span>` : ''}
       ${isNew  ? `<span class="clip-new-badge">NEW</span>`       : ''}
     </div>
@@ -1815,6 +1838,33 @@ function copyLink(url) {
   navigator.clipboard.writeText(url)
     .then(() => toast('Share link copied!', 'ok'))
     .catch(() => toast('Could not copy link', 'err'));
+}
+
+
+function showRestartModal() {
+  const modal = document.getElementById('restart-modal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  lucide.createIcons();
+}
+
+function closeRestartModal() {
+  document.getElementById('restart-modal')?.classList.add('hidden');
+}
+
+function copyRestartCmd() {
+  const cmd = 'killall vice-app';
+  navigator.clipboard.writeText(cmd)
+    .then(() => toast('Restart command copied', 'ok'))
+    .catch(() => toast('Could not copy command', 'err'));
+}
+
+function maybeShowGsrRestartPrompt(prevArgs, savedArgs) {
+  const backend = document.getElementById('s-backend')?.value || (cfg.recording?.backend ?? 'auto');
+  if (!savedArgs || savedArgs === prevArgs || savedArgs === _lastRestartPromptedGsrArgs) return;
+  if (backend !== 'gsr' && backend !== 'auto') return;
+  _lastRestartPromptedGsrArgs = savedArgs;
+  showRestartModal();
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1884,54 +1934,29 @@ async function saveSettings() {
     },
   };
   try {
+    const prevGsrArgs = _lastSavedGsrArgs;
     const resp = await fetch('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      throw new Error(err.error || 'save failed');
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || data.ok === false) {
+      throw new Error(data.error || 'save failed');
     }
     _lastSavedGsrArgs = document.getElementById('s-gsr-args').value.trim();
+    if (data.applied === false && data.warning) {
+      toast(data.warning, 'err');
+    }
+    if (data.restart_required) {
+      showRestartModal();
+    }
+    maybeShowGsrRestartPrompt(prevGsrArgs, _lastSavedGsrArgs);
     const el = document.getElementById('saved-msg');
     el.classList.add('show');
     setTimeout(() => el.classList.remove('show'), 2400);
     lucide.createIcons();
   } catch (_) { toast('Failed to save settings', 'err'); }
-}
-
-async function saveGsrArgsOnly() {
-  const gsrArgs = document.getElementById('s-gsr-args').value.trim();
-
-  if (gsrArgs === _lastSavedGsrArgs && !_gsrArgsSaveInFlight) return;
-  if (_gsrArgsSaveInFlight) {
-    _gsrArgsSavePending = gsrArgs;
-    return;
-  }
-
-  _gsrArgsSaveInFlight = true;
-  try {
-    const resp = await fetch('/api/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ recording: { gsr_args: gsrArgs } }),
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      throw new Error(err.error || 'save failed');
-    }
-    _lastSavedGsrArgs = gsrArgs;
-  } catch (_) {
-    toast('Failed to save gpu-screen-recorder args', 'err');
-  } finally {
-    _gsrArgsSaveInFlight = false;
-    const pending = _gsrArgsSavePending;
-    _gsrArgsSavePending = null;
-    if (pending !== null && pending !== _lastSavedGsrArgs) {
-      saveGsrArgsOnly();
-    }
-  }
 }
 
 // ═══════════════════════════════════════════════════════════════════
