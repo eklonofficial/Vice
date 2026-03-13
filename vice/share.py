@@ -619,12 +619,13 @@ class ShareServer:
         return web.json_response({"ok": True})
 
     async def _api_get_config(self, _: web.Request) -> web.Response:
-        return web.json_response(asdict(self.cfg))
+        from .config import load as load_cfg
+        return web.json_response(asdict(load_cfg()))
 
     async def _api_set_config(self, req: web.Request) -> web.Response:
         from .config import (
             Config, RecordingConfig, HotkeyConfig, OutputConfig, SharingConfig,
-            save as save_cfg,
+            load as load_cfg, save as save_cfg,
         )
 
         body = await req.json()
@@ -637,7 +638,10 @@ class ShareServer:
                     base[k] = v
             return base
 
-        merged = _merge(asdict(self.cfg), body)
+        # Merge onto the persisted config so partial saves never depend on
+        # transient in-memory rollback state.
+        persisted_cfg = load_cfg()
+        merged = _merge(asdict(persisted_cfg), body)
 
         new_cfg = Config(
             recording=RecordingConfig(**{
@@ -658,6 +662,10 @@ class ShareServer:
             }),
         )
         old_cfg = copy.deepcopy(self.cfg)
+        restart_required = (
+            old_cfg.sharing != new_cfg.sharing
+            or old_cfg.recording.gsr_args != new_cfg.recording.gsr_args
+        )
 
         # Apply live (some settings still require daemon restart, e.g. recorder backend).
         for field in ("recording", "hotkeys", "output", "sharing"):
@@ -668,7 +676,7 @@ class ShareServer:
             try:
                 await self.apply_config_cb()
             except Exception as exc:
-                # Keep runtime state stable, but still persist new settings.
+                # Keep runtime state stable and reject invalid live changes.
                 for field in ("recording", "hotkeys", "output", "sharing"):
                     setattr(self.cfg, field, getattr(old_cfg, field))
 
@@ -680,16 +688,23 @@ class ShareServer:
                 apply_error = str(exc) or exc.__class__.__name__
                 log.warning("Live config apply failed; settings saved for next restart: %s", exc)
 
+        # Always persist validated settings, even when live apply fails.
+        # This keeps restart-intended config changes from being lost.
         save_cfg(new_cfg)
+
         if apply_error:
             return web.json_response({
                 "ok": True,
                 "applied": False,
-                "warning": "Settings saved but could not be applied live. Restart Vice to apply them.",
+                "restart_required": True,
+                "warning": "Settings saved for next restart. Restart Vice to apply them.",
                 "error": apply_error,
             })
 
-        return web.json_response({"ok": True, "applied": True})
+        payload = {"ok": True, "applied": True, "restart_required": restart_required}
+        if restart_required:
+            payload["warning"] = "Some sharing settings require a full app restart to take effect."
+        return web.json_response(payload)
 
     async def _api_status(self, _: web.Request) -> web.Response:
         extra = self.get_status_cb() if self.get_status_cb else {}

@@ -8,8 +8,9 @@ Behaviour:
   • Waits for the HTTP server to be ready, then opens a native window.
   • Exposes a JS API so the UI can call vice.quit() to stop the daemon
     and close the window cleanly.
-  • Closing the window WITHOUT calling vice.quit() leaves the daemon
-    running in the background (recording continues, hotkey still works).
+  • Closing the window without vice.quit() keeps recording running.
+  • Sending SIGTERM to vice-app (for example: killall vice-app) now
+    forwards a clean stop request to the daemon before exit.
   • Re-launching vice-app when the daemon is already running just opens
     a new window connected to the existing session.
 
@@ -24,6 +25,7 @@ import asyncio
 import logging
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -54,6 +56,15 @@ def _setup_logging() -> None:
 
 
 log = logging.getLogger("vice-app")
+
+
+def _handle_app_terminate(signum: int, _frame) -> None:
+    """Stop daemon when vice-app is terminated externally."""
+    log.info("Received signal %s, stopping daemon before exit", signum)
+    try:
+        _stop_daemon()
+    finally:
+        raise SystemExit(0)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -191,6 +202,8 @@ def _wait_for_server(url: str, timeout: float = 20.0) -> bool:
 
 def main() -> None:
     _setup_logging()
+    signal.signal(signal.SIGTERM, _handle_app_terminate)
+    signal.signal(signal.SIGINT, _handle_app_terminate)
     log.info("vice-app starting (python=%s)", sys.executable)
 
     try:

@@ -98,6 +98,9 @@ def _extra_gsr_args(raw: str) -> list[str]:
 
     # Allow env var + tilde expansion so users can reference shell-style values.
     expanded = os.path.expanduser(os.path.expandvars(raw))
+    monitor = _desktop_audio_source("default")
+    expanded = expanded.replace("$(pactl get-default-sink).monitor", monitor)
+    expanded = expanded.replace("(pactl get-default-sink).monitor", monitor)
 
     try:
         args = shlex.split(expanded)
@@ -106,9 +109,40 @@ def _extra_gsr_args(raw: str) -> list[str]:
         return []
 
     # Convenience placeholder for desktop monitor source.
-    monitor = _desktop_audio_source("default")
-    return [arg.replace("{default_sink_monitor}", monitor) for arg in args]
+    replaced: list[str] = []
+    for arg in args:
+        val = arg.replace("{default_sink_monitor}", monitor)
+        val = val.replace("$(pactl get-default-sink).monitor", monitor)
+        val = val.replace("(pactl get-default-sink).monitor", monitor)
+        replaced.append(val)
+    return replaced
 
+
+
+
+def _gsr_has_any_flag(args: list[str], *flags: str) -> bool:
+    for arg in args:
+        for f in flags:
+            if arg == f or arg.startswith(f + "="):
+                return True
+    return False
+
+
+def _gsr_sanitize_args(args: list[str], blocked_flags: set[str]) -> list[str]:
+    """Drop flags that Vice manages internally to avoid conflicting values."""
+    out: list[str] = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in blocked_flags:
+            i += 2
+            continue
+        if any(arg.startswith(f + "=") for f in blocked_flags):
+            i += 1
+            continue
+        out.append(arg)
+        i += 1
+    return out
 
 def _desktop_audio_source(preferred: str) -> str:
     """
@@ -354,13 +388,19 @@ class Recorder(ABC):
 
     @staticmethod
     def _gsr_session_cmd(out_path: Path, rc) -> list[str]:
+        extra = _gsr_sanitize_args(_extra_gsr_args(rc.gsr_args), {"-o", "-r"})
         cmd = ["gpu-screen-recorder"]
-        cmd += ["-w", "screen" if _is_wayland() else os.environ.get("DISPLAY", ":0")]
-        cmd += ["-f", str(rc.fps)]
-        cmd += ["-c", "mp4"]
-        if rc.capture_audio:
+
+        if not _gsr_has_any_flag(extra, "-w"):
+            cmd += ["-w", "screen" if _is_wayland() else os.environ.get("DISPLAY", ":0")]
+        if not _gsr_has_any_flag(extra, "-f"):
+            cmd += ["-f", str(rc.fps)]
+        if not _gsr_has_any_flag(extra, "-c"):
+            cmd += ["-c", "mp4"]
+        if rc.capture_audio and not _gsr_has_any_flag(extra, "-a"):
             cmd += ["-a", "default_output"]
-        cmd += _extra_gsr_args(rc.gsr_args)
+
+        cmd += extra
         cmd += ["-o", str(out_path)]
         return cmd
 
@@ -446,24 +486,48 @@ async def _trim_to_last_n_seconds(path: Path, seconds: int) -> Path:
 
     start = total - seconds
     tmp = path.with_suffix(".trim.mp4")
-    cmd = [
-        "ffmpeg", "-hide_banner", "-loglevel", "error",
-        "-ss", str(start), "-i", str(path),
-        "-t", str(seconds), "-c", "copy", "-movflags", "+faststart",
-        "-y", str(tmp),
-    ]
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-        if proc.returncode != 0:
-            log.error("ffmpeg trim failed: %s", stderr.decode())
-            return path  # return original on failure
-    except asyncio.TimeoutError:
-        log.error("ffmpeg trim timed out")
+    def _copy_trim_cmd() -> list[str]:
+        return [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-ss", str(start), "-i", str(path),
+            "-t", str(seconds), "-c", "copy", "-movflags", "+faststart",
+            "-y", str(tmp),
+        ]
+
+    def _reencode_trim_cmd() -> list[str]:
+        return [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-ss", str(start), "-i", str(path),
+            "-t", str(seconds),
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
+            "-y", str(tmp),
+        ]
+
+    async def _run_trim(cmd: list[str], timeout: int) -> tuple[bool, str]:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            err = stderr.decode() if stderr else ""
+            return proc.returncode == 0, err
+        except asyncio.TimeoutError:
+            return False, "trim command timed out"
+
+    ok, err = await _run_trim(_copy_trim_cmd(), 60)
+    if not ok:
+        log.warning("ffmpeg copy trim failed, retrying with re-encode: %s", err)
+        ok, err = await _run_trim(_reencode_trim_cmd(), 120)
+        if not ok:
+            log.error("ffmpeg trim failed: %s", err)
+            return path
+
+    if not tmp.exists():
+        log.error("ffmpeg trim did not produce output file")
         return path
 
     # Replace original with trimmed version
@@ -531,39 +595,34 @@ class GSRRecorder(Recorder):
 
     def _build_cmd(self) -> list[str]:
         rc = self.cfg.recording
+        extra = _gsr_sanitize_args(_extra_gsr_args(rc.gsr_args), {"-o"})
         cmd = ["gpu-screen-recorder"]
 
-        # Window/screen target
-        if _is_wayland():
-            # On Wayland, 'screen' captures all outputs; specific output names also work.
-            cmd += ["-w", "screen"]
-        else:
-            display = os.environ.get("DISPLAY", ":0")
-            cmd += ["-w", display]
+        # Allow manual overrides through recording.gsr_args.
+        if not _gsr_has_any_flag(extra, "-w"):
+            if _is_wayland():
+                cmd += ["-w", "screen"]
+            else:
+                display = os.environ.get("DISPLAY", ":0")
+                cmd += ["-w", display]
 
-        # Frame rate
-        cmd += ["-f", str(rc.fps)]
+        if not _gsr_has_any_flag(extra, "-f"):
+            cmd += ["-f", str(rc.fps)]
 
-        # Replay buffer duration
-        cmd += ["-r", str(rc.buffer_duration)]
+        if not _gsr_has_any_flag(extra, "-r"):
+            cmd += ["-r", str(rc.buffer_duration)]
+
+        if not _gsr_has_any_flag(extra, "-c"):
+            cmd += ["-c", "mp4"]
+
+        if rc.capture_audio and not _gsr_has_any_flag(extra, "-a"):
+            cmd += ["-a", "default_output"]
+
+        cmd += extra
 
         # Output directory (gsr writes files here on SIGUSR1)
         self._out_dir.mkdir(parents=True, exist_ok=True)
         cmd += ["-o", str(self._out_dir)]
-
-        # Container / codec
-        cmd += ["-c", "mp4"]
-
-        # Audio
-        if rc.capture_audio:
-            # 'default_output' captures desktop audio via PipeWire/PulseAudio
-            cmd += ["-a", "default_output"]
-
-        cmd += _extra_gsr_args(rc.gsr_args)
-
-        # Quality — gsr uses its own quality flags
-        # (encoder selection is automatic in gsr based on detected GPU)
-
         return cmd
 
     async def start(self) -> None:
@@ -589,13 +648,24 @@ class GSRRecorder(Recorder):
     async def stop(self) -> None:
         self._running = False
         if self._proc:
+            proc = self._proc
+            self._proc = None
             try:
-                self._proc.terminate()
-                await asyncio.wait_for(self._proc.wait(), timeout=5)
-            except Exception:
-                self._proc.kill()
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except ProcessLookupError:
+                    pass
+            except ProcessLookupError:
+                pass
+            except Exception as exc:
+                log.warning("Error while stopping GSR process: %s", exc)
         if self._watch_task:
             self._watch_task.cancel()
+            self._watch_task = None
 
     async def save_clip(self) -> Optional[Path]:
         if not self._proc or self._proc.returncode is not None:
@@ -739,13 +809,24 @@ class SegmentRecorder(Recorder):
     async def stop(self) -> None:
         self._running = False
         if self._current_proc:
+            proc = self._current_proc
+            self._current_proc = None
             try:
-                self._current_proc.terminate()
-                await asyncio.wait_for(self._current_proc.wait(), timeout=5)
-            except Exception:
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except ProcessLookupError:
+                    pass
+            except ProcessLookupError:
                 pass
+            except Exception as exc:
+                log.warning("Error while stopping segment recorder process: %s", exc)
         if self._loop_task:
             self._loop_task.cancel()
+            self._loop_task = None
 
     async def _record_loop(self) -> None:
         while self._running:
@@ -780,10 +861,16 @@ class SegmentRecorder(Recorder):
                     try:
                         await asyncio.wait_for(self._current_proc.wait(), timeout=3)
                     except asyncio.TimeoutError:
-                        self._current_proc.kill()
+                        try:
+                            self._current_proc.kill()
+                        except ProcessLookupError:
+                            pass
             except asyncio.CancelledError:
                 if self._current_proc:
-                    self._current_proc.terminate()
+                    try:
+                        self._current_proc.terminate()
+                    except ProcessLookupError:
+                        pass
                 return
             except Exception as exc:
                 log.error("Recorder error: %s", exc)

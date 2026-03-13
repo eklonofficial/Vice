@@ -219,15 +219,36 @@ class ViceDaemon:
     async def _shutdown(self, server) -> None:
         click.echo("\n[Vice] Shutting down…")
         if self.share:
-            await self.share.broadcast({"type": "status", "recording": False, "backend": ""})
+            try:
+                await self.share.broadcast({"type": "status", "recording": False, "backend": ""})
+            except Exception as exc:
+                log.warning("Failed to broadcast shutdown status: %s", exc)
+
         server.close()
-        await self.recorder.stop()
-        await self.hotkeys.stop()
+
+        try:
+            await self.recorder.stop()
+        except Exception as exc:
+            log.error("Recorder stop failed during shutdown: %s", exc)
+
+        try:
+            await self.hotkeys.stop()
+        except Exception as exc:
+            log.warning("Hotkey stop failed during shutdown: %s", exc)
+
         if self.share:
-            await self.share.stop()
+            try:
+                await self.share.stop()
+            except Exception as exc:
+                log.warning("Share server stop failed during shutdown: %s", exc)
+
         for p in (PID_FILE, SOCKET_FILE):
-            if p.exists():
-                p.unlink()
+            try:
+                if p.exists():
+                    p.unlink()
+            except OSError as exc:
+                log.warning("Failed to remove %s during shutdown: %s", p, exc)
+
         click.echo("[Vice] Stopped.")
 
     async def _handle_clip_hotkey(self) -> None:
