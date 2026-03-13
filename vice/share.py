@@ -1,10 +1,7 @@
 """
 Vice share server — HTTP server that powers:
-  • The web UI  (/  →  vice/ui/index.html)
-  • Discord-embed share pages  (/c/{slug})
-  • Direct video/thumbnail serving  (/v/{slug}, /t/{slug})
-  • REST API  (/api/*)
-  • WebSocket  (/ws) for real-time UI updates
+  • A local control UI/server  (/ → UI, /api/*, /ws, media)
+  • A public share-only server  (/c/{slug}, /v/{slug}, /t/{slug})
 
 WebSocket event types (server → client):
   {"type": "clip_saved",   "clip":  <clip_json>}
@@ -190,9 +187,12 @@ _EMBED_PAGE = """\
 class ShareServer:
     def __init__(self, cfg) -> None:
         self.cfg = cfg
-        self._app  = web.Application()
-        self._runner: Optional[web.AppRunner]  = None
-        self._site:   Optional[web.TCPSite]    = None
+        self._local_app = web.Application()
+        self._public_app = web.Application()
+        self._local_runner: Optional[web.AppRunner] = None
+        self._local_site: Optional[web.TCPSite] = None
+        self._public_runner: Optional[web.AppRunner] = None
+        self._public_site: Optional[web.TCPSite] = None
 
         # slug → Path  (populated from disk on start + runtime additions)
         self._clips: dict[str, Path] = {}
@@ -201,7 +201,8 @@ class ShareServer:
 
         self._tunnel_proc: Optional[asyncio.subprocess.Process] = None
         self._tunnel_url:  Optional[str] = None
-        self._base_url:    Optional[str] = None
+        self._local_base_url: Optional[str] = None
+        self._public_bind_url: Optional[str] = None
 
         # Connected WebSocket clients
         self._ws_clients: set[web.WebSocketResponse] = set()
@@ -213,12 +214,13 @@ class ShareServer:
         # Injected so config changes can be applied without restart when possible.
         self.apply_config_cb: Optional[Callable[[], Coroutine]] = None
 
-        self._setup_routes()
+        self._setup_local_routes()
+        self._setup_public_routes()
 
     # ── routes ───────────────────────────────────────────────────────────────
 
-    def _setup_routes(self) -> None:
-        r = self._app.router
+    def _setup_local_routes(self) -> None:
+        r = self._local_app.router
 
         # Web UI
         r.add_get("/",            self._ui)
@@ -251,6 +253,12 @@ class ShareServer:
         # WebSocket
         r.add_get("/ws", self._ws_handler)
 
+    def _setup_public_routes(self) -> None:
+        r = self._public_app.router
+        r.add_get("/c/{slug}", self._embed_page)
+        r.add_get("/v/{slug}", self._video)
+        r.add_get("/t/{slug}", self._thumb)
+
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
     async def start(self) -> None:
@@ -260,17 +268,28 @@ class ShareServer:
             for mp4 in sorted(out_dir.glob("*.mp4"), key=lambda p: p.stat().st_mtime):
                 self._clips[mp4.stem] = mp4
 
-        port = self.cfg.sharing.port
-        self._runner = web.AppRunner(self._app, access_log=None)
-        await self._runner.setup()
-        self._site = web.TCPSite(self._runner, "0.0.0.0", port)
-        await self._site.start()
+        local_port = self.cfg.sharing.port
+        public_port = self.cfg.sharing.public_port or (local_port + 1)
 
-        self._base_url = self.cfg.sharing.base_url or f"http://{_local_ip()}:{port}"
-        log.info("Vice UI + share server: %s", self._base_url)
+        self._local_runner = web.AppRunner(self._local_app, access_log=None)
+        await self._local_runner.setup()
+        self._local_site = web.TCPSite(self._local_runner, "127.0.0.1", local_port)
+        await self._local_site.start()
+
+        self._public_runner = web.AppRunner(self._public_app, access_log=None)
+        await self._public_runner.setup()
+        self._public_site = web.TCPSite(self._public_runner, "0.0.0.0", public_port)
+        await self._public_site.start()
+
+        self._local_base_url = f"http://127.0.0.1:{local_port}"
+        self._public_bind_url = f"http://{_local_ip()}:{public_port}"
+        log.info("Vice local control UI: %s", self._local_base_url)
+        log.info("Vice public share server: %s", self._public_bind_url)
+        if self.cfg.sharing.base_url:
+            log.info("Vice public base URL override: %s", self.cfg.sharing.base_url)
 
         if self.cfg.sharing.cloudflare_tunnel:
-            await self._start_tunnel(port)
+            await self._start_tunnel(public_port)
 
     async def stop(self) -> None:
         for ws in list(self._ws_clients):
@@ -284,8 +303,10 @@ class ShareServer:
                 await asyncio.wait_for(self._tunnel_proc.wait(), timeout=5)
             except Exception:
                 pass
-        if self._runner:
-            await self._runner.cleanup()
+        if self._local_runner:
+            await self._local_runner.cleanup()
+        if self._public_runner:
+            await self._public_runner.cleanup()
 
     # ── public helpers (called by ViceDaemon) ─────────────────────────────────
 
@@ -294,10 +315,15 @@ class ShareServer:
         slug = path.stem
         self._clips[slug] = path
         asyncio.create_task(self._broadcast_clip(slug, path))
-        return f"{self._tunnel_url or self._base_url}/c/{slug}"
+        return f"{self.public_base_url()}/c/{slug}"
 
-    def base_url(self) -> Optional[str]:
-        return self._tunnel_url or self._base_url
+    def local_base_url(self) -> Optional[str]:
+        return self._local_base_url
+
+    def public_base_url(self) -> Optional[str]:
+        if self.cfg.sharing.base_url:
+            return self.cfg.sharing.base_url.rstrip("/")
+        return (self._tunnel_url or self._public_bind_url or "").rstrip("/") or None
 
     async def broadcast(self, msg: dict) -> None:
         if not self._ws_clients:
@@ -323,7 +349,7 @@ class ShareServer:
         return self._meta[slug]
 
     def _clip_json(self, slug: str, path: Path, meta: dict) -> dict:
-        public_base = self._tunnel_url or self._base_url
+        public_base = self.public_base_url() or self.local_base_url() or ""
         try:
             st = path.stat()
             size = st.st_size
@@ -378,7 +404,7 @@ class ShareServer:
         if not path or not path.exists():
             raise web.HTTPNotFound()
         meta = await self._get_meta(slug, path)
-        base = self._tunnel_url or self._base_url
+        base = f"{req.scheme}://{req.host}"
         html = _EMBED_PAGE.format(
             title=f"Vice clip — {slug}",
             video_url=f"{base}/v/{slug}",
@@ -708,10 +734,13 @@ class ShareServer:
 
     async def _api_status(self, _: web.Request) -> web.Response:
         extra = self.get_status_cb() if self.get_status_cb else {}
+        public_url = self.public_base_url()
         return web.json_response({
             "running":  True,
             "clips":    len(self._clips),
-            "base_url": self.base_url(),
+            "local_url": self.local_base_url(),
+            "public_url": public_url,
+            "base_url": public_url,
             **extra,
         })
 

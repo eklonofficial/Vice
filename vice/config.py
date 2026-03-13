@@ -66,6 +66,8 @@ class OutputConfig:
 class SharingConfig:
     enabled: bool = True
     port: int = 8765
+    # Port for the public share-only server. Defaults to sharing.port + 1.
+    public_port: Optional[int] = None
     # Expose via a public tunnel (cloudflared if available, SSH/serveo as fallback).
     cloudflare_tunnel: bool = True
     # Override the public base URL shown in share links (e.g. if behind reverse proxy).

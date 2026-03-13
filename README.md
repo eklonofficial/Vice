@@ -81,7 +81,7 @@ Clips are saved to `~/Videos/Vice/`. Closing the window keeps the daemon running
 | **Session recording** | Double-tap to record continuously for as long as you want |
 | **Hotkey highlights** | Tap the clip key during a session to mark timestamps — no need to edit later |
 | **Clip gallery** | Browse, watch, rename, trim, and share clips |
-| **Share links** | Public URLs via Cloudflare Tunnel — embeds in Discord |
+| **Share links** | Public view-only URLs via Cloudflare Tunnel — embeds in Discord |
 | **Viewer highlights** | Press H in the viewer to mark timestamps, colour-code and rename them |
 | **Themes** | Blue, purple, green, red, or orange accent colour |
 
@@ -179,7 +179,9 @@ directory       = "~/Videos/Vice"
 [sharing]
 enabled           = true
 port              = 8765
+public_port       = 8766   # optional; defaults to port + 1 for the public share-only server
 cloudflare_tunnel = true
+base_url          = "https://clips.example.com"   # optional public share origin override
 ```
 
 `recording.gsr_args` supports environment/tilde expansion and a `{default_sink_monitor}` placeholder for desktop audio capture.
@@ -202,6 +204,10 @@ cloudflare_tunnel = true
 
 **Share link only works on my WiFi**
 > Make sure `cloudflare_tunnel = true` in Settings. Install `cloudflared` if it's missing.
+
+**Why can I open the UI locally but not from another device anymore?**
+> Vice now keeps the control UI local-only on `127.0.0.1` and exposes a separate public share server for clip links.
+> If you use a reverse proxy, point it at `sharing.public_port`, not `sharing.port`.
 
 ### Uninstall
 

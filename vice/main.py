@@ -108,8 +108,10 @@ class ViceDaemon:
         click.echo(f"  Backend   : {self.recorder.name}")
         click.echo(f"  Clip key  : {clip_key or '(none)'}")
         click.echo(f"  Output    : {self.cfg.output.directory}")
-        if self.share and self.share.base_url():
-            click.echo(f"  UI + Share: {self.share.base_url()}/")
+        if self.share and self.share.local_base_url():
+            click.echo(f"  UI URL    : {self.share.local_base_url()}/")
+        if self.share and self.share.public_base_url():
+            click.echo(f"  Share URL : {self.share.public_base_url()}/")
         click.echo("Press Ctrl-C to stop.\n")
 
         loop = asyncio.get_running_loop()
@@ -362,13 +364,15 @@ class ViceDaemon:
                     "backend":        self.recorder.name,
                     "clips":          self._clip_count,
                     "output":         self.cfg.output.directory,
-                    "share_url":      self.share.base_url() if self.share else None,
+                    "local_url":      self.share.local_base_url() if self.share else None,
+                    "public_url":     self.share.public_base_url() if self.share else None,
+                    "share_url":      self.share.public_base_url() if self.share else None,
                     "session_active":  self._session_active,
                     "clip_key":        self.cfg.hotkeys.clip,
                     "hotkeys_available": self.hotkeys_available,
                 }).encode() + b"\n")
             elif cmd == "url":
-                url = self.share.base_url() if self.share else ""
+                url = self.share.local_base_url() if self.share else ""
                 writer.write((url or "").encode() + b"\n")
             else:
                 writer.write(b"unknown command\n")
@@ -505,8 +509,10 @@ def status() -> None:
         click.echo(f"Backend  : {info['backend']}")
         click.echo(f"Clips    : {info['clips']}")
         click.echo(f"Output   : {info['output']}")
-        if info.get("share_url"):
-            click.echo(f"UI URL   : {info['share_url']}/")
+        if info.get("local_url"):
+            click.echo(f"UI URL   : {info['local_url']}/")
+        if info.get("public_url"):
+            click.echo(f"Share URL: {info['public_url']}/")
     except Exception:
         click.echo(raw)
 
