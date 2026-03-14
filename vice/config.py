@@ -40,6 +40,11 @@ class RecordingConfig:
     backend: str = "auto"
     # Include desktop audio in clips.
     capture_audio: bool = True
+    # Include microphone input in clips/session recordings.
+    capture_microphone: bool = False
+    # How to handle mic capture when wf-recorder cannot combine desktop + mic.
+    # "prompt" | "backend_fallback" | "mic_only"
+    wf_microphone_strategy: str = "prompt"
     # Burn the "Clipped with Vice" watermark into exported clips.
     # Disabled by default to avoid encoding spikes while gaming.
     apply_watermark: bool = False

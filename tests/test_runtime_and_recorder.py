@@ -9,7 +9,7 @@ from unittest import mock
 
 from vice import config as config_mod
 from vice.config import Config, OutputConfig, RecordingConfig, SharingConfig
-from vice.recorder import GSRRecorder, _wait_for_finalized_clip
+from vice.recorder import GSRRecorder, SegmentRecorder, create_recorder, _wait_for_finalized_clip
 from vice.runtime import actual_home_dir, normalize_runtime_environment
 
 try:
@@ -71,6 +71,28 @@ class ConfigPathResolutionTests(unittest.TestCase):
                     cfg = config_mod.load()
 
         self.assertEqual(cfg.output.directory, str(actual_home_dir() / "Videos" / "Vice"))
+
+    def test_save_and_load_preserve_microphone_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / ".config" / "vice"
+            config_dir.mkdir(parents=True)
+            config_path = config_dir / "config.toml"
+
+            cfg = Config(
+                recording=RecordingConfig(
+                    capture_microphone=True,
+                    wf_microphone_strategy="backend_fallback",
+                )
+            )
+
+            with mock.patch.object(config_mod, "CONFIG_DIR", config_dir):
+                with mock.patch.object(config_mod, "CONFIG_PATH", config_path):
+                    config_mod.save(cfg)
+                    loaded = config_mod.load()
+
+        self.assertTrue(loaded.recording.capture_microphone)
+        self.assertEqual(loaded.recording.wf_microphone_strategy, "backend_fallback")
 
 
 @unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
@@ -176,3 +198,93 @@ class RecorderStabilizationTests(unittest.IsolatedAsyncioTestCase):
         wait_mock.assert_awaited_once()
         self.assertIsNotNone(saved)
         self.assertEqual(saved.name, "Vice_Clip_1.mp4")
+
+
+class RecorderAudioCommandTests(unittest.TestCase):
+    def test_gsr_build_cmd_includes_desktop_and_microphone_audio(self) -> None:
+        recorder = GSRRecorder(
+            Config(
+                output=OutputConfig(directory="/tmp/vice-test"),
+                recording=RecordingConfig(
+                    capture_audio=True,
+                    capture_microphone=True,
+                ),
+            )
+        )
+
+        cmd = recorder._build_cmd()
+
+        self.assertIn("-a", cmd)
+        idx = cmd.index("-a")
+        self.assertEqual(cmd[idx + 1], "default_output|default_input")
+
+    def test_ffmpeg_segment_cmd_mixes_desktop_and_microphone_audio(self) -> None:
+        recorder = SegmentRecorder(
+            Config(
+                recording=RecordingConfig(
+                    capture_audio=True,
+                    capture_microphone=True,
+                )
+            ),
+            use_wf_recorder=False,
+        )
+
+        with mock.patch("vice.recorder._desktop_audio_source", return_value="desk.monitor"):
+            with mock.patch("vice.recorder._microphone_audio_source", return_value="mic.input"):
+                cmd = recorder._ffmpeg_x11_cmd(Path("/tmp/out.mp4"))
+
+        self.assertIn("desk.monitor", cmd)
+        self.assertIn("mic.input", cmd)
+        self.assertIn("-filter_complex", cmd)
+        self.assertIn("[1:a][2:a]amix=inputs=2:normalize=0[aout]", cmd)
+
+    def test_wf_recorder_uses_microphone_only_strategy(self) -> None:
+        recorder = SegmentRecorder(
+            Config(
+                recording=RecordingConfig(
+                    capture_audio=True,
+                    capture_microphone=True,
+                    wf_microphone_strategy="mic_only",
+                )
+            ),
+            use_wf_recorder=True,
+        )
+
+        with mock.patch("vice.recorder._microphone_audio_source", return_value="mic.input"):
+            cmd = recorder._wf_recorder_cmd(Path("/tmp/out.mp4"))
+
+        self.assertIn("--audio=mic.input", cmd)
+
+    def test_create_recorder_uses_compat_backend_for_wf_microphone_mode(self) -> None:
+        cfg = Config(
+            recording=RecordingConfig(
+                backend="wf-recorder",
+                capture_audio=True,
+                capture_microphone=True,
+                wf_microphone_strategy="backend_fallback",
+            )
+        )
+
+        with mock.patch("vice.recorder._has") as has_mock:
+            with mock.patch("vice.recorder._is_wayland", return_value=True):
+                with mock.patch("vice.recorder._is_x11", return_value=False):
+                    has_mock.side_effect = lambda tool: tool == "gpu-screen-recorder"
+                    recorder = create_recorder(cfg)
+
+        self.assertIsInstance(recorder, GSRRecorder)
+
+    def test_create_recorder_rejects_wf_microphone_prompt_mode(self) -> None:
+        cfg = Config(
+            recording=RecordingConfig(
+                backend="wf-recorder",
+                capture_audio=True,
+                capture_microphone=True,
+                wf_microphone_strategy="prompt",
+            )
+        )
+
+        with mock.patch("vice.recorder._has", side_effect=lambda tool: tool == "wf-recorder"):
+            with mock.patch("vice.recorder._is_wayland", return_value=True):
+                with mock.patch("vice.recorder._is_x11", return_value=False):
+                    with self.assertRaises(RuntimeError):
+                        create_recorder(cfg)

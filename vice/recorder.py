@@ -182,6 +182,96 @@ def _desktop_audio_source(preferred: str) -> str:
     return preferred
 
 
+def _microphone_audio_source(preferred: str = "default") -> str:
+    """Resolve a Pulse/PipeWire source name that captures microphone input."""
+    if preferred and preferred != "default":
+        return preferred
+
+    if not _has("pactl"):
+        return preferred
+
+    try:
+        source = subprocess.check_output(
+            ["pactl", "get-default-source"], text=True, stderr=subprocess.DEVNULL
+        ).strip()
+        if source:
+            return source
+    except Exception:
+        pass
+
+    try:
+        out = subprocess.check_output(
+            ["pactl", "list", "short", "sources"], text=True, stderr=subprocess.DEVNULL
+        )
+        for line in out.splitlines():
+            cols = re.split(r"\s+", line.strip())
+            if len(cols) > 1 and not cols[1].endswith(".monitor"):
+                return cols[1]
+    except Exception:
+        pass
+
+    return preferred
+
+
+def _captures_desktop_audio(rc) -> bool:
+    return bool(rc.capture_audio)
+
+
+def _captures_microphone(rc) -> bool:
+    return bool(rc.capture_microphone)
+
+
+def _gsr_audio_input(rc) -> Optional[str]:
+    desktop = _captures_desktop_audio(rc)
+    mic = _captures_microphone(rc)
+    if desktop and mic:
+        return "default_output|default_input"
+    if desktop:
+        return "default_output"
+    if mic:
+        return "default_input"
+    return None
+
+
+def _wf_audio_device(rc) -> Optional[str]:
+    desktop = _captures_desktop_audio(rc)
+    mic = _captures_microphone(rc)
+    if desktop and mic:
+        if rc.wf_microphone_strategy == "mic_only":
+            return _microphone_audio_source()
+        return _desktop_audio_source(rc.audio_sink)
+    if desktop:
+        return _desktop_audio_source(rc.audio_sink)
+    if mic:
+        return _microphone_audio_source()
+    return None
+
+
+def _ffmpeg_audio_input_args(rc) -> list[str]:
+    args: list[str] = []
+    if _captures_desktop_audio(rc):
+        args += ["-f", "pulse", "-i", _desktop_audio_source(rc.audio_sink)]
+    if _captures_microphone(rc):
+        args += ["-f", "pulse", "-i", _microphone_audio_source()]
+    return args
+
+
+def _ffmpeg_audio_output_args(rc) -> list[str]:
+    desktop = _captures_desktop_audio(rc)
+    mic = _captures_microphone(rc)
+    if not desktop and not mic:
+        return []
+    if desktop and mic:
+        return [
+            "-filter_complex", "[1:a][2:a]amix=inputs=2:normalize=0[aout]",
+            "-map", "0:v",
+            "-map", "[aout]",
+            "-c:a", "aac",
+            "-b:a", "128k",
+        ]
+    return ["-c:a", "aac", "-b:a", "128k"]
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Encoder selection
 # ──────────────────────────────────────────────────────────────────────────────
@@ -398,8 +488,9 @@ class Recorder(ABC):
             cmd += ["-f", str(rc.fps)]
         if not _gsr_has_any_flag(extra, "-c"):
             cmd += ["-c", "mp4"]
-        if rc.capture_audio and not _gsr_has_any_flag(extra, "-a"):
-            cmd += ["-a", "default_output"]
+        audio_input = _gsr_audio_input(rc)
+        if audio_input and not _gsr_has_any_flag(extra, "-a"):
+            cmd += ["-a", audio_input]
 
         cmd += extra
         cmd += ["-o", str(out_path)]
@@ -425,11 +516,9 @@ class Recorder(ABC):
         if res:
             cmd += ["-s", res]
         cmd += ["-i", display]
-        if rc.capture_audio:
-            cmd += ["-f", "pulse", "-i", _desktop_audio_source(rc.audio_sink)]
+        cmd += _ffmpeg_audio_input_args(rc)
         cmd += _encoder_flags(encoder, rc.crf)
-        if rc.capture_audio:
-            cmd += ["-c:a", "aac", "-b:a", "128k"]
+        cmd += _ffmpeg_audio_output_args(rc)
         cmd += ["-y", str(out_path)]
         return cmd
 
@@ -628,6 +717,10 @@ class GSRRecorder(Recorder):
         self._watch_task: Optional[asyncio.Task] = None
         self._seen_files: set[str] = set()
 
+    @property
+    def name(self) -> str:
+        return "gpu-screen-recorder"
+
     def _build_cmd(self) -> list[str]:
         rc = self.cfg.recording
         extra = _gsr_sanitize_args(_extra_gsr_args(rc.gsr_args), {"-o"})
@@ -650,8 +743,9 @@ class GSRRecorder(Recorder):
         if not _gsr_has_any_flag(extra, "-c"):
             cmd += ["-c", "mp4"]
 
-        if rc.capture_audio and not _gsr_has_any_flag(extra, "-a"):
-            cmd += ["-a", "default_output"]
+        audio_input = _gsr_audio_input(rc)
+        if audio_input and not _gsr_has_any_flag(extra, "-a"):
+            cmd += ["-a", audio_input]
 
         cmd += extra
 
@@ -778,6 +872,10 @@ class SegmentRecorder(Recorder):
         self._out_dir = resolve_path(cfg.output.directory)
         self._out_dir.mkdir(parents=True, exist_ok=True)
 
+    @property
+    def name(self) -> str:
+        return "wf-recorder" if self._use_wf else "ffmpeg"
+
     # ── Capture commands ──────────────────────────────────────────────────────
 
     def _wf_recorder_cmd(self, out: Path) -> list[str]:
@@ -786,8 +884,9 @@ class SegmentRecorder(Recorder):
         if rc.resolution:
             # wf-recorder geometry flag
             pass  # resolution is auto by default; geometry can be set with -g
-        if rc.capture_audio:
-            cmd += [f"--audio={_desktop_audio_source(rc.audio_sink)}"]
+        audio_device = _wf_audio_device(rc)
+        if audio_device:
+            cmd += [f"--audio={audio_device}"]
         # Use ffmpeg codec flags via wf-recorder's -c option
         codec = self._encoder
         if codec in ("h264_nvenc", "hevc_nvenc"):
@@ -808,15 +907,12 @@ class SegmentRecorder(Recorder):
         if res:
             cmd += ["-s", res]
         cmd += ["-i", display]
-
-        if rc.capture_audio:
-            cmd += ["-f", "pulse", "-i", _desktop_audio_source(rc.audio_sink)]
+        cmd += _ffmpeg_audio_input_args(rc)
 
         enc_flags = _encoder_flags(self._encoder, rc.crf)
         cmd += enc_flags
 
-        if rc.capture_audio:
-            cmd += ["-c:a", "aac", "-b:a", "128k"]
+        cmd += _ffmpeg_audio_output_args(rc)
 
         cmd += ["-y", str(out)]
         return cmd
@@ -1012,6 +1108,29 @@ class SegmentRecorder(Recorder):
 # Factory
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _wf_requires_compat_backend(cfg: Config) -> bool:
+    rc = cfg.recording
+    return bool(rc.capture_audio and rc.capture_microphone and rc.wf_microphone_strategy == "backend_fallback")
+
+
+def _wf_requires_user_choice(cfg: Config) -> bool:
+    rc = cfg.recording
+    return bool(rc.capture_audio and rc.capture_microphone and rc.wf_microphone_strategy == "prompt")
+
+
+def _create_wf_compatible_recorder(cfg: Config) -> Recorder:
+    if _has("gpu-screen-recorder"):
+        log.info("wf-recorder mic mode requested compatible backend; using gpu-screen-recorder")
+        return GSRRecorder(cfg)
+    if _is_x11() and _has("ffmpeg"):
+        log.info("wf-recorder mic mode requested compatible backend; using ffmpeg x11grab")
+        return SegmentRecorder(cfg, use_wf_recorder=False)
+    raise RuntimeError(
+        "Microphone capture with desktop audio is not supported by wf-recorder on this system. "
+        "Install gpu-screen-recorder, switch backend, or choose mic-only mode."
+    )
+
+
 def create_recorder(cfg: Config) -> Recorder:
     """
     Instantiate the best available recorder for this system.
@@ -1032,6 +1151,12 @@ def create_recorder(cfg: Config) -> Recorder:
         return GSRRecorder(cfg)
 
     if pref == "wf-recorder" or (pref == "auto" and _is_wayland() and _has("wf-recorder")):
+        if _wf_requires_user_choice(cfg):
+            raise RuntimeError(
+                "wf-recorder cannot combine desktop audio and microphone until you choose a compatibility mode."
+            )
+        if _wf_requires_compat_backend(cfg):
+            return _create_wf_compatible_recorder(cfg)
         log.info("Selected backend: wf-recorder (Wayland segment mode)")
         return SegmentRecorder(cfg, use_wf_recorder=True)
 

@@ -183,6 +183,10 @@
       display: flex; align-items: flex-start; justify-content: space-between;
       margin-bottom: 24px; gap: 12px;
     }
+    .view-actions {
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      justify-content: flex-end;
+    }
     .view-title { font-size: 19px; font-weight: 700; letter-spacing: -.4px; }
     .view-sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
 
@@ -251,6 +255,26 @@
     }
     #clips-empty h3 { font-size: 15px; font-weight: 600; color: var(--muted-hi); margin-bottom: 6px; }
     #clips-empty p { font-size: 13px; line-height: 1.7; }
+    .clips-quick-toggle {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 12px;
+      border-radius: var(--r-sm);
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.04);
+      min-height: 40px;
+    }
+    .quick-toggle-copy strong {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .quick-toggle-copy span {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 1px;
+    }
 
     .clips-grid {
       display: grid;
@@ -622,6 +646,11 @@
       background: rgba(5,8,14,.72); z-index: 120;
     }
     #restart-modal.hidden { display: none; }
+    #wf-mic-modal {
+      position: fixed; inset: 0; display: grid; place-items: center;
+      background: rgba(5,8,14,.72); z-index: 120;
+    }
+    #wf-mic-modal.hidden { display: none; }
     .restart-box {
       width: min(460px, calc(100% - 28px));
       background: var(--surface-2);
@@ -640,6 +669,15 @@
       user-select: all;
     }
     .restart-actions { display: flex; justify-content: flex-end; gap: 8px; }
+    .wf-mic-box { width: min(520px, calc(100% - 28px)); }
+    .wf-mic-actions {
+      display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap;
+    }
+    .wf-mic-note {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
 
 
     /* ── Trim modal ─────────────────────────────────────────────────── */
@@ -991,10 +1029,22 @@
           <div class="view-title">Clips</div>
           <div class="view-sub" id="clip-sub">Loading…</div>
         </div>
-        <button class="btn btn-primary" onclick="triggerClip()">
-          <svg data-lucide="circle" style="fill:currentColor;width:9px;height:9px;flex-shrink:0"></svg>
-          Save Clip
-        </button>
+        <div class="view-actions">
+          <div class="clips-quick-toggle">
+            <div class="quick-toggle-copy">
+              <strong>Microphone</strong>
+              <span>Include mic audio in new clips</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="clips-mic-toggle" onchange="onClipMicToggleChange()">
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+          <button class="btn btn-primary" onclick="triggerClip()">
+            <svg data-lucide="circle" style="fill:currentColor;width:9px;height:9px;flex-shrink:0"></svg>
+            Save Clip
+          </button>
+        </div>
       </div>
 
 
@@ -1113,6 +1163,15 @@
           <div class="settings-row">
             <div class="s-label"><strong>Capture Audio</strong><span>Include desktop audio in clips</span></div>
             <label class="toggle"><input type="checkbox" id="s-audio"><span class="toggle-track"></span></label>
+          </div>
+
+          <div class="settings-row">
+            <div class="s-label"><strong>wf-recorder Microphone Mode</strong><span>Change the remembered behavior for desktop audio + microphone capture on wf-recorder</span></div>
+            <select id="s-wf-mic">
+              <option value="prompt">Ask when needed</option>
+              <option value="backend_fallback">Use compatible backend</option>
+              <option value="mic_only">Mic only on wf-recorder</option>
+            </select>
           </div>
 
         </div>
@@ -1281,6 +1340,27 @@
     <div class="restart-actions">
       <button class="btn" onclick="copyRestartCmd()"><svg data-lucide="copy"></svg> Copy command</button>
       <button class="btn btn-primary" onclick="closeRestartModal()">Got it</button>
+    </div>
+  </div>
+</div>
+
+<div id="wf-mic-modal" class="hidden">
+  <div class="restart-box wf-mic-box" role="dialog" aria-modal="true" aria-labelledby="wf-mic-title">
+    <div class="restart-title" id="wf-mic-title">wf-recorder needs a microphone mode</div>
+    <div class="restart-sub">
+      `wf-recorder` can only record one audio source directly. Choose how Vice should handle clips that include both desktop audio and your microphone.
+    </div>
+    <div class="wf-mic-actions">
+      <button class="btn btn-ghost" onclick="chooseWfMicStrategy('backend_fallback')">
+        <svg data-lucide="shuffle"></svg> Use compatible backend
+      </button>
+      <button class="btn btn-ghost" onclick="chooseWfMicStrategy('mic_only')">
+        <svg data-lucide="mic"></svg> Mic only on wf-recorder
+      </button>
+      <button class="btn btn-primary" onclick="closeWfMicModal()">Cancel</button>
+    </div>
+    <div class="wf-mic-note">
+      Your choice is remembered and can be changed later in Settings under <strong>wf-recorder Microphone Mode</strong>.
     </div>
   </div>
 </div>
@@ -1558,6 +1638,8 @@ let ws        = null;
 let recentNew = new Set();
 let tunnelUrl = null;
 let hotkeysAvailable = true;
+let runtimeBackend = '';
+let pendingMicToggle = null;
 
 // Trim state
 let trimSlug  = null;
@@ -1682,6 +1764,7 @@ async function fetchStatus() {
   try {
     const r = await fetch('/api/status');
     const d = await r.json();
+    runtimeBackend = d.backend || runtimeBackend;
     setRecStatus(d.recording, d.backend, d.session_active);
     applyHotkeyAvailability(d.hotkeys_available);
   } catch (_) {}
@@ -1890,6 +1973,8 @@ function populateSettings(c) {
   pick('s-enc',     r.encoder        ?? 'auto');
   pick('s-backend', r.backend        ?? 'auto');
   document.getElementById('s-audio').checked = r.capture_audio !== false;
+  document.getElementById('clips-mic-toggle').checked = r.capture_microphone === true;
+  pick('s-wf-mic',  r.wf_microphone_strategy ?? 'prompt');
   document.getElementById('s-gsr-args').value = r.gsr_args ?? '';
   const clipKey = h.clip ?? 'KEY_F9';
   document.getElementById('s-key').value = clipKey;
@@ -1904,6 +1989,107 @@ function pick(id, val) {
   for (const o of el.options) { if (o.value === val) { el.value = val; return; } }
 }
 
+function mergeConfigState(patch) {
+  cfg = cfg || {};
+  for (const key of ['recording', 'hotkeys', 'output', 'sharing']) {
+    if (!patch[key]) continue;
+    cfg[key] = { ...(cfg[key] || {}), ...patch[key] };
+  }
+}
+
+async function persistConfig(body) {
+  const resp = await fetch('/api/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || data.ok === false) {
+    throw new Error(data.error || 'save failed');
+  }
+  mergeConfigState(body);
+  return data;
+}
+
+function clipMicToggle() {
+  return document.getElementById('clips-mic-toggle');
+}
+
+function selectedWfMicStrategy() {
+  return (cfg.recording || {}).wf_microphone_strategy || 'prompt';
+}
+
+function micToggleNeedsWfChoice(targetChecked) {
+  if (!targetChecked) return false;
+  if ((cfg.recording || {}).capture_audio === false) return false;
+  if (selectedWfMicStrategy() !== 'prompt') return false;
+  const configuredBackend = (cfg.recording || {}).backend || 'auto';
+  return configuredBackend === 'wf-recorder' || runtimeBackend === 'wf-recorder';
+}
+
+function openWfMicModal() {
+  const modal = document.getElementById('wf-mic-modal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  lucide.createIcons();
+}
+
+function closeWfMicModal() {
+  pendingMicToggle = null;
+  document.getElementById('wf-mic-modal')?.classList.add('hidden');
+  if (clipMicToggle()) {
+    clipMicToggle().checked = (cfg.recording || {}).capture_microphone === true;
+  }
+}
+
+async function chooseWfMicStrategy(strategy) {
+  if (pendingMicToggle !== true) {
+    closeWfMicModal();
+    return;
+  }
+  document.getElementById('wf-mic-modal')?.classList.add('hidden');
+  pendingMicToggle = null;
+  await saveClipMicToggle(true, strategy);
+}
+
+async function onClipMicToggleChange() {
+  const toggle = clipMicToggle();
+  if (!toggle) return;
+  const targetChecked = toggle.checked;
+  if (micToggleNeedsWfChoice(targetChecked)) {
+    pendingMicToggle = true;
+    toggle.checked = false;
+    openWfMicModal();
+    return;
+  }
+  await saveClipMicToggle(targetChecked);
+}
+
+async function saveClipMicToggle(enabled, strategyOverride = null) {
+  const toggle = clipMicToggle();
+  if (!toggle) return;
+  const prev = (cfg.recording || {}).capture_microphone === true;
+  const body = { recording: { capture_microphone: enabled } };
+  if (strategyOverride !== null) body.recording.wf_microphone_strategy = strategyOverride;
+
+  toggle.disabled = true;
+  try {
+    const data = await persistConfig(body);
+    if (data.applied === false && data.warning) {
+      toast(data.warning, 'err');
+    } else {
+      toast(enabled ? 'Microphone audio enabled for new clips' : 'Microphone audio removed from new clips', 'ok');
+    }
+    document.getElementById('s-wf-mic').value = selectedWfMicStrategy();
+    toggle.checked = enabled;
+  } catch (_) {
+    toggle.checked = prev;
+    toast('Failed to update microphone setting', 'err');
+  } finally {
+    toggle.disabled = false;
+  }
+}
+
 async function saveSettings() {
   const body = {
     recording: {
@@ -1914,6 +2100,8 @@ async function saveSettings() {
       encoder:         document.getElementById('s-enc').value,
       backend:         document.getElementById('s-backend').value,
       capture_audio:   document.getElementById('s-audio').checked,
+      capture_microphone: clipMicToggle().checked,
+      wf_microphone_strategy: document.getElementById('s-wf-mic').value,
       gsr_args:        document.getElementById('s-gsr-args').value.trim(),
     },
     hotkeys: { clip: document.getElementById('s-key').value },
@@ -1929,15 +2117,7 @@ async function saveSettings() {
       Number(body.sharing.port) !== Number(currentSharing.port ?? 8765)
       || Boolean(body.sharing.cloudflare_tunnel) !== Boolean(currentSharing.cloudflare_tunnel !== false);
 
-    const resp = await fetch('/api/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await resp.json().catch(() => ({}));
-    if (!resp.ok || data.ok === false) {
-      throw new Error(data.error || 'save failed');
-    }
+    const data = await persistConfig(body);
     if (data.applied === false && data.warning) {
       toast(data.warning, 'err');
     }
@@ -1959,6 +2139,7 @@ let _sessionTimerInterval = null;
 let _sessionStartTs = 0;
 
 function setRecStatus(live, backend, sessionActive) {
+  runtimeBackend = backend || runtimeBackend;
   const dot = document.getElementById('rec-dot');
   const lbl = document.getElementById('rec-lbl');
   if (live) {
