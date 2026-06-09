@@ -44,6 +44,7 @@ from .config import (
     save as save_config,
 )
 from .hotkey import HotkeyListener, can_access_hotkeys, list_available_keys
+from .media import cleanup_temp_files
 from .recorder import create_recorder
 from .runtime import (
     actual_home_dir,
@@ -126,7 +127,11 @@ class ViceDaemon:
 
     async def run(self) -> None:
         Path("/tmp/vice").mkdir(parents=True, exist_ok=True)
-        resolve_path(self.cfg.output.directory).mkdir(parents=True, exist_ok=True)
+        out_dir = resolve_path(self.cfg.output.directory)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # Remove half-written temp files (trim/watermark/remux) from a
+        # previous run that was interrupted mid-edit.
+        cleanup_temp_files(out_dir)
 
         # Share server (web UI + REST API + WebSocket)
         if self.cfg.sharing.enabled:

@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from .config import Config
+from .media import get_duration as _get_duration
 from .runtime import recover_wayland_display, resolve_path
 
 log = logging.getLogger("vice.recorder")
@@ -191,6 +192,20 @@ def _gsr_codec_for_encoder(encoder: str) -> Optional[str]:
     if encoder in {"hevc_nvenc", "hevc_vaapi", "libx265"}:
         return "hevc"
     return None
+
+
+def _gsr_resolution_args(rc, extra: list[str]) -> list[str]:
+    """GSR `-s WxH` flag for the configured output resolution, if any."""
+    resolution = (getattr(rc, "resolution", None) or "").strip()
+    if not resolution or _gsr_has_any_flag(extra, "-s"):
+        return []
+    if not re.fullmatch(r"\d+x\d+", resolution):
+        log.warning(
+            "Ignoring recording.resolution=%r — expected WIDTHxHEIGHT (e.g. 1920x1080)",
+            resolution,
+        )
+        return []
+    return ["-s", resolution]
 
 
 def _gsr_sanitize_args(args: list[str], blocked_flags: set[str]) -> list[str]:
@@ -975,6 +990,7 @@ class Recorder(ABC):
             cmd += ["-w", _gsr_capture_target(rc)]
         if not _gsr_has_any_flag(extra, "-f"):
             cmd += ["-f", str(rc.fps)]
+        cmd += _gsr_resolution_args(rc, extra)
         if not _gsr_has_any_flag(extra, "-c"):
             cmd += ["-c", "mp4"]
         codec = _gsr_codec_for_encoder(rc.encoder)
@@ -1028,23 +1044,6 @@ def _next_session_path(out_dir: Path) -> Path:
     return out_dir / f"Vice_Session_{max_n + 1}.mp4"
 
 
-async def _get_duration(path: Path) -> float:
-    """Return the duration of a video file in seconds via ffprobe."""
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", str(path),
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
-        import json
-        for s in json.loads(stdout).get("streams", []):
-            if s.get("codec_type") == "video":
-                return float(s.get("duration", 0))
-    except Exception:
-        pass
-    return 0.0
-
-
 async def _trim_to_last_n_seconds(path: Path, seconds: int) -> Path:
     """Trim a clip to its last `seconds` seconds in-place. Returns the path."""
     total = await _get_duration(path)
@@ -1057,7 +1056,9 @@ async def _trim_to_last_n_seconds(path: Path, seconds: int) -> Path:
         return [
             "ffmpeg", "-hide_banner", "-loglevel", "error",
             "-ss", str(start), "-i", str(path),
-            "-t", str(seconds), "-c", "copy", "-movflags", "+faststart",
+            "-t", str(seconds), "-c", "copy",
+            "-avoid_negative_ts", "make_zero",
+            "-movflags", "+faststart",
             "-y", str(tmp),
         ]
 
@@ -1107,11 +1108,21 @@ async def _wait_for_finalized_clip(
     *,
     stable_polls: int = 3,
     poll_interval: float = 0.25,
-    timeout: float = 10.0,
+    inactivity_timeout: float = 15.0,
+    max_wait: float = 600.0,
 ) -> bool:
-    """Wait until a replay clip stops changing and ffprobe can read it."""
-    deadline = time.monotonic() + timeout
+    """Wait until a replay clip stops changing and ffprobe can read it.
+
+    The timeout is based on write inactivity, not total elapsed time:
+    flushing a long replay buffer can legitimately take minutes on slow
+    storage, and a fixed deadline used to abandon clips that were still
+    being written (and would have finished fine). We only give up when
+    the file has stopped growing for `inactivity_timeout` seconds and
+    still cannot be probed, or after `max_wait` as a hard safety cap.
+    """
+    deadline = time.monotonic() + max_wait
     last_sig: tuple[int, int] | None = None
+    last_change = time.monotonic()
     stable = 0
 
     while time.monotonic() < deadline:
@@ -1119,17 +1130,22 @@ async def _wait_for_finalized_clip(
             st = path.stat()
             sig = (st.st_size, st.st_mtime_ns)
         except OSError:
-            await asyncio.sleep(poll_interval)
-            continue
+            sig = None
 
-        if sig[0] > 0 and sig == last_sig:
+        if sig != last_sig:
+            stable = 0
+            last_sig = sig
+            last_change = time.monotonic()
+        elif sig is not None and sig[0] > 0:
             stable += 1
         else:
             stable = 0
-            last_sig = sig
 
         if stable >= stable_polls and await _get_duration(path) > 0:
             return True
+
+        if time.monotonic() - last_change > inactivity_timeout:
+            return False
 
         await asyncio.sleep(poll_interval)
 
@@ -1209,6 +1225,8 @@ class GSRRecorder(Recorder):
 
         if not _gsr_has_any_flag(extra, "-f"):
             cmd += ["-f", str(rc.fps)]
+
+        cmd += _gsr_resolution_args(rc, extra)
 
         if not _gsr_has_any_flag(extra, "-r"):
             cmd += ["-r", str(rc.buffer_duration)]
@@ -1298,7 +1316,8 @@ class GSRRecorder(Recorder):
             log.error("GSR process not found")
             return None
 
-        # Wait for the new file to appear and finish writing.
+        # Wait for the new file to appear (GSR creates it almost immediately
+        # after SIGUSR1), then wait for GSR to finish writing it.
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             await asyncio.sleep(0.25)
@@ -1310,9 +1329,12 @@ class GSRRecorder(Recorder):
                     key=lambda p: p.stat().st_mtime,
                 )
                 self._seen_files = current
-                remaining = max(0.5, deadline - time.monotonic())
-                if not await _wait_for_finalized_clip(newest, timeout=remaining):
-                    log.error("Timed out waiting for GSR clip to finish writing: %s", newest)
+                if not await _wait_for_finalized_clip(newest):
+                    log.error(
+                        "GSR clip %s stopped being written but is unreadable — "
+                        "leaving the file in place for inspection",
+                        newest,
+                    )
                     return None
                 # Rename GSR's auto-generated filename to sequential Vice_Clip_N name.
                 seq_path = _next_clip_path(self._out_dir)

@@ -584,7 +584,8 @@ class RecorderStabilizationTests(unittest.IsolatedAsyncioTestCase):
                     clip,
                     stable_polls=3,
                     poll_interval=0.03,
-                    timeout=1.0,
+                    inactivity_timeout=1.0,
+                    max_wait=5.0,
                 )
             elapsed = time.monotonic() - start
             await writer
@@ -592,6 +593,93 @@ class RecorderStabilizationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ready)
         self.assertGreaterEqual(elapsed, 0.18)
         self.assertEqual(observed[-1], b"abc")
+
+    async def test_wait_for_finalized_clip_gives_up_after_write_inactivity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            clip = Path(tmp) / "raw.mp4"
+            clip.write_bytes(b"not a video")
+
+            async def _zero_duration(_: Path) -> float:
+                return 0.0
+
+            start = time.monotonic()
+            with mock.patch("vice.recorder._get_duration", new=_zero_duration):
+                ready = await _wait_for_finalized_clip(
+                    clip,
+                    stable_polls=2,
+                    poll_interval=0.02,
+                    inactivity_timeout=0.15,
+                    max_wait=5.0,
+                )
+            elapsed = time.monotonic() - start
+
+        self.assertFalse(ready)
+        self.assertLess(elapsed, 2.0)
+
+    async def test_wait_for_finalized_clip_tolerates_slow_writes(self) -> None:
+        """A file that keeps growing must not be abandoned, even when the
+        total write time exceeds the inactivity timeout."""
+        with tempfile.TemporaryDirectory() as tmp:
+            clip = Path(tmp) / "raw.mp4"
+
+            async def _writer() -> None:
+                # Total write time (0.8 s) far exceeds the inactivity
+                # timeout (0.3 s); only the gaps between writes count.
+                data = b""
+                for _ in range(16):
+                    data += b"x" * 10
+                    clip.write_bytes(data)
+                    await asyncio.sleep(0.05)
+
+            durations = iter([0.0] * 2)
+
+            async def _fake_duration(_: Path) -> float:
+                return next(durations, 30.0)
+
+            writer = asyncio.create_task(_writer())
+            with mock.patch("vice.recorder._get_duration", new=_fake_duration):
+                ready = await _wait_for_finalized_clip(
+                    clip,
+                    stable_polls=2,
+                    poll_interval=0.03,
+                    inactivity_timeout=0.3,
+                    max_wait=5.0,
+                )
+            await writer
+
+        self.assertTrue(ready)
+
+    async def test_trim_copy_command_avoids_negative_timestamps(self) -> None:
+        captured: dict = {}
+
+        async def _fake_duration(_: Path) -> float:
+            return 100.0
+
+        class _Proc:
+            returncode = 0
+
+            async def communicate(self):
+                return b"", b""
+
+        async def _fake_exec(*cmd, **_kwargs):
+            captured["cmd"] = list(cmd)
+            return _Proc()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            clip = Path(tmp) / "clip.mp4"
+            clip.write_bytes(b"clip")
+            with mock.patch("vice.recorder._get_duration", new=_fake_duration):
+                with mock.patch(
+                    "vice.recorder.asyncio.create_subprocess_exec", new=_fake_exec
+                ):
+                    from vice.recorder import _trim_to_last_n_seconds
+
+                    await _trim_to_last_n_seconds(clip, 30)
+
+        cmd = captured["cmd"]
+        self.assertIn("-avoid_negative_ts", cmd)
+        self.assertEqual(cmd[cmd.index("-avoid_negative_ts") + 1], "make_zero")
+        self.assertIn("copy", cmd)
 
     async def test_gsr_save_clip_waits_for_finalized_file_before_trim(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -728,6 +816,53 @@ class RecorderAudioCommandTests(unittest.TestCase):
         cmd = recorder._build_cmd()
 
         self.assertEqual(cmd[cmd.index("-a") + 1], "device:game.monitor|default_input")
+
+    def test_gsr_build_cmd_passes_configured_resolution(self) -> None:
+        recorder = GSRRecorder(
+            Config(
+                output=OutputConfig(directory="/tmp/vice-test"),
+                recording=RecordingConfig(resolution="1280x720"),
+            )
+        )
+
+        cmd = recorder._build_cmd()
+
+        self.assertEqual(cmd[cmd.index("-s") + 1], "1280x720")
+
+    def test_gsr_build_cmd_ignores_invalid_resolution(self) -> None:
+        recorder = GSRRecorder(
+            Config(
+                output=OutputConfig(directory="/tmp/vice-test"),
+                recording=RecordingConfig(resolution="720p"),
+            )
+        )
+
+        cmd = recorder._build_cmd()
+
+        self.assertNotIn("-s", cmd)
+
+    def test_gsr_build_cmd_keeps_user_resolution_override(self) -> None:
+        recorder = GSRRecorder(
+            Config(
+                output=OutputConfig(directory="/tmp/vice-test"),
+                recording=RecordingConfig(
+                    resolution="1280x720",
+                    gsr_args="-s 640x360",
+                ),
+            )
+        )
+
+        cmd = recorder._build_cmd()
+
+        self.assertEqual(cmd.count("-s"), 1)
+        self.assertEqual(cmd[cmd.index("-s") + 1], "640x360")
+
+    def test_gsr_session_cmd_passes_configured_resolution(self) -> None:
+        rc = RecordingConfig(resolution="1920x1080")
+
+        cmd = GSRRecorder._gsr_session_cmd(Path("/tmp/vice-test/out.mp4"), rc)
+
+        self.assertEqual(cmd[cmd.index("-s") + 1], "1920x1080")
 
     def test_gsr_build_cmd_maps_hevc_encoder_to_gsr_codec(self) -> None:
         recorder = GSRRecorder(

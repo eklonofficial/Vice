@@ -16,7 +16,6 @@ import asyncio
 import copy
 import json
 import logging
-import math
 import shutil
 import socket
 import subprocess
@@ -30,6 +29,7 @@ from importlib.resources import files as _pkg_files
 from aiohttp import WSMsgType, web
 
 from . import __version__
+from .media import probe_media
 from .recorder import list_display_options, list_gsr_audio_sources
 from .runtime import actual_home_dir, resolve_path
 
@@ -140,35 +140,19 @@ def _local_ip() -> str:
         return "127.0.0.1"
 
 
-async def _probe_once(path: Path) -> dict:
-    """Run a single ffprobe pass. Returns sensible defaults on failure."""
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "ffprobe", "-v", "quiet", "-print_format", "json",
-            "-show_streams", str(path),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
-        data = json.loads(stdout)
-        for s in data.get("streams", []):
-            if s.get("codec_type") == "video":
-                return {
-                    "width":    s.get("width",    1920),
-                    "height":   s.get("height",   1080),
-                    "duration": float(s.get("duration", 0)),
-                }
-    except Exception:
-        pass
-    return {"width": 1920, "height": 1080, "duration": 0}
+_PROBE_DEFAULTS = {"width": 1920, "height": 1080, "duration": 0}
 
 
 async def _remux_moov(path: Path) -> bool:
-    """Rewrite `path` via `ffmpeg -c copy -movflags +faststart` in place.
+    """Try to recover `path` via `ffmpeg -c copy -movflags +faststart`.
 
-    Used to recover clips whose MP4 container is missing/corrupt (no moov
-    atom) — happens when the encoder was killed mid-finalize. Returns True
-    when the remuxed file successfully replaced the original.
+    Used for clips whose MP4 container is damaged (no moov atom) — happens
+    when the encoder was killed mid-finalize. The original file is only
+    replaced when the remuxed copy probes as a sane video of comparable
+    size; a remux that produces a near-empty file means the input was
+    *not* a simple moov-atom problem, and replacing would destroy data
+    (this used to truncate healthy clips to 0.02 s). Returns True when
+    the remuxed file replaced the original.
     """
     tmp = path.with_suffix(path.suffix + ".fix.mp4")
     try:
@@ -180,11 +164,26 @@ async def _remux_moov(path: Path) -> bool:
             stderr=asyncio.subprocess.DEVNULL,
         )
         await asyncio.wait_for(proc.wait(), timeout=60)
-        if proc.returncode == 0 and tmp.exists() and tmp.stat().st_size > 0:
-            tmp.replace(path)
-            return True
-    except Exception:
-        pass
+        if proc.returncode == 0 and tmp.exists():
+            remuxed = await probe_media(tmp)
+            orig_size = path.stat().st_size
+            if (
+                remuxed
+                and remuxed["duration"] > 0
+                and tmp.stat().st_size >= orig_size * 0.5
+            ):
+                tmp.replace(path)
+                return True
+            log.warning(
+                "Remux of %s produced an invalid or truncated file "
+                "(duration=%.2fs, %d → %d bytes) — keeping the original",
+                path.name,
+                remuxed["duration"] if remuxed else 0.0,
+                orig_size,
+                tmp.stat().st_size,
+            )
+    except Exception as exc:
+        log.warning("Remux of %s failed: %s", path.name, exc)
     try:
         tmp.unlink(missing_ok=True)
     except Exception:
@@ -195,19 +194,21 @@ async def _remux_moov(path: Path) -> bool:
 async def _ffprobe(path: Path) -> dict:
     """Return {"width", "height", "duration"} via ffprobe.
 
-    If the first probe yields a zero / non-finite duration the container
-    is probably missing its moov atom — try one remux + re-probe before
-    giving up.
+    If the file cannot be probed at all, its container is probably missing
+    the moov atom — try one (validated, non-destructive) remux + re-probe
+    before giving up.
     """
-    meta = await _probe_once(path)
-    dur = meta.get("duration", 0)
-    if isinstance(dur, (int, float)) and math.isfinite(dur) and dur > 0:
+    meta = await probe_media(path)
+    if meta and meta["duration"] > 0:
         return meta
-    log.warning("ffprobe reports duration=%s for %s — attempting moov remux", dur, path.name)
+    log.warning("ffprobe cannot read %s — attempting moov remux", path.name)
     if await _remux_moov(path):
-        meta = await _probe_once(path)
-        log.info("Remuxed %s — duration now %.2fs", path.name, meta.get("duration", 0))
-    return meta
+        meta = await probe_media(path)
+        log.info(
+            "Remuxed %s — duration now %.2fs",
+            path.name, meta["duration"] if meta else 0.0,
+        )
+    return meta or dict(_PROBE_DEFAULTS)
 
 
 async def _make_thumb(path: Path, duration: float = 0.0) -> Path:
