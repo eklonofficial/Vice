@@ -511,10 +511,17 @@
               </div>
 
               <div class="settings-row">
-                <div class="s-label"><strong>Display</strong><span id="s-display-note">Choose which display to record (Auto = current display)</span></div>
-                <select id="s-display">
-                  <option value="">Auto (current display)</option>
-                </select>
+                <div class="s-label"><strong>Capture source</strong><span id="s-display-note">Choose what to record — a full display or a specific application window</span></div>
+                <div class="capture-source-row">
+                  <select id="s-display">
+                    <option value="">Auto (current display)</option>
+                    <optgroup label="Displays" id="s-display-monitors"></optgroup>
+                    <optgroup label="Application Windows" id="s-display-windows"></optgroup>
+                  </select>
+                  <button type="button" id="s-display-refresh" class="btn-icon" title="Refresh window list" aria-label="Refresh window list" onclick="refreshCaptureSources()">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                  </button>
+                </div>
               </div>
             </div>
 

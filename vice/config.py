@@ -88,6 +88,10 @@ class RecordingConfig:
     fps: int = 60
     # None = backend default capture target. Otherwise a backend-specific display/output id.
     display: Optional[str] = None
+    # Unified capture source selector. Takes priority over `display` when set.
+    # Format: "display:<id>" for a monitor, "window:<id>" for a specific window,
+    # "window:focused" for the currently focused window, or None for auto.
+    capture_source: Optional[str] = None
     # None = auto-detect from display. E.g. "1920x1080".
     resolution: Optional[str] = None
     # "auto" | "h264_nvenc" | "hevc_nvenc" | "av1_nvenc" | "h264_vaapi" | "hevc_vaapi" | "av1_vaapi" | "libx264" | "libx265" | "copy"

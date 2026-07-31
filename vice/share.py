@@ -42,7 +42,7 @@ from .editor import (EditorProjectStore, ExportBusy, ExportManager, Source,
                      validate_project)
 from .media import probe_media
 from .playlists import PlaylistStore, build_tag_index
-from .recorder import KEEP_ALL_STREAMS, list_display_options, list_gsr_audio_sources
+from .recorder import KEEP_ALL_STREAMS, list_display_options, list_gsr_audio_sources, list_capture_sources
 from .runtime import actual_home_dir, resolve_path
 
 log = logging.getLogger("vice.share")
@@ -554,6 +554,7 @@ class ShareServer:
         r.add_delete("/api/playlists/{pid}/clips/{slug}",  self._api_playlist_remove_clip)
         r.add_get("/api/config",               self._api_get_config)
         r.add_get("/api/displays",             self._api_get_displays)
+        r.add_get("/api/capture-sources",      self._api_get_capture_sources)
         r.add_get("/api/audio-sources",        self._api_get_audio_sources)
         r.add_post("/api/config",              self._api_set_config)
         r.add_get("/api/status",               self._api_status)
@@ -1427,6 +1428,13 @@ class ShareServer:
         # Enumeration shells out (with timeouts); keep it off the event loop.
         payload = await asyncio.to_thread(list_display_options, backend)
         payload["selected"] = self.cfg.recording.display
+        return web.json_response(payload)
+
+    async def _api_get_capture_sources(self, req: web.Request) -> web.Response:
+        """Return both monitors and application windows as capture sources."""
+        backend = (req.query.get("backend") or self.cfg.recording.backend or "auto").strip() or "auto"
+        payload = await asyncio.to_thread(list_capture_sources, backend)
+        payload["selected"] = self.cfg.recording.capture_source or self.cfg.recording.display
         return web.json_response(payload)
 
     async def _api_get_audio_sources(self, _: web.Request) -> web.Response:

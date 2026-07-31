@@ -14,7 +14,7 @@ async function fetchConfig() {
     cfg = await r.json();
     syncFormFromCfg();
     populateHomeFromCfg();
-    await refreshDisplayOptions(cfg.recording?.backend ?? 'auto', cfg.recording?.display ?? null);
+    await refreshCaptureSources(cfg.recording?.backend ?? 'auto', cfg.recording?.capture_source ?? cfg.recording?.display ?? null);
     await refreshAudioSources(cfg.recording?.gsr_audio_source ?? 'default_output');
   } catch (_) {}
 }
@@ -270,14 +270,12 @@ function setAudioSourceNote(message, warning = false) {
   el.textContent = message || 'Choose what gpu-screen-recorder captures';
   el.style.color = warning ? '#fcd34d' : 'var(--text-dim)';
 }
-function renderDisplayOptions(info, selectedDisplay = null) {
+function renderCaptureSources(info, selectedSource = null) {
   const el = document.getElementById('s-display');
   if (!el) return;
-  const raw = Array.isArray(info.displays) ? info.displays : [];
-  // Defense-in-depth: drop any entry whose id or label looks like a GSR
-  // error/diagnostic string. The backend already filters these, but if a new
-  // GSR error format slips through we'd rather show "no displays" than render
-  // a broken option that crashes recording.
+  const monGroup = document.getElementById('s-display-monitors');
+  const winGroup = document.getElementById('s-display-windows');
+  const raw = Array.isArray(info.sources) ? info.sources : [];
   const looksLikeError = (s) => {
     const v = String(s || '').toLowerCase();
     return v.startsWith('gsr error')
@@ -285,32 +283,86 @@ function renderDisplayOptions(info, selectedDisplay = null) {
         || v.includes('for_each_active_monitor')
         || v.includes('failed to open');
   };
-  const displays = raw.filter(d => !(looksLikeError(d.id) || looksLikeError(d.label)));
-  const desired = selectedDisplay ?? '';
-  el.innerHTML = '';
-  el.add(new Option('Auto (backend default)', ''));
-  for (const item of displays) el.add(new Option(item.label || item.id, item.id));
-  if (desired && displays.some(item => item.id === desired)) {
-    el.value = desired; setDisplayNote(defaultDisplayNote()); return;
+  const sources = raw.filter(d => !(looksLikeError(d.id) || looksLikeError(d.label)));
+  const monitors = sources.filter(s => s.kind === 'monitor');
+  const windows = sources.filter(s => s.kind === 'window');
+  const desired = selectedSource ?? '';
+
+  // Clear optgroup contents
+  if (monGroup) monGroup.innerHTML = '';
+  if (winGroup) winGroup.innerHTML = '';
+
+  // Populate monitors
+  if (monGroup) {
+    if (!monitors.length) {
+      monGroup.innerHTML = '<option disabled>No displays detected</option>';
+    } else {
+      for (const item of monitors) {
+        monGroup.appendChild(new Option(item.label || item.id, 'display:' + item.id));
+      }
+    }
+  }
+
+  // Populate windows
+  if (winGroup) {
+    if (!windows.length) {
+      const backend = info.backend || 'auto';
+      if (backend === 'wf-recorder') {
+        winGroup.innerHTML = '<option disabled>Window capture requires gpu-screen-recorder</option>';
+      } else {
+        winGroup.innerHTML = '<option disabled>No application windows detected</option>';
+      }
+    } else {
+      for (const item of windows) {
+        winGroup.appendChild(new Option(item.label || item.id, 'window:' + item.id));
+      }
+    }
+  }
+
+  // Add "Focused window" special option after Auto
+  el.querySelectorAll('option.special-opt').forEach(o => o.remove());
+  const focusedOpt = new Option('Focused window (auto-follow)', 'window:focused');
+  focusedOpt.className = 'special-opt';
+  const autoOpt = el.options[0];
+  if (autoOpt && autoOpt.nextSibling) {
+    el.insertBefore(focusedOpt, autoOpt.nextSibling);
+  } else {
+    el.appendChild(focusedOpt);
+  }
+
+  // Select the desired value
+  if (desired) {
+    let found = false;
+    for (const opt of el.options) {
+      if (opt.value === desired) { el.value = desired; found = true; break; }
+    }
+    if (found) { setDisplayNote(defaultDisplayNote()); return; }
+    const custom = new Option(desired + ' (unavailable)', desired);
+    custom.className = 'special-opt';
+    el.appendChild(custom);
+    el.value = desired;
+    setDisplayNote(`Saved source "${desired}" is unavailable right now. Auto will be used.`, true);
+    return;
   }
   el.value = '';
-  if (desired) { setDisplayNote(`Saved display "${desired}" is unavailable right now. Auto will be used.`, true); return; }
   if (info.warning) { setDisplayNote(`${info.warning} Auto will still work.`, true); return; }
-  if (!displays.length) { setDisplayNote('No individual displays were detected. Auto will still work.', true); return; }
   setDisplayNote(defaultDisplayNote());
 }
-async function refreshDisplayOptions(backend = selectedBackend(), selectedDisplay = null) {
+async function refreshCaptureSources(backend = selectedBackend(), selectedSource = null) {
+  const btn = document.getElementById('s-display-refresh');
+  if (btn) btn.disabled = true;
   try {
-    const resp = await fetch(`/api/displays?backend=${encodeURIComponent(backend || 'auto')}`);
+    const resp = await fetch(`/api/capture-sources?backend=${encodeURIComponent(backend || 'auto')}`);
     displayInfo = await resp.json();
   } catch (_) {
-    displayInfo = { backend: backend || 'auto', displays: [], warning: 'Could not load display options.' };
+    displayInfo = { backend: backend || 'auto', sources: [], warning: 'Could not load capture sources.' };
   }
-  renderDisplayOptions(displayInfo, selectedDisplay);
+  renderCaptureSources(displayInfo, selectedSource);
+  if (btn) btn.disabled = false;
 }
 async function onBackendChange() {
-  const preferred = document.getElementById('s-display')?.value || cfg.recording?.display || null;
-  await refreshDisplayOptions(selectedBackend(), preferred);
+  const preferred = document.getElementById('s-display')?.value || cfg.recording?.capture_source || cfg.recording?.display || null;
+  await refreshCaptureSources(selectedBackend(), preferred);
 }
 
 // Friendly name for a source id, falling back to the raw id when the source
@@ -569,7 +621,8 @@ async function saveSettings() {
       buffer_duration: bufferDuration,
       clip_duration:   +document.getElementById('s-dur').value,
       fps:             +document.getElementById('s-fps').value,
-      display:         document.getElementById('s-display').value || null,
+      display:         null,
+      capture_source:  document.getElementById('s-display').value || null,
       resolution:      resolution,
       container:       document.getElementById('s-container').value,
       encoder:         document.getElementById('s-enc').value,

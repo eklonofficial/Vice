@@ -4,7 +4,7 @@
 // ───── State (defaults; overwritten by /api/config on init)
 let cfg = {
   recording: { buffer_duration: 120, clip_duration: 20, fps: 60, encoder: 'auto',
-               backend: 'auto', display: null, resolution: null, capture_audio: true,
+               backend: 'auto', display: null, capture_source: null, resolution: null, capture_audio: true,
                capture_microphone: false, wf_microphone_strategy: 'prompt',
                gsr_args: '', gsr_audio_source: 'default_output' },
   hotkeys:  { clip: 'KEY_F9', clip_presets: [] },

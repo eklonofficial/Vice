@@ -352,6 +352,21 @@ def _detect_x11_resolution() -> Optional[str]:
     return None
 
 
+def _detect_window_resolution(rc) -> Optional[str]:
+    """If a window capture source is selected, return its resolution as WxH."""
+    source = getattr(rc, "capture_source", None)
+    if not source or not source.startswith("window:"):
+        return None
+    window_id = source[len("window:"):]
+    if window_id == "focused":
+        return None  # focused window changes; can't pre-detect
+    # Try xwininfo (X11 window IDs)
+    geom = _x11_window_geometry(window_id)
+    if geom:
+        return f"{geom[2]}x{geom[3]}"
+    return None
+
+
 def _unquote_gsr_ident(value: str) -> str:
     value = value.strip()
     if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
@@ -595,6 +610,140 @@ def list_gsr_audio_sources() -> dict:
     return {"sources": deduped, "warning": warning}
 
 
+def list_gsr_windows() -> list[dict]:
+    """Parse gpu-screen-recorder --list-capture-options for window entries.
+
+    Returns [{"id": str, "label": str, "kind": "window"}] for each
+    capture-eligible application window GSR can see.
+    """
+    if not _has("gpu-screen-recorder"):
+        return []
+    for cmd in (
+        ["gpu-screen-recorder", "--list-capture-options"],
+        ["gpu-screen-recorder", "--list-windows"],
+    ):
+        code, out = _run_command_capture(cmd, timeout=3.0)
+        if code != 0 or not out:
+            continue
+        lowered = out.lower()
+        if "unrecognized option" in lowered or "unknown option" in lowered:
+            continue
+        windows: list[dict] = []
+        seen: set[str] = set()
+        # GSR lists windows as lines that look like identifiers with titles.
+        # Known generic targets that are NOT specific windows:
+        generic_targets = {
+            "window", "focused", "screen", "screen-direct-force",
+            "portal", "monitor",
+        }
+        for line in out.splitlines():
+            value = line.strip().lstrip("-*• ").strip()
+            if not value:
+                continue
+            low = value.lower()
+            if (
+                low.startswith("gsr error") or low.startswith("error:")
+                or "for_each_active_monitor" in low or "failed to" in low
+            ):
+                continue
+            if low in generic_targets or low.startswith("monitor"):
+                continue
+            # Parse "identifier|Description" or bare identifier
+            ident = value
+            label = value
+            if "|" in value:
+                head, tail = value.split("|", 1)
+                ident = _unquote_gsr_ident(head)
+                tail = tail.strip()
+                label = f"{ident} — {tail}" if tail else ident
+            elif match := re.match(r'^"([^"]+)"\s*(.*)$', value):
+                ident = match.group(1).strip()
+                detail = match.group(2).strip()
+                label = f"{ident} — {detail}".strip() if detail else ident
+            if not ident or ident.lower() in generic_targets or ident in seen:
+                continue
+            seen.add(ident)
+            windows.append({"id": ident, "label": label, "kind": "window"})
+        if windows:
+            return windows
+    return []
+
+
+def list_capture_sources(preferred: str = "auto") -> dict:
+    """Return monitors AND application windows as a unified source list.
+
+    Response: {
+        "backend": str,
+        "sources": [{"id": str, "label": str, "kind": "monitor"|"window"}],
+        "warning": str|None
+    }
+    """
+    backend = resolve_display_backend(preferred)
+    warning = None
+
+    # ── Monitors (existing logic) ──
+    monitor_result = list_display_options(preferred)
+    monitors = [
+        {**m, "kind": "monitor"}
+        for m in (monitor_result.get("displays") or [])
+    ]
+    if monitor_result.get("warning"):
+        warning = monitor_result["warning"]
+
+    # ── Application windows ──
+    windows: list[dict] = []
+    if backend == "gsr":
+        windows = list_gsr_windows()
+    else:
+        # For wf-recorder and ffmpeg, enumerate windows via compositor IPC.
+        # This runs in a thread because it shells out.
+        try:
+            from .active_window import list_capture_windows
+            raw_windows = list_capture_windows()
+            windows = [
+                {
+                    "id": w["id"],
+                    "label": f"{w.get('app', '')} — {w.get('title', '')}".strip(" —"),
+                    "kind": "window",
+                }
+                for w in raw_windows
+            ]
+        except Exception as exc:
+            log.debug("Window enumeration failed: %s", exc)
+
+    sources = monitors + windows
+    return {"backend": backend, "sources": sources, "warning": warning}
+
+
+def _resolve_capture_source(rc, backend: str) -> Optional[dict]:
+    """Resolve the unified capture_source config value.
+
+    capture_source format: "display:<id>" | "window:<id>" | "window:focused" | None
+    Falls back to the legacy `display` field when capture_source is not set.
+    """
+    source = getattr(rc, "capture_source", None)
+    if not source:
+        # Legacy fallback: display field = monitor only
+        return _resolve_display_option(rc, backend)
+
+    if source == "window:focused":
+        return {"id": "focused", "label": "Focused window", "kind": "window"}
+
+    if source.startswith("window:"):
+        window_id = source[len("window:"):]
+        return {"id": window_id, "label": window_id, "kind": "window"}
+
+    if source.startswith("display:"):
+        display_id = source[len("display:"):]
+        # Look up in the display options for a label
+        for opt in _display_options(backend):
+            if str(opt.get("id", "")) == display_id:
+                return {**opt, "kind": "monitor"}
+        return {"id": display_id, "label": display_id, "kind": "monitor"}
+
+    return None
+
+
 def _resolve_display_option(rc, backend: str) -> Optional[dict]:
     selected = _selected_display_id(rc)
     if not selected:
@@ -614,13 +763,32 @@ def _default_gsr_capture_target() -> str:
 
 
 def _gsr_capture_target(rc) -> str:
-    selected = _resolve_display_option(rc, "gsr")
-    return str(selected["id"]) if selected else _default_gsr_capture_target()
+    """Determine the -w value for gpu-screen-recorder.
+
+    Checks the unified capture_source first, then falls back to the legacy
+    display field, then defaults to "screen".
+    """
+    resolved = _resolve_capture_source(rc, "gsr")
+    if resolved:
+        return str(resolved["id"])
+    return _default_gsr_capture_target()
 
 
 def _wf_capture_target(rc) -> Optional[str]:
-    selected = _resolve_display_option(rc, "wf-recorder")
-    return str(selected["id"]) if selected else None
+    """Determine the output (display) for wf-recorder.
+
+    Note: wf-recorder does not support per-window capture natively.
+    When a window source is selected, this returns None (auto) and the caller
+    should warn the user or fall back to GSR.
+    """
+    resolved = _resolve_capture_source(rc, "wf-recorder")
+    if resolved and resolved.get("kind") == "window":
+        # wf-recorder cannot capture individual windows — return None to signal
+        # the caller that this needs special handling.
+        return None
+    if resolved:
+        return str(resolved["id"])
+    return None
 
 
 def _resolution_scale_filter(resolution: Optional[str]) -> Optional[str]:
@@ -654,8 +822,69 @@ def _merge_ffmpeg_filters(flags: list[str], extra_filter: Optional[str]) -> list
     return out
 
 
+def _x11_window_geometry(window_id: str) -> Optional[tuple[int, int, int, int]]:
+    """Get (x, y, width, height) for an X11 window via xwininfo."""
+    try:
+        out = subprocess.check_output(
+            ["xwininfo", "-id", window_id],
+            text=True, stderr=subprocess.DEVNULL, timeout=2.0,
+        )
+    except Exception:
+        return None
+    x = y = w = h = 0
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith("Absolute upper-left X:"):
+            try: x = int(line.split(":")[-1].strip())
+            except ValueError: pass
+        elif line.startswith("Absolute upper-left Y:"):
+            try: y = int(line.split(":")[-1].strip())
+            except ValueError: pass
+        elif line.startswith("Width:"):
+            try: w = int(line.split(":")[-1].strip())
+            except ValueError: pass
+        elif line.startswith("Height:"):
+            try: h = int(line.split(":")[-1].strip())
+            except ValueError: pass
+    if w > 0 and h > 0:
+        return (x, y, w, h)
+    return None
+
+
 def _ffmpeg_x11_input_args(rc) -> tuple[list[str], Optional[str]]:
     display = os.environ.get("DISPLAY", ":0")
+
+    # Check unified capture_source first
+    resolved = _resolve_capture_source(rc, "ffmpeg")
+    if resolved and resolved.get("kind") == "window":
+        # Capture a specific window by its geometry
+        window_id = resolved["id"]
+        geom = _x11_window_geometry(window_id)
+        if geom:
+            x, y, w, h = geom
+            video_size = f"{w}x{h}"
+            input_display = f"{display}+{x},{y}"
+            return (
+                ["-f", "x11grab", "-framerate", str(rc.fps),
+                 "-video_size", video_size, "-i", input_display],
+                _resolution_scale_filter(rc.resolution),
+            )
+        log.warning("Could not get geometry for window %s; falling back to full display", window_id)
+
+    if resolved and resolved.get("kind") == "monitor":
+        # Use the resolved monitor directly
+        display_id = resolved["id"]
+        for opt in _display_options("ffmpeg"):
+            if str(opt.get("id", "")) == display_id and "width" in opt:
+                video_size = f"{opt['width']}x{opt['height']}"
+                input_display = f"{display}+{opt['x']},{opt['y']}"
+                return (
+                    ["-f", "x11grab", "-framerate", str(rc.fps),
+                     "-video_size", video_size, "-i", input_display],
+                    _resolution_scale_filter(rc.resolution),
+                )
+
+    # Legacy display field fallback
     selected = _resolve_display_option(rc, "ffmpeg")
     if selected:
         video_size = f"{selected['width']}x{selected['height']}"
@@ -1903,6 +2132,15 @@ class SegmentRecorder(Recorder):
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     async def start(self) -> None:
+        # Warn if window capture is requested on a backend that doesn't support it
+        source = getattr(self.cfg.recording, "capture_source", None)
+        if source and source.startswith("window:") and self._use_wf:
+            log.warning(
+                "Window capture source %r is not supported by wf-recorder. "
+                "Recording full display instead. Install gpu-screen-recorder "
+                "for per-window capture on Wayland.",
+                source,
+            )
         log.info(
             "Starting segment recorder (backend=%s, encoder=%s)",
             "wf-recorder" if self._use_wf else "ffmpeg-x11grab",

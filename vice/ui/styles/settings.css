@@ -29,6 +29,13 @@
    card: the label keeps a readable width and wide controls get capped. */
 .settings-row > .s-label { flex: 1 1 45%; min-width: 170px; }
 .settings-row select { max-width: min(340px, 100%); }
+.capture-source-row { display: flex; align-items: center; gap: 8px; }
+.capture-source-row select { flex: 1; }
+.capture-source-row .btn-icon { flex-shrink: 0; width: 32px; height: 32px; border-radius: 8px;
+  background: rgba(255,255,255,.06); border: none; color: rgba(242,245,250,.5); cursor: pointer;
+  display: flex; align-items: center; justify-content: center; transition: background .15s, color .15s; }
+.capture-source-row .btn-icon:hover { background: rgba(255,255,255,.12); color: var(--text); }
+.capture-source-row .btn-icon:disabled { opacity: .4; cursor: default; }
 .s-label strong { display: block; font-size: 13.5px; font-weight: 500; letter-spacing: -0.01em; }
 .s-label span { display: block; font-size: 12px; color: rgba(242,245,250,.5); margin-top: 2px; line-height: 1.5; }
 
