@@ -177,23 +177,25 @@ class ViceDaemon:
         self._display_override: Optional[str] = None
         self._follow_mouse_task: Optional[asyncio.Task] = None
 
-    async def run(self) -> None:
-        Path("/tmp/vice").mkdir(parents=True, exist_ok=True)
-        out_dir = resolve_path(self.cfg.output.directory)
+    @staticmethod
+    def _output_dir_problem(out_dir: Path) -> str:
+        """Why clips cannot be written to out_dir, or "" if they can."""
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
             probe = out_dir / ".vice-write-test"
             probe.touch()
             probe.unlink()
         except OSError as exc:
-            raise RuntimeError(
+            return (
                 f"Clip output directory {out_dir} is not writable: {exc}. "
                 "Fix permissions or change output.directory in "
                 f"{CONFIG_PATH}."
-            ) from exc
-        # Remove half-written temp files (trim/watermark/remux) from a
-        # previous run that was interrupted mid-edit.
-        cleanup_temp_files(out_dir)
+            )
+        return ""
+
+    async def run(self) -> None:
+        Path("/tmp/vice").mkdir(parents=True, exist_ok=True)
+        out_dir = resolve_path(self.cfg.output.directory)
 
         # Share server (web UI + REST API + WebSocket)
         if self.cfg.sharing.enabled:
@@ -262,27 +264,50 @@ class ViceDaemon:
             await _abort_startup()
             raise
 
+        # An output directory that has gone away (an unmounted drive, most
+        # often) reads as a recorder problem to the user, so it goes through
+        # the same banner rather than killing the daemon before it can say
+        # anything. It used to be checked before the UI existed, so the
+        # daemon died with the reason only ever reaching stderr (#142).
+        dir_problem = self._output_dir_problem(out_dir)
+        if dir_problem:
+            self._ready = False
+            self._recorder_error = dir_problem
+            log.error("%s", dir_problem)
+            if not self.share:
+                await _abort_startup()
+                raise RuntimeError(dir_problem)
+        else:
+            # Remove half-written temp files (trim/watermark/remux) from a
+            # previous run that was interrupted mid-edit.
+            cleanup_temp_files(out_dir)
+
         # A recorder that will not start is not a reason to take the UI down
         # with it. It used to be: the share server was stopped on the way out,
         # so the app reported "the UI server did not respond" and the user had
         # no way to reach Settings and pick an encoder that works, which is the
         # one thing that would have fixed it (#156).
-        try:
-            await self.recorder.start()
-            self._ready = True
-            self._recorder_error = ""
-        except Exception as exc:
-            self._ready = False
-            self._recorder_error = str(exc)
-            log.error(
-                "Recorder failed to start (backend=%s): %s",
-                self.recorder.name, exc,
-            )
-            log.exception("Recorder startup traceback")
-            if not self.share:
-                # No UI to explain it through, so this is still fatal.
-                await _abort_startup()
-                raise
+        # Starting it on top of an unusable output directory only replaces a
+        # clear message with a confusing one, so that case skips straight to
+        # the watchdog, which retries once the directory comes back.
+        if not dir_problem:
+            try:
+                await self.recorder.start()
+                self._ready = True
+                self._recorder_error = ""
+            except Exception as exc:
+                self._ready = False
+                self._recorder_error = str(exc)
+                log.error(
+                    "Recorder failed to start (backend=%s): %s",
+                    self.recorder.name, exc,
+                )
+                log.exception("Recorder startup traceback")
+                if not self.share:
+                    # No UI to explain it through, so this is still fatal.
+                    await _abort_startup()
+                    raise
+        if not self._ready and self.share:
             log.error(
                 "Vice is running without a recorder. Open the Vice window to "
                 "see why and to change recording settings."
@@ -308,6 +333,8 @@ class ViceDaemon:
                     "clip_key": self.cfg.hotkeys.clip,
                     "hotkeys_available": self.hotkeys_available,
                     "recorder_error": self._recorder_error,
+                    "cpu_fallback": bool(getattr(self.recorder, "cpu_fallback", False)),
+                    "codec_fallback": bool(getattr(self.recorder, "codec_fallback", False)),
                 })
             )
 
@@ -355,6 +382,7 @@ class ViceDaemon:
                     "hotkeys_available": available,
                     "recorder_error": self._recorder_error,
                     "cpu_fallback": bool(getattr(self.recorder, "cpu_fallback", False)),
+                    "codec_fallback": bool(getattr(self.recorder, "codec_fallback", False)),
                 })
             )
 
@@ -381,6 +409,7 @@ class ViceDaemon:
                     "hotkeys_available": self.hotkeys_available,
                     "recorder_error": self._recorder_error,
                     "cpu_fallback": bool(getattr(self.recorder, "cpu_fallback", False)),
+                    "codec_fallback": bool(getattr(self.recorder, "codec_fallback", False)),
                 })
             )
 
@@ -396,6 +425,7 @@ class ViceDaemon:
                 "hotkeys_available": self.hotkeys_available,
                 "recorder_error": self._recorder_error,
                 "cpu_fallback": bool(getattr(self.recorder, "cpu_fallback", False)),
+                "codec_fallback": bool(getattr(self.recorder, "codec_fallback", False)),
             })
         )
 
@@ -419,7 +449,7 @@ class ViceDaemon:
                 deaths = 0
                 continue
             if resumed:
-                log.info("Resume from suspend detected — restarting the recorder")
+                log.info("Resume from suspend detected. Restarting the recorder")
             else:
                 deaths += 1
                 # The capture process's own output is the only thing that says
@@ -429,11 +459,26 @@ class ViceDaemon:
                 tail = self.recorder.last_output()
                 if tail:
                     log.error(
-                        "Recorder process died unexpectedly — restarting. Last output from %s:\n%s",
+                        "Recorder process died unexpectedly, restarting. Last output from %s:\n%s",
                         self.recorder.name, tail,
                     )
                 else:
-                    log.error("Recorder process died unexpectedly — restarting")
+                    log.error("Recorder process died unexpectedly, restarting")
+
+            # An unmounted clip directory would otherwise surface as a bare
+            # mkdir errno once a tick, losing the message that says what to
+            # fix (#142).
+            dir_problem = self._output_dir_problem(resolve_path(self.cfg.output.directory))
+            if dir_problem:
+                log.error("%s Retrying in %.0f s", dir_problem, backoff)
+                self._ready = False
+                self._recorder_error = dir_problem
+                self._broadcast_status(recording=False)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 300.0)
+                last_wall = time.time()
+                continue
+
             try:
                 async with self._config_apply_lock:
                     async with self._clip_lock:
@@ -442,7 +487,7 @@ class ViceDaemon:
                         await self.recorder.stop()
                         await self.recorder.start()
             except Exception as exc:
-                log.error("Recorder restart failed: %s — retrying in %.0f s", exc, backoff)
+                log.error("Recorder restart failed: %s. Retrying in %.0f s", exc, backoff)
                 self._ready = False
                 self._recorder_error = str(exc)
                 self._broadcast_status(recording=False)
@@ -462,7 +507,7 @@ class ViceDaemon:
             # forever (#129).
             if not resumed and deaths >= _RECORDER_DEATH_BACKOFF_AFTER:
                 log.error(
-                    "Recorder has died %d times in a row — waiting %.0f s before the next attempt",
+                    "Recorder has died %d times in a row, waiting %.0f s before the next attempt",
                     deaths, backoff,
                 )
                 await asyncio.sleep(backoff)
@@ -639,6 +684,7 @@ class ViceDaemon:
                     "hotkeys_available": self.hotkeys_available,
                     "recorder_error": self._recorder_error,
                     "cpu_fallback": bool(getattr(self.recorder, "cpu_fallback", False)),
+                    "codec_fallback": bool(getattr(self.recorder, "codec_fallback", False)),
                 })
 
     # ── Discord Rich Presence ────────────────────────────────────────────
@@ -883,6 +929,7 @@ class ViceDaemon:
             "recording":      self._ready,
             "recorder_error": self._recorder_error,
             "cpu_fallback":   bool(getattr(self.recorder, "cpu_fallback", False)),
+            "codec_fallback": bool(getattr(self.recorder, "codec_fallback", False)),
             "backend":          self.recorder.name,
             "clips":            self._clip_count,
             "session_active":   self._session_active,
@@ -1404,6 +1451,11 @@ def start(debug: bool, open_ui: bool) -> None:
         asyncio.run(daemon.run())
     except KeyboardInterrupt:
         pass
+    except Exception:
+        # Without this the reason only ever reaches stderr, so a user reading
+        # vice.log sees it stop mid-startup with nothing after it (#142).
+        log.exception("Vice daemon failed during startup")
+        raise
 
 
 @cli.command()

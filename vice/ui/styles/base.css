@@ -167,15 +167,18 @@ a:hover { color: #a8d6ff; }
 }
 
 /* Top-of-window banners: no H.264 decoder in this WebEngine build, the
-   capture backend refusing to start, and CPU-encoding fallback. */
-#codec-banner, #recorder-banner, #cpu-fallback-banner {
+   capture backend refusing to start, CPU-encoding fallback, and the GPU
+   refusing the configured codec. */
+#codec-banner, #recorder-banner, #cpu-fallback-banner, #gpu-codec-banner {
   position: relative; z-index: 30; display: flex; align-items: flex-start;
   gap: 10px; margin: 10px 28px 0; padding: 12px 16px;
   border-radius: var(--r-card); background: rgba(245,181,68,.08);
   box-shadow: inset 0 0 0 1px rgba(245,181,68,.35);
   color: var(--warn); font-size: 13px; line-height: 1.6; }
-#codec-banner[hidden], #recorder-banner[hidden], #cpu-fallback-banner[hidden] { display: none; }
-#codec-banner svg, #recorder-banner svg, #cpu-fallback-banner svg { flex-shrink: 0; margin-top: 2px; }
+#codec-banner[hidden], #recorder-banner[hidden], #cpu-fallback-banner[hidden],
+#gpu-codec-banner[hidden] { display: none; }
+#codec-banner svg, #recorder-banner svg, #cpu-fallback-banner svg,
+#gpu-codec-banner svg { flex-shrink: 0; margin-top: 2px; }
 /* A stopped recorder is worse than a degraded one, so it reads as an error. */
 #recorder-banner { background: rgba(239,68,68,.08);
   box-shadow: inset 0 0 0 1px rgba(239,68,68,.35); color: var(--err, #ef4444); }

@@ -96,6 +96,9 @@ function applyRecorderState(d) {
   const cpu = document.getElementById('cpu-fallback-banner');
   if (cpu && d.cpu_fallback) cpu.hidden = false;
   else if (cpu && d.cpu_fallback === false) cpu.hidden = true;
+  const codec = document.getElementById('gpu-codec-banner');
+  if (codec && d.codec_fallback) codec.hidden = false;
+  else if (codec && d.codec_fallback === false) codec.hidden = true;
 }
 
 function applyHotkeyAvailability(available) {

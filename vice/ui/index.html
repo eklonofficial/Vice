@@ -154,6 +154,19 @@
       </button>
     </div>
 
+    <!-- Shown when the GPU would not encode the configured codec and
+         gpu-screen-recorder was left to choose one instead. -->
+    <div id="gpu-codec-banner" hidden>
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
+      <div class="codec-banner-text">
+        <strong>Recording with a different codec.</strong>
+        Your GPU would not encode the codec picked under Settings → Recording, so gpu-screen-recorder chose one it can handle. Recording is still on the GPU and clips are unaffected. Choosing a different encoder yourself stops this notice, and H.264 in particular tops out at 4096 pixels wide on NVIDIA, so HEVC or AV1 is the one to pick on a wide monitor.
+      </div>
+      <button class="codec-banner-close" onclick="document.getElementById('gpu-codec-banner').hidden = true" aria-label="Dismiss">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg>
+      </button>
+    </div>
+
     <!-- Shown when the running Qt WebEngine build has no H.264 decoder
          (PyPI PyQt6-WebEngine wheels), so clips can never play in-app. -->
     <div id="codec-banner" hidden>

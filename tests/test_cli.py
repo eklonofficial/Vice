@@ -1,7 +1,11 @@
-import tomllib
 import unittest
 from pathlib import Path
 from unittest import mock
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10, the version Vice still supports
+    import tomli as tomllib
 
 from click.testing import CliRunner
 

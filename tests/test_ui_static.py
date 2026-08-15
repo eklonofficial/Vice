@@ -153,6 +153,15 @@ class UIStaticCopyTests(unittest.TestCase):
         self.assertIn("applyRecorderState(d)", status_js)
         self.assertIn("applyRecorderState(msg)", ws_js)
 
+    def test_gpu_codec_fallback_banner_is_wired(self) -> None:
+        # Still GPU encoding, just not the codec that was asked for, so it
+        # needs its own line rather than the CPU one (#156).
+        self.assertIn('id="gpu-codec-banner"', self.index)
+        status_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "status.js").read_text()
+        self.assertIn("codec_fallback", status_js)
+        base_css = (REPO_ROOT / "vice" / "ui" / "styles" / "base.css").read_text()
+        self.assertIn("#gpu-codec-banner", base_css)
+
     def test_hotkey_blocklist_setting_is_wired(self) -> None:
         self.assertIn('id="s-hotkey-blocklist"', self.index)
         settings_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "settings.js").read_text()

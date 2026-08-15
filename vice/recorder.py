@@ -231,6 +231,92 @@ def _gsr_supports_flag(flag: str) -> bool:
     return flag in _gsr_help_text()
 
 
+@lru_cache(maxsize=None)
+def _gsr_supported_codecs() -> frozenset[str]:
+    """The video codecs this GPU actually offers, per gpu-screen-recorder.
+
+    ffmpeg's encoder list only says how ffmpeg was built, so it happily claims
+    h264_nvenc on a card that will not open it (#156). GSR asks the driver.
+
+    An empty set means "could not tell", never "nothing is supported": every
+    caller has to keep its old behaviour in that case.
+    """
+    if not _has("gpu-screen-recorder"):
+        return frozenset()
+    code, out = _run_command_capture(["gpu-screen-recorder", "--info"], timeout=5.0)
+    if code != 0 or not out:
+        return frozenset()
+    codecs: set[str] = set()
+    in_section = False
+    for line in out.splitlines():
+        value = line.strip()
+        if value.startswith("section="):
+            in_section = value == "section=video_codecs"
+            continue
+        if in_section and value:
+            codecs.add(value)
+    return frozenset(codecs)
+
+
+def _gsr_codec_unsupported(codec: Optional[str]) -> bool:
+    """Whether GSR has told us this -k value will not work on this GPU."""
+    if not codec:
+        return False
+    supported = _gsr_supported_codecs()
+    return bool(supported) and codec not in supported
+
+
+# Order to reach for when the configured codec is out. HEVC first: every GPU
+# with an AV1 encoder also has HEVC, and HEVC is the wider bet for players.
+_GSR_CODEC_PREFERENCE = ("hevc", "av1", "h264")
+_GSR_CODEC_PREFERENCE_10BIT = ("hevc_10bit", "av1_10bit")
+
+
+def _gsr_codec_choice(rc, avoid: Optional[str] = None) -> Optional[str]:
+    """The -k value for a GSR command, or None to leave it to GSR.
+
+    avoid names a codec already known not to work here, either because
+    --info does not list it or because it just refused to open. Leaving the
+    flag off is not a way to avoid one: GSR's own default resolves to h264.
+    """
+    depth = _color_depth(rc)
+    codec = _gsr_codec_for_encoder(rc.encoder, depth)
+    rejected = {c for c in (avoid,) if c}
+    if codec and _gsr_codec_unsupported(codec):
+        rejected.add(codec)
+
+    if not rejected:
+        # encoder=auto resolves to None, and has always meant "no -k".
+        return codec
+    if codec and codec not in rejected:
+        return codec
+
+    supported = _gsr_supported_codecs()
+    if not supported:
+        return None
+    order = _GSR_CODEC_PREFERENCE_10BIT if depth == "10" else _GSR_CODEC_PREFERENCE
+    for candidate in order:
+        if candidate in supported and candidate not in rejected:
+            return candidate
+    return None
+
+
+def _gsr_codec_args(rc, extra: list[str], avoid: Optional[str] = None) -> list[str]:
+    """The -k arguments for a GSR command, honouring a user-supplied -k."""
+    if _gsr_has_any_flag(extra, "-k"):
+        return []
+    configured = _gsr_codec_for_encoder(rc.encoder, _color_depth(rc))
+    codec = _gsr_codec_choice(rc, avoid)
+    if configured and codec != configured and avoid is None:
+        log.warning(
+            "This GPU does not list %s (it offers %s); recording %s instead",
+            configured,
+            ", ".join(sorted(_gsr_supported_codecs())) or "nothing",
+            codec or "whatever gpu-screen-recorder picks",
+        )
+    return ["-k", codec] if codec else []
+
+
 # What GSR says when the GPU encoder itself is the problem, as opposed to a
 # bad monitor name or a missing output directory. A driver that stops
 # offering NVENC after a kernel update reports "Could not open video codec:
@@ -1310,9 +1396,7 @@ class Recorder(ABC):
         cmd += _gsr_resolution_args(rc, extra)
         if not _gsr_has_any_flag(extra, "-c"):
             cmd += ["-c", _container(rc)]
-        codec = _gsr_codec_for_encoder(rc.encoder, _color_depth(rc))
-        if codec and not _gsr_has_any_flag(extra, "-k"):
-            cmd += ["-k", codec]
+        cmd += _gsr_codec_args(rc, extra)
         if not _gsr_has_any_flag(extra, "-a"):
             cmd += _gsr_audio_args(rc, split_for_volume=False)
 
@@ -1772,6 +1856,10 @@ class GSRRecorder(Recorder):
         # took over. Never persisted — every start tries the GPU first, so a
         # driver that gets fixed is picked up without the user doing anything.
         self.cpu_fallback = False
+        # Set when the configured codec would not open and GSR was left to
+        # pick one. Still GPU encoding, so it is worth telling the user apart
+        # from the CPU fallback (#156).
+        self.codec_fallback = False
 
     @property
     def name(self) -> str:
@@ -1780,7 +1868,7 @@ class GSRRecorder(Recorder):
     def is_healthy(self) -> bool:
         return self._running and self._proc is not None and self._proc.returncode is None
 
-    def _build_cmd(self, cpu_encoder: bool = False) -> list[str]:
+    def _build_cmd(self, cpu_encoder: bool = False, avoid_codec: Optional[str] = None) -> list[str]:
         rc = self.cfg.recording
         extra = _gsr_sanitize_args(_extra_gsr_args(rc.gsr_args), {"-o"})
         cmd = ["gpu-screen-recorder"]
@@ -1808,9 +1896,11 @@ class GSRRecorder(Recorder):
 
         if not _gsr_has_any_flag(extra, "-c"):
             cmd += ["-c", _container(rc)]
-        codec = _gsr_codec_for_encoder(rc.encoder, _color_depth(rc))
-        if codec and not _gsr_has_any_flag(extra, "-k"):
-            cmd += ["-k", codec]
+        # GSR only does H.264 on the CPU, and that is its default, so asking
+        # for anything else here would fail the retry that is meant to rescue
+        # the recording.
+        if not cpu_encoder:
+            cmd += _gsr_codec_args(rc, extra, avoid_codec)
 
         if not _gsr_has_any_flag(extra, "-a"):
             cmd += _gsr_audio_args(rc)
@@ -1825,9 +1915,9 @@ class GSRRecorder(Recorder):
         cmd += ["-o", str(self._out_dir)]
         return cmd
 
-    async def _try_start(self, cpu_encoder: bool) -> Optional[str]:
+    async def _try_start(self, cpu_encoder: bool, avoid_codec: Optional[str] = None) -> Optional[str]:
         """Spawn GSR. Returns None when it stayed up, else why it did not."""
-        cmd = self._build_cmd(cpu_encoder)
+        cmd = self._build_cmd(cpu_encoder, avoid_codec)
         log.info("Starting GSR: %s", " ".join(cmd))
         self._stderr_tail.clear()
         self._proc = await _spawn_capture(cmd, asyncio.subprocess.PIPE)
@@ -1849,12 +1939,38 @@ class GSRRecorder(Recorder):
     async def start(self) -> None:
         self._running = True
         self.cpu_fallback = False
+        self.codec_fallback = False
         self._stderr_info_budget = 40
 
+        rc = self.cfg.recording
         detail = await self._try_start(cpu_encoder=False)
+
+        # Staying on the GPU is worth one more try. A card can list a codec
+        # and still refuse it, H.264 above 4096 pixels wide on NVIDIA being
+        # the common one, and another codec handles it (#156). Dropping the
+        # flag is not the retry: GSR's own default is H.264 too.
+        first_codec = _gsr_codec_choice(rc) if detail is not None else None
+        alternative = _gsr_codec_choice(rc, avoid=first_codec) if first_codec else None
+        if (
+            detail is not None
+            and _looks_like_encoder_failure(detail)
+            and alternative
+            and alternative != first_codec
+        ):
+            log.warning(
+                "The GPU would not encode %s (%s). Retrying with %s.",
+                first_codec, detail, alternative,
+            )
+            retry_detail = await self._try_start(cpu_encoder=False, avoid_codec=first_codec)
+            if retry_detail is None:
+                self.codec_fallback = True
+                detail = None
+            else:
+                detail = retry_detail
+
         if detail is not None and _looks_like_encoder_failure(detail) and _gsr_supports_flag("-encoder"):
             log.warning(
-                "The GPU encoder would not open (%s) — retrying on CPU. "
+                "The GPU encoder would not open (%s). Retrying on CPU. "
                 "This is usually a driver that needs a reboot after an update.",
                 detail,
             )

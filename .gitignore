@@ -21,6 +21,9 @@ AppDir/
 # Vice runtime
 /tmp/vice/
 
+# Local maintenance notes, not for the public repo
+/CLAUDE.md
+
 # Editor / OS
 .DS_Store
 .idea/

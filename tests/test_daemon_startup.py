@@ -8,10 +8,17 @@ Two behaviours that used to fail quietly:
   * Clip tagging only ever asked for the focused window, which comes back
     empty on KDE and GNOME under Wayland, so clips were never tagged and
     never landed in an auto playlist (#152).
+  * A clip directory on a drive that had been unmounted killed the daemon
+    before the log existed, so the reporter's vice.log stopped mid-startup
+    with nothing after it (#142).
 """
 
 import asyncio
+import os
+import stat
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from vice.config import Config, DiscordConfig, OutputConfig
@@ -105,6 +112,41 @@ class RecorderStartupFailureTests(unittest.IsolatedAsyncioTestCase):
         status = daemon._get_status()
         self.assertTrue(status["ready"])
         self.assertEqual(status["recorder_error"], "")
+
+
+class OutputDirectoryFailureTests(unittest.TestCase):
+    """An unusable clip directory has to reach the user, not the void (#142)."""
+
+    def test_writable_directory_reports_no_problem(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(ViceDaemon._output_dir_problem(Path(tmp) / "clips"), "")
+
+    def test_unwritable_directory_names_itself_and_the_config(self) -> None:
+        if os.geteuid() == 0:
+            self.skipTest("root writes anywhere")
+        with tempfile.TemporaryDirectory() as tmp:
+            locked = Path(tmp) / "locked"
+            locked.mkdir()
+            os.chmod(locked, stat.S_IRUSR | stat.S_IXUSR)
+            try:
+                problem = ViceDaemon._output_dir_problem(locked / "clips")
+            finally:
+                os.chmod(locked, stat.S_IRWXU)
+
+        self.assertIn(str(locked), problem)
+        self.assertIn("output.directory", problem)
+
+    def test_status_carries_the_directory_problem(self) -> None:
+        daemon = _startup_daemon(_StubRecorder())
+        daemon._ready = False
+        daemon._recorder_error = ViceDaemon._output_dir_problem(
+            Path("/proc/vice-cannot-exist/clips")
+        )
+
+        status = daemon._get_status()
+
+        self.assertFalse(status["recording"])
+        self.assertIn("not writable", status["recorder_error"])
 
 
 class ClipGameTagFallbackTests(unittest.TestCase):

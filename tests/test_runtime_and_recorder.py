@@ -23,6 +23,9 @@ from vice.recorder import (
     SegmentRecorder,
     _classify_gsr_source,
     _gsr_audio_args,
+    _gsr_codec_args,
+    _gsr_codec_choice,
+    _gsr_supported_codecs,
     _gsr_wants_disk_replay,
     _is_wayland,
     _wf_audio_device,
@@ -1171,6 +1174,226 @@ class ClipNamingTests(unittest.IsolatedAsyncioTestCase):
 
         recorder.clip_tag_cb = _boom
         self.assertIsNone(await recorder._clip_tag())
+
+
+_GSR_INFO = "\n".join([
+    "section=system_info",
+    "display_server|wayland",
+    "gsr_version|5.15.3",
+    "section=gpu_info",
+    "vendor|nvidia",
+    "section=video_codecs",
+    "hevc",
+    "hevc_10bit",
+    "av1",
+    "section=image_formats",
+    "jpeg",
+])
+
+
+class GSRCodecCapabilityTests(unittest.TestCase):
+    """Vice must ask gpu-screen-recorder what the GPU encodes rather than
+    trusting ffmpeg's build-time encoder list (#156)."""
+
+    def setUp(self) -> None:
+        _gsr_supported_codecs.cache_clear()
+        self.addCleanup(_gsr_supported_codecs.cache_clear)
+
+    def test_info_video_codecs_section_is_parsed(self) -> None:
+        with mock.patch("vice.recorder._has", return_value=True):
+            with mock.patch("vice.recorder._run_command_capture", return_value=(0, _GSR_INFO)):
+                self.assertEqual(_gsr_supported_codecs(), frozenset({"hevc", "hevc_10bit", "av1"}))
+
+    def test_missing_section_reads_as_no_opinion(self) -> None:
+        info = "section=system_info\nvendor|nvidia\nsection=image_formats\njpeg"
+        with mock.patch("vice.recorder._has", return_value=True):
+            with mock.patch("vice.recorder._run_command_capture", return_value=(0, info)):
+                self.assertEqual(_gsr_supported_codecs(), frozenset())
+
+    def test_failed_probe_reads_as_no_opinion(self) -> None:
+        with mock.patch("vice.recorder._has", return_value=True):
+            with mock.patch("vice.recorder._run_command_capture", return_value=(1, "gsr error: no")):
+                self.assertEqual(_gsr_supported_codecs(), frozenset())
+
+    def test_missing_binary_reads_as_no_opinion(self) -> None:
+        with mock.patch("vice.recorder._has", return_value=False):
+            self.assertEqual(_gsr_supported_codecs(), frozenset())
+
+    def test_unsupported_codec_is_swapped_for_one_the_gpu_has(self) -> None:
+        # Dropping -k would land on GSR's default, which is h264, the very
+        # codec that is missing. It has to name a replacement.
+        rc = RecordingConfig(encoder="h264_nvenc")
+        with mock.patch("vice.recorder._gsr_supported_codecs", return_value=frozenset({"hevc", "av1"})):
+            self.assertEqual(_gsr_codec_args(rc, []), ["-k", "hevc"])
+
+    def test_supported_codec_is_still_forced(self) -> None:
+        rc = RecordingConfig(encoder="h264_nvenc")
+        with mock.patch("vice.recorder._gsr_supported_codecs", return_value=frozenset({"h264", "hevc"})):
+            self.assertEqual(_gsr_codec_args(rc, []), ["-k", "h264"])
+
+    def test_unknown_capabilities_change_nothing(self) -> None:
+        """The regression guard: a probe that tells us nothing must leave the
+        command exactly as it was before this check existed."""
+        rc = RecordingConfig(encoder="h264_nvenc")
+        with mock.patch("vice.recorder._gsr_supported_codecs", return_value=frozenset()):
+            self.assertEqual(_gsr_codec_args(rc, []), ["-k", "h264"])
+
+    def test_auto_encoder_still_sends_no_codec_flag(self) -> None:
+        # encoder=auto has always left the choice to GSR, and a machine with
+        # nothing wrong with it must not start seeing -k appear.
+        rc = RecordingConfig(encoder="auto")
+        with mock.patch("vice.recorder._gsr_supported_codecs", return_value=frozenset({"hevc", "av1", "h264"})):
+            self.assertEqual(_gsr_codec_args(rc, []), [])
+
+    def test_user_supplied_k_flag_always_wins(self) -> None:
+        rc = RecordingConfig(encoder="h264_nvenc")
+        with mock.patch("vice.recorder._gsr_supported_codecs", return_value=frozenset({"hevc"})):
+            self.assertEqual(_gsr_codec_args(rc, ["-k", "av1"]), [])
+
+    def test_avoiding_a_codec_picks_another_supported_one(self) -> None:
+        rc = RecordingConfig(encoder="h264_nvenc")
+        with mock.patch("vice.recorder._gsr_supported_codecs", return_value=frozenset({"h264", "hevc", "av1"})):
+            self.assertEqual(_gsr_codec_choice(rc, avoid="h264"), "hevc")
+
+    def test_avoiding_a_codec_with_no_capability_info_gives_up(self) -> None:
+        # Guessing blind could pick something worse than the CPU fallback.
+        rc = RecordingConfig(encoder="h264_nvenc")
+        with mock.patch("vice.recorder._gsr_supported_codecs", return_value=frozenset()):
+            self.assertIsNone(_gsr_codec_choice(rc, avoid="h264"))
+
+    def test_ten_bit_stays_ten_bit_when_swapping(self) -> None:
+        rc = RecordingConfig(encoder="hevc_nvenc", color_depth="10")
+        with mock.patch(
+            "vice.recorder._gsr_supported_codecs",
+            return_value=frozenset({"h264", "hevc", "av1", "av1_10bit"}),
+        ):
+            self.assertEqual(_gsr_codec_choice(rc, avoid="hevc_10bit"), "av1_10bit")
+
+    def test_cpu_encoding_carries_no_codec_flag(self) -> None:
+        # GSR only encodes H.264 on the CPU, which is also its default, so
+        # forcing anything here would break the retry meant to rescue it.
+        recorder = GSRRecorder(
+            Config(
+                output=OutputConfig(directory="/tmp/vice-test"),
+                recording=RecordingConfig(encoder="hevc_nvenc"),
+            )
+        )
+        with mock.patch("vice.recorder._gsr_supported_codecs", return_value=frozenset({"hevc"})):
+            self.assertNotIn("-k", recorder._build_cmd(cpu_encoder=True))
+            self.assertIn("-k", recorder._build_cmd(cpu_encoder=False))
+
+    def test_build_cmd_swaps_an_unsupported_codec(self) -> None:
+        recorder = GSRRecorder(
+            Config(
+                output=OutputConfig(directory="/tmp/vice-test"),
+                recording=RecordingConfig(encoder="h264_nvenc"),
+            )
+        )
+        with mock.patch("vice.recorder._gsr_supported_codecs", return_value=frozenset({"hevc", "av1"})):
+            cmd = recorder._build_cmd()
+        self.assertEqual(cmd[cmd.index("-k") + 1], "hevc")
+        with mock.patch("vice.recorder._gsr_supported_codecs", return_value=frozenset()):
+            cmd = recorder._build_cmd()
+        self.assertEqual(cmd[cmd.index("-k") + 1], "h264")
+
+
+async def _no_stderr_reader() -> None:
+    return None
+
+
+class GSRStartFallbackTests(unittest.IsolatedAsyncioTestCase):
+    """The GPU is worth one more try before dropping to CPU encoding (#156)."""
+
+    def _recorder(self, encoder: str = "h264_nvenc") -> GSRRecorder:
+        return GSRRecorder(
+            Config(
+                output=OutputConfig(directory="/tmp/vice-test"),
+                recording=RecordingConfig(encoder=encoder),
+            )
+        )
+
+    @staticmethod
+    def _tracker(attempts, succeed_on):
+        async def fake_try_start(cpu_encoder: bool, avoid_codec=None):
+            attempts.append((cpu_encoder, avoid_codec))
+            if succeed_on(cpu_encoder, avoid_codec):
+                return None
+            return "gsr error: Could not open video codec"
+        return fake_try_start
+
+    async def _run(self, recorder, fake_try_start, supported):
+        with mock.patch("vice.recorder._gsr_supported_codecs", return_value=supported):
+            with mock.patch("vice.recorder._gsr_supports_flag", return_value=True):
+                with mock.patch.object(recorder, "_try_start", side_effect=fake_try_start):
+                    with mock.patch.object(recorder, "_stderr_reader", new=_no_stderr_reader):
+                        await recorder.start()
+
+    async def test_another_codec_is_tried_before_the_cpu(self) -> None:
+        recorder = self._recorder()
+        attempts: list = []
+        await self._run(
+            recorder,
+            self._tracker(attempts, lambda cpu, avoid: avoid is not None),
+            frozenset({"h264", "hevc", "av1"}),
+        )
+
+        self.assertEqual(attempts, [(False, None), (False, "h264")])
+        self.assertTrue(recorder.codec_fallback)
+        self.assertFalse(recorder.cpu_fallback)
+
+    async def test_cpu_fallback_still_happens_when_no_codec_works(self) -> None:
+        recorder = self._recorder()
+        attempts: list = []
+        await self._run(
+            recorder,
+            self._tracker(attempts, lambda cpu, avoid: cpu),
+            frozenset({"h264", "hevc", "av1"}),
+        )
+
+        self.assertEqual(attempts, [(False, None), (False, "h264"), (True, None)])
+        self.assertTrue(recorder.cpu_fallback)
+        self.assertFalse(recorder.codec_fallback)
+
+    async def test_no_capability_info_goes_straight_to_the_cpu(self) -> None:
+        """Guessing a codec blind could be worse than CPU encoding, and this
+        is the path every machine without gpu-screen-recorder --info takes."""
+        recorder = self._recorder()
+        attempts: list = []
+        await self._run(
+            recorder,
+            self._tracker(attempts, lambda cpu, avoid: cpu),
+            frozenset(),
+        )
+
+        self.assertEqual(attempts, [(False, None), (True, None)])
+        self.assertTrue(recorder.cpu_fallback)
+
+    async def test_auto_encoder_avoids_the_default_codec_on_retry(self) -> None:
+        # encoder=auto sends no -k, and GSR's default is h264, so a failure
+        # there still has somewhere better to go.
+        recorder = self._recorder(encoder="auto")
+        attempts: list = []
+        await self._run(
+            recorder,
+            self._tracker(attempts, lambda cpu, avoid: cpu),
+            frozenset({"h264", "hevc"}),
+        )
+
+        # Nothing was forced, so there is no codec to avoid and no retry.
+        self.assertEqual(attempts, [(False, None), (True, None)])
+
+    async def test_a_healthy_start_tries_once(self) -> None:
+        recorder = self._recorder()
+        attempts: list = []
+        await self._run(
+            recorder,
+            self._tracker(attempts, lambda cpu, avoid: True),
+            frozenset({"h264", "hevc"}),
+        )
+
+        self.assertEqual(attempts, [(False, None)])
+        self.assertFalse(recorder.cpu_fallback)
+        self.assertFalse(recorder.codec_fallback)
 
 
 class RecorderAudioCommandTests(unittest.TestCase):
