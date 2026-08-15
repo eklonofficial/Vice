@@ -181,6 +181,7 @@
   {"name": "Frostpunk", "matches": ["Frostpunk.exe", "steam_app_323190"]},
   {"name": "Frostpunk 2", "matches": ["Frostpunk2-Win64-Shipping.exe", "steam_app_1601580"]},
   {"name": "Garry's Mod", "matches": ["gmod.exe", "garrysmod", "steam_app_4000"]},
+  {"name": "GeoGuessr Steam Edition", "matches": ["GeoGuessr.exe", "geoguessr", "geoguessrsteamedition", "steam_app_3478870"]}
   {"name": "Getting Over It", "matches": ["Getting Over It.exe", "gettingoverit", "steam_app_240720"]},
   {"name": "Golf With Your Friends", "matches": ["Golf With Your Friends.exe", "golfwithyourfriends", "steam_app_431240"]},
   {"name": "Granblue Fantasy Versus: Rising", "matches": ["GBVSR.exe", "granbluefantasyversusrising", "steam_app_2157560"]},
