@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "vice"
 dynamic = ["version"]
-description = "Linux game clip recorder — like Medal.tv, for Wayland and X11"
+description = "Linux game clip recorder, like Medal.tv, for Wayland and X11"
 requires-python = ">=3.10"
 license = { text = "GPL-3.0-or-later" }
 dependencies = [

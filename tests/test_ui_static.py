@@ -3,6 +3,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+# Spelled as an escape so this file does not itself trip the sweep guard below.
+EM_DASH = "\u2014"
 UI_INDEX = REPO_ROOT / "vice" / "ui" / "index.html"
 HOME_JS = REPO_ROOT / "vice" / "ui" / "scripts" / "home.js"
 SETTINGS_CSS = REPO_ROOT / "vice" / "ui" / "styles" / "settings.css"
@@ -161,6 +163,50 @@ class UIStaticCopyTests(unittest.TestCase):
         self.assertIn("codec_fallback", status_js)
         base_css = (REPO_ROOT / "vice" / "ui" / "styles" / "base.css").read_text()
         self.assertIn("#gpu-codec-banner", base_css)
+
+    def test_saved_display_survives_when_the_backend_stops_listing_it(self) -> None:
+        # Falling back to Auto here wrote display=null on the next save and
+        # destroyed a value set by hand, which is the only way to reach a
+        # monitor gpu-screen-recorder will not enumerate (#160).
+        settings_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "settings.js").read_text()
+        render = settings_js.split("function renderDisplayOptions")[1].split("\nasync function")[0]
+        self.assertIn("(saved)", render)
+        self.assertIn("el.value = desired", render)
+        # The saved id must be added as an option before it is selected, or
+        # the select silently refuses the value.
+        self.assertLess(render.index("el.add(new Option(`${desired} (saved)`"),
+                        render.rindex("el.value = desired"))
+
+    def test_audio_track_conflict_warning_is_wired(self) -> None:
+        # With desktop audio off the recorder keeps only microphone sources,
+        # which is the whole of #137, and nothing said so.
+        self.assertIn('id="s-track-warning"', self.index)
+        self.assertIn('onchange="syncTrackWarning()"', self.index)
+        settings_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "settings.js").read_text()
+        self.assertIn("function syncTrackWarning", settings_js)
+        self.assertIn("function tracksLostWithoutDesktopAudio", settings_js)
+        settings_css = (REPO_ROOT / "vice" / "ui" / "styles" / "settings.css").read_text()
+        self.assertIn(".track-warning", settings_css)
+
+    def test_unreadable_clip_is_marked_in_the_gallery(self) -> None:
+        # A clip ffmpeg cannot read used to be listed as an ordinary 0:00
+        # clip with no thumbnail, which is #154 as the reporter saw it.
+        clips_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "clips.js").read_text()
+        self.assertIn("c.unreadable", clips_js)
+        self.assertIn("unreadable_reason", clips_js)
+        self.assertIn("clip-broken-badge", clips_js)
+        clips_css = (REPO_ROOT / "vice" / "ui" / "styles" / "clips.css").read_text()
+        self.assertIn(".clip-broken-badge", clips_css)
+        self.assertIn(".clip-broken-note", clips_css)
+
+    def test_custom_notification_sounds_are_wired(self) -> None:
+        for field in ("s-snd-clip", "s-snd-clip-failed", "s-snd-session-start",
+                      "s-snd-session-end", "s-snd-highlight"):
+            self.assertIn(f'id="{field}"', self.index)
+        settings_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "settings.js").read_text()
+        for key in ("clip_sound", "clip_failed_sound", "session_start_sound",
+                    "session_end_sound", "highlight_sound"):
+            self.assertIn(key, settings_js)
 
     def test_hotkey_blocklist_setting_is_wired(self) -> None:
         self.assertIn('id="s-hotkey-blocklist"', self.index)
@@ -358,10 +404,10 @@ class UIStaticCopyTests(unittest.TestCase):
     def test_update_copy_has_no_em_dashes(self) -> None:
         updates_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "updates.js").read_text()
         for line in updates_js.splitlines():
-            if "—" in line:
+            if EM_DASH in line:
                 self.assertTrue(line.lstrip().startswith(("//", "*", "/*")), line.strip())
         card = self.index.split('id="update-modal"')[1].split("</div>\n\n")[0]
-        self.assertNotIn("—", card)
+        self.assertNotIn(EM_DASH, card)
 
     def test_boot_splash_covers_the_first_paint_and_always_clears(self) -> None:
         self.assertIn('id="boot"', self.index)
@@ -407,7 +453,7 @@ class UIStaticCopyTests(unittest.TestCase):
         self.assertIn("'Off'", settings_js)
         self.assertIn("s-vol-notify-v", self.index)
         row = self.index.split('id="s-vol-notify"')[0].split("Notification volume")[1]
-        self.assertNotIn("—", row)
+        self.assertNotIn(EM_DASH, row)
 
     def test_effects_mode_is_measured_not_guessed(self) -> None:
         perf = (REPO_ROOT / "vice" / "ui" / "scripts" / "perf.js").read_text()
@@ -436,7 +482,7 @@ class UIStaticCopyTests(unittest.TestCase):
             self.assertIn(value, self.index)
         self.assertIn('id="s-effects-note"', self.index)
         row = self.index.split('id="s-effects"')[0].split("Visual effects")[1]
-        self.assertNotIn("—", row)
+        self.assertNotIn(EM_DASH, row)
 
     def test_reduced_effects_stops_the_endless_animations(self) -> None:
         base = (REPO_ROOT / "vice" / "ui" / "styles" / "base.css").read_text()
@@ -486,9 +532,9 @@ class EditorUiStaticTests(unittest.TestCase):
         # User-facing copy only; header comments follow the existing code
         # style, which does use em dashes.
         editor_section = self.index.split('id="view-editor"')[1].split("</section>")[0]
-        self.assertNotIn("—", editor_section)
+        self.assertNotIn(EM_DASH, editor_section)
         for line in self.scripts.splitlines():
-            if "—" in line:
+            if EM_DASH in line:
                 self.assertTrue(line.lstrip().startswith(("//", "*", "/*")),
                                 f"em dash outside a comment: {line.strip()}")
 
@@ -525,3 +571,47 @@ class EditorUiStaticTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoEmDashesAnywhereTests(unittest.TestCase):
+    """The rule is no em-dashes in anything shipped, so it is checked rather
+    than remembered. It kept creeping back into log lines and comments where
+    nobody was looking."""
+
+    SHIPPED_SUFFIXES = {".py", ".js", ".css", ".html", ".sh", ".md", ".toml", ".service", ".desktop"}
+    SKIP_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules"}
+
+    def _shipped_files(self):
+        for path in REPO_ROOT.rglob("*"):
+            if not path.is_file():
+                continue
+            if any(part in self.SKIP_DIRS for part in path.parts):
+                continue
+            # Not committed; it is the local maintenance guide.
+            if path.name == "CLAUDE.md":
+                continue
+            if path.suffix in self.SHIPPED_SUFFIXES or path.name in {"install.sh", "PKGBUILD", ".SRCINFO"}:
+                yield path
+
+    def test_no_shipped_file_contains_an_em_dash(self) -> None:
+        offenders = []
+        for path in self._shipped_files():
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            for number, line in enumerate(text.splitlines(), 1):
+                if EM_DASH in line:
+                    offenders.append(f"{path.relative_to(REPO_ROOT)}:{number}: {line.strip()[:90]}")
+        self.assertEqual(
+            offenders, [],
+            "Em-dashes are not used anywhere in Vice. Use a comma, a colon or "
+            "a full stop:\n" + "\n".join(offenders),
+        )
+
+    def test_the_guard_actually_looks_at_the_source(self) -> None:
+        # A guard that silently matches nothing is worse than none at all.
+        found = list(self._shipped_files())
+        self.assertGreater(len(found), 40)
+        self.assertTrue(any(p.name == "recorder.py" for p in found))
+        self.assertTrue(any(p.name == "index.html" for p in found))

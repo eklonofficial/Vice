@@ -1,5 +1,5 @@
 'use strict';
-// player.js — mini player bar paired with the viewer modal
+// player.js: mini player bar paired with the viewer modal
 
 // One playback element (#viewer-video) drives both surfaces: the viewer
 // modal shows it, the bar mirrors it. The bar enters at the bottom of the

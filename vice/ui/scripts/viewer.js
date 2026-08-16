@@ -1,5 +1,5 @@
 'use strict';
-// viewer.js — viewer modal + highlights (CRUD, drag, color picker)
+// viewer.js: viewer modal + highlights (CRUD, drag, color picker)
 
 // ═══════════════════════════════════════════════════════════════════
 // Viewer modal + highlights
@@ -147,7 +147,7 @@ function renderViewerHighlights() {
     m.className = 'hl-marker';
     m.style.left = pct + '%';
     m.style.background = color;
-    m.title = `${hl.label} — ${fmtSec(hl.time, true)} (drag to move)`;
+    m.title = `${hl.label}, ${fmtSec(hl.time, true)} (drag to move)`;
     m.onpointerdown = ev => beginHighlightDrag(ev, hl, m);
     m.onclick = ev => { if (!draggingHighlight) { ev.stopPropagation(); seekViewerTo(hl.time); } };
     markersEl.appendChild(m);
@@ -157,7 +157,7 @@ function renderViewerHighlights() {
 
   const listEl = document.getElementById('viewer-hl-list');
   if (!viewerHighlights.length) {
-    listEl.innerHTML = '<div class="viewer-hl-empty">No highlights yet — press <strong>H</strong> or click "Highlight" to mark the current timestamp</div>';
+    listEl.innerHTML = '<div class="viewer-hl-empty">No highlights yet, press <strong>H</strong> or click "Highlight" to mark the current timestamp</div>';
     return;
   }
   listEl.innerHTML = '';

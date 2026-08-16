@@ -96,7 +96,7 @@ def wait_for_display(timeout: float = 60.0, interval: float = 2.0) -> bool:
     if has_display():
         return True
     deadline = time.monotonic() + timeout
-    log.info("No display in the environment yet — waiting up to %.0fs for the session", timeout)
+    log.info("No display in the environment yet, waiting up to %.0fs for the session", timeout)
     while time.monotonic() < deadline:
         time.sleep(interval)
         load_user_systemd_env()
@@ -104,7 +104,7 @@ def wait_for_display(timeout: float = 60.0, interval: float = 2.0) -> bool:
             log.info("Session is up (WAYLAND_DISPLAY=%r DISPLAY=%r)",
                      os.environ.get("WAYLAND_DISPLAY", ""), os.environ.get("DISPLAY", ""))
             return True
-    log.warning("No display appeared within %.0fs — starting anyway", timeout)
+    log.warning("No display appeared within %.0fs, starting anyway", timeout)
     return False
 
 

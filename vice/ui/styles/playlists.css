@@ -1,4 +1,4 @@
-/* ── playlists.css — home tiles, detail header, add menu, new-playlist modal ── */
+/* ── playlists.css: home tiles, detail header, add menu, new-playlist modal ── */
 /* Home playlist tiles */
 .home-pl-row { display: flex; gap: 14px; flex-wrap: wrap; }
 .home-pl-tile { width: 150px; cursor: pointer; }

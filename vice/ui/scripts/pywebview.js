@@ -1,5 +1,5 @@
 'use strict';
-// pywebview.js — native window bridge (Quit / Minimize)
+// pywebview.js: native window bridge (Quit / Minimize)
 
 // ═══════════════════════════════════════════════════════════════════
 // pywebview bridge

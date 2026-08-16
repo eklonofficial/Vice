@@ -1,5 +1,5 @@
 'use strict';
-// editor-export.js — export modal (progress over WS) + reset confirm
+// editor-export.js: export modal (progress over WS) + reset confirm
 
 let edExportJob = null;      // job_id while a render runs
 let edExportPhase = 'form';  // form | busy | done

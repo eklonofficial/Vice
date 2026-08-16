@@ -579,7 +579,7 @@
               </div>
               <div class="settings-row">
                 <div class="s-label"><strong>Capture desktop audio</strong><span>Include system sound in clips</span></div>
-                <label class="toggle"><input type="checkbox" id="s-audio"><span class="toggle-track"></span></label>
+                <label class="toggle"><input type="checkbox" id="s-audio" onchange="syncTrackWarning()"><span class="toggle-track"></span></label>
               </div>
 
               <div class="settings-row">
@@ -634,6 +634,22 @@
               </div>
 
               <div class="settings-row settings-row-stack">
+                <div class="s-label"><strong>Custom sounds</strong><span>Play your own file instead of the built-in tone. Leave blank for the tone. A path that does not exist falls back to the tone, so you never end up with silence.</span></div>
+                <div class="sound-grid">
+                  <label for="s-snd-clip">Clip saved</label>
+                  <input type="text" id="s-snd-clip" placeholder="~/sounds/clip.wav" spellcheck="false">
+                  <label for="s-snd-clip-failed">Clip failed</label>
+                  <input type="text" id="s-snd-clip-failed" placeholder="~/sounds/failed.wav" spellcheck="false">
+                  <label for="s-snd-session-start">Session started</label>
+                  <input type="text" id="s-snd-session-start" placeholder="~/sounds/start.wav" spellcheck="false">
+                  <label for="s-snd-session-end">Session stopped</label>
+                  <input type="text" id="s-snd-session-end" placeholder="~/sounds/stop.wav" spellcheck="false">
+                  <label for="s-snd-highlight">Highlight marked</label>
+                  <input type="text" id="s-snd-highlight" placeholder="~/sounds/highlight.wav" spellcheck="false">
+                </div>
+              </div>
+
+              <div class="settings-row settings-row-stack">
                 <div class="s-label"><strong>Separate audio tracks</strong><span>Each source becomes its own track for editing. Players, Discord, and shares play track 1. With mic capture on, your microphone gets its own track. Empty = one mixed track.</span></div>
                 <div class="track-builder">
                   <div class="track-add-row">
@@ -642,6 +658,7 @@
                     <button class="btn-pill btn-ghost-pill btn-sq" type="button" id="s-track-refresh" title="Refresh source list" aria-label="Refresh source list" onclick="refreshSourcesClicked(this)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg></button>
                   </div>
                   <div id="s-track-list" class="track-list"></div>
+                  <div id="s-track-warning" class="track-warning" hidden></div>
                 </div>
               </div>
 
@@ -969,7 +986,7 @@
 
 <!-- ── Quit row (pywebview only) ──────────────────────────────────── -->
 <div class="quit-float" id="quit-row" style="display:none">
-  <button class="quit-btn" onclick="keepRunning()" title="Close window — recording continues">
+  <button class="quit-btn" onclick="keepRunning()" title="Close window, recording continues">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" x2="21" y1="10" y2="3"/><line x1="3" x2="10" y1="21" y2="14"/></svg>
     Minimize
   </button>

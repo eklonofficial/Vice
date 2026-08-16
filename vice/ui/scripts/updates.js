@@ -1,5 +1,5 @@
 'use strict';
-// updates.js — "a new version is out" notice
+// updates.js: "a new version is out" notice
 
 // Set from /api/status at boot or pushed over the WebSocket when the daily
 // check finds something. Null means there is nothing to say.

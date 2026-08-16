@@ -1,8 +1,8 @@
 'use strict';
-// clips.js — clip grid + cards + actions (trigger/delete/share/rename)
+// clips.js: clip grid + cards + actions (trigger/delete/share/rename)
 
 // ═══════════════════════════════════════════════════════════════════
-// Clips — fetch + render
+// Clips: fetch + render
 // ═══════════════════════════════════════════════════════════════════
 async function fetchClips() {
   try {
@@ -171,8 +171,11 @@ function attachPreviewFailureHandlers(grid) {
 }
 
 function cardHTML(c) {
+  // An unreadable clip reports the placeholder 1920x1080 and a 0 duration,
+  // so neither is worth showing. Say what is actually wrong instead (#154).
+  const broken  = !!c.unreadable;
   const sizeStr = c.size     ? `${(c.size / 1048576).toFixed(1)} MB` : '';
-  const resStr  = c.width    ? `${c.width}×${c.height}`         : '';
+  const resStr  = (!broken && c.width) ? `${c.width}×${c.height}`    : '';
   const durStr  = c.duration ? fmtSec(Math.round(c.duration), true)  : '';
   const dateStr = c.created_at
     ? new Date(c.created_at).toLocaleDateString(undefined, {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})
@@ -183,6 +186,9 @@ function cardHTML(c) {
   const name  = escHtml(c.name || c.slug);
   const viewsStr = c.views ? `${c.views} view${c.views !== 1 ? 's' : ''}` : '';
   const meta  = [dateStr, resStr, sizeStr, viewsStr].filter(Boolean).join(' · ');
+  const brokenReason = broken
+    ? (c.unreadable_reason || 'ffmpeg could not read this file')
+    : '';
 
   const hoverHandlers = 'onpointerenter="startPreview(this)" onpointerleave="stopPreview(this)"';
   const mediaHtml = c.thumb_url
@@ -194,19 +200,21 @@ function cardHTML(c) {
   const shareBtn = `<button class="clip-icon-btn" title="${shareDisabled ? 'No share URL yet' : 'Copy share link'}" ${shareDisabled ? 'disabled' : `onclick="copyLink(event, '${escArg(c.share_url)}', ${c.share_is_public !== false})"`}>${svgEl('link2', 12)}</button>`;
 
   return `
-  <div class="clip-card" id="card-${slug}" draggable="true"
+  <div class="clip-card${broken ? ' clip-card-broken' : ''}" id="card-${slug}" draggable="true"
        ondragstart="onClipDragStart(event, '${arg}')" ondragend="onClipDragEnd(event)"
        oncontextmenu="openPlaylistMenu(event, '${arg}')">
     <div class="thumb-wrap" onclick="openViewer('${arg}')" ${hoverHandlers}>
       ${mediaHtml}
       <div class="thumb-play-overlay">${svgEl('play', 38)}</div>
       ${durStr ? `<div class="clip-dur-badge mono">${durStr}</div>` : ''}
+      ${broken ? `<div class="clip-broken-badge mono" title="${escAttr(brokenReason)}">UNREADABLE</div>` : ''}
       ${isNew  ? `<div class="clip-new-badge mono">NEW</div>`       : ''}
     </div>
     <div class="clip-body">
       <div class="clip-copy">
-        <div class="clip-name" title="${escAttr(c.name || c.slug)} — double-click to rename" ondblclick="startRename('${arg}', this)">${name}</div>
+        <div class="clip-name" title="${escAttr(c.name || c.slug)}, double-click to rename" ondblclick="startRename('${arg}', this)">${name}</div>
         <div class="clip-meta mono">${escHtml(meta)}</div>
+        ${broken ? `<div class="clip-broken-note">${escHtml(brokenReason)}. The file is still on disk.</div>` : ''}
       </div>
       <div class="clip-actions">
         <button class="clip-icon-btn" title="Trim" onclick="openTrim('${arg}', '${escArg(c.video_url || '')}')">${svgEl('scissors', 12)}</button>

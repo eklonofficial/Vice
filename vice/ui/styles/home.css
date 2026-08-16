@@ -1,4 +1,4 @@
-/* ── home.css — greeting, section headers, recent grid, quick toggles ────── */
+/* ── home.css: greeting, section headers, recent grid, quick toggles ────── */
 .home-sub { margin-top: 5px; font-size: 13.5px; color: var(--text-dim); }
 
 .kbd { display: inline-flex; align-items: center; justify-content: center;

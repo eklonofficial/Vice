@@ -1,4 +1,4 @@
-/* ── modals.css — glass modal shells, trim, toasts, quit float ───────────── */
+/* ── modals.css: glass modal shells, trim, toasts, quit float ───────────── */
 /* ── Modals (shared shells) ─────────────────────────────────────── */
 .backdrop { position: fixed; inset: 0; z-index: 100; background: rgba(3,5,10,.7);
   backdrop-filter: blur(10px); display: flex; align-items: center; justify-content: center;

@@ -1,4 +1,4 @@
-"""Discord IPC client — raw protocol, no third-party deps.
+"""Discord IPC client, raw protocol, no third-party deps.
 
 Discord exposes a Unix socket at $XDG_RUNTIME_DIR/discord-ipc-{0..9} (also
 /tmp/discord-ipc-N as a fallback). The wire protocol is length-prefixed JSON
@@ -147,8 +147,8 @@ class DiscordRPC:
                 return
             try:
                 await self._send(_OP_CLOSE, {})
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Discord did not accept the close frame: %s", exc)
             await self._reset_streams()
 
     # ─── frame I/O ───────────────────────────────────────────────────────────
@@ -198,5 +198,5 @@ class DiscordRPC:
             try:
                 w.close()
                 await asyncio.wait_for(w.wait_closed(), timeout=self.timeout)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Discord socket did not close cleanly: %s", exc)

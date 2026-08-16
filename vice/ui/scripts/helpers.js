@@ -1,5 +1,5 @@
 'use strict';
-// helpers.js — toast, fmt helpers, escape, copy uninstall cmd
+// helpers.js: toast, fmt helpers, escape, copy uninstall cmd
 
 // ═══════════════════════════════════════════════════════════════════
 // Toasts / helpers
@@ -111,7 +111,7 @@ function wireVideoErrorOverlay(videoId, overlayId, msgId) {
 
 // Copy `text` to the clipboard. Resolves to true on success, false on failure.
 // In the native (QtWebEngine) window we go through the pywebview bridge into
-// wl-copy/xclip/xsel — the in-page Clipboard API has crashed the render
+// wl-copy/xclip/xsel, the in-page Clipboard API has crashed the render
 // process on http:// origins. In browser mode we try the async API first
 // and fall back to execCommand. Every branch is logged via nativeLog.
 async function copyToClipboard(text) {
@@ -168,7 +168,7 @@ window.addEventListener('unhandledrejection', ev => {
 
 function copyUninstallCmd() {
   copyToClipboard('vice uninstall').then(ok => {
-    if (ok) toast('Command copied — paste it into a terminal', 'ok');
+    if (ok) toast('Command copied, paste it into a terminal', 'ok');
     else showManualCopyModal('vice uninstall');
   });
 }

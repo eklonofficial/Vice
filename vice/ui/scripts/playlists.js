@@ -1,5 +1,5 @@
 'use strict';
-// playlists.js — sidebar rows, home tiles, detail header, modal, add menu
+// playlists.js: sidebar rows, home tiles, detail header, modal, add menu
 
 // Same 8 gradient pairs as the backend's auto-playlist palette.
 const PL_COLORS = [

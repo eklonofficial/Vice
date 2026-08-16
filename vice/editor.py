@@ -1,5 +1,5 @@
 """
-Timeline editor backend — project model, the ffmpeg render graph and the
+Timeline editor backend, project model, the ffmpeg render graph and the
 export job.
 
 A project is the JSON the editor UI autosaves: an ordered track list (text

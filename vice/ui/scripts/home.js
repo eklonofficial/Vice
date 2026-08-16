@@ -1,8 +1,8 @@
 'use strict';
-// home.js — home view population (greeting, dynamic copy, recent clips)
+// home.js: home view population (greeting, dynamic copy, recent clips)
 
 // ═══════════════════════════════════════════════════════════════════
-// Home population — uses cfg + runtime status
+// Home population, uses cfg + runtime status
 // ═══════════════════════════════════════════════════════════════════
 function hotkeyLabel() {
   return (cfg.hotkeys?.clip || 'KEY_F9').replace(/^KEY_/, '');

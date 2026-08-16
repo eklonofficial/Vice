@@ -1,10 +1,10 @@
-"""Active-window detection — adapters for X11, Hyprland, Sway.
+"""Active-window detection: adapters for X11, Hyprland and Sway.
 
 Each adapter shells out to the compositor's CLI/IPC and returns
 {"process": str, "class": str, "pid": int} or None. On other Wayland
 sessions (KDE Plasma/KWin, GNOME/Mutter) where DISPLAY is set, we fall back
-to the X11 adapter via XWayland, which resolves any focused XWayland window
-— that covers most games (Steam/Proton, Lutris). Focused native-Wayland
+to the X11 adapter via XWayland, which resolves any focused XWayland window.
+That covers most games (Steam/Proton, Lutris). Focused native-Wayland
 windows yield no result on those compositors, so detection returns None.
 """
 
@@ -170,7 +170,7 @@ def list_candidate_windows() -> list[ActiveWindow]:
     """All visible X clients with process/class info. Fallback for
     compositors where the focused window can't be read reliably (KWin only
     partially mirrors focus into XWayland's EWMH properties, #102). Empty on
-    non-X11 adapters — Hyprland and Sway report focus natively."""
+    non-X11 adapters, Hyprland and Sway report focus natively."""
     if _ADAPTER is not _get_active_window_x11:
         return []
     try:
@@ -323,7 +323,7 @@ def pointer_display_supported() -> bool:
 
 
 def detection_tools_status() -> dict:
-    """Which X11 window-detection tools are installed — for doctor and logs."""
+    """Which X11 window-detection tools are installed, for doctor and logs."""
     import shutil
     return {tool: bool(shutil.which(tool)) for tool in ("xdotool", "xprop", "wmctrl")}
 
@@ -362,7 +362,7 @@ def get_active_window() -> Optional[ActiveWindow]:
 
 
 def supported_compositor() -> bool:
-    """For UI display — whether v1 supports the running compositor."""
+    """For UI display, whether v1 supports the running compositor."""
     return _ADAPTER is not None
 
 

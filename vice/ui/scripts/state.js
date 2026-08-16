@@ -1,5 +1,5 @@
 'use strict';
-// state.js — shared mutable state + IS_NATIVE detection
+// state.js: shared mutable state + IS_NATIVE detection
 
 // ───── State (defaults; overwritten by /api/config on init)
 let cfg = {
@@ -38,7 +38,7 @@ let trimTotal = 0;
 let dragging  = null;
 
 // Detect the pywebview native window. vice-app passes ?native=1 in the URL
-// so we know this at module-load time — pywebview's own window.pywebview is
+// so we know this at module-load time, pywebview's own window.pywebview is
 // only injected after DOMContentLoaded, too late to show the Quit pill on
 // the first paint.
 // Software-compositing mode: vice-app appends sw=1 when GPU compositing

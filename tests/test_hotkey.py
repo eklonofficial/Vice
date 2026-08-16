@@ -32,7 +32,7 @@ class _FakeDevice:
             yield ev
         while True:
             await asyncio.sleep(3600)
-            yield  # pragma: no cover — never reached
+            yield  # pragma: no cover, never reached
 
     def close(self) -> None:
         self.closed = True
@@ -169,7 +169,7 @@ class ComboDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self._run_events("KEY_F9", events), 1)
 
     async def test_modifier_held_does_not_fire_bare_binding(self) -> None:
-        # Alt+F9 must not trigger a plain F9 binding — they are distinct.
+        # Alt+F9 must not trigger a plain F9 binding, they are distinct.
         events = [_key_event("KEY_LEFTALT", 1), _key_event("KEY_F9", 1)]
         self.assertEqual(await self._run_events("KEY_F9", events), 0)
 

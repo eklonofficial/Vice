@@ -1,5 +1,5 @@
 'use strict';
-// perf.js — visual effects mode: full glass, reduced, or measured
+// perf.js: visual effects mode: full glass, reduced, or measured
 
 // ═══════════════════════════════════════════════════════════════════
 // Visual effects

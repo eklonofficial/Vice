@@ -1,4 +1,4 @@
-/* ── clips.css — page header, clip grid, glass clip cards ────────────────── */
+/* ── clips.css: page header, clip grid, glass clip cards ────────────────── */
 /* ── Generic page header ────────────────────────────────────────── */
 .page-hd { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 24px; gap: 16px; flex-wrap: wrap; }
 .page-sub { font-size: 13px; color: var(--text-dim); margin-top: 4px; }
@@ -29,8 +29,8 @@
 /* ── Clip cards ─────────────────────────────────────────────────── */
 .clips-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
 
-/* content-visibility lets the engine skip layout, paint and — the part that
-   matters — the decoded thumbnail bitmap for cards scrolled out of view. A
+/* content-visibility lets the engine skip layout, paint and, the part that
+   matters, the decoded thumbnail bitmap for cards scrolled out of view. A
    640px thumb costs about 900 KB decoded, so a large reel was holding a few
    hundred MB of bitmaps it could not see, plus a backdrop blur per card. The
    auto keyword means the remembered size is used once a card has rendered
@@ -72,6 +72,16 @@
   font-size: 9px; font-weight: 600;
   padding: 2px 7px; border-radius: 6px; letter-spacing: 0.08em;
   box-shadow: 0 0 14px rgba(var(--accent-rgb),0.5); }
+
+/* A clip ffmpeg cannot read. Listed rather than hidden, because the file is
+   the user's recording and may still be recoverable by hand (#154). */
+.clip-broken-badge { position: absolute; bottom: 7px; left: 7px;
+  background: rgba(180,45,45,.85); color: #fff;
+  font-size: 9px; font-weight: 600;
+  padding: 2px 7px; border-radius: 6px; letter-spacing: 0.08em; }
+.clip-card-broken .thumb-play-overlay { display: none; }
+.clip-broken-note { margin-top: 4px; color: #fcd34d; font-size: 10px;
+  white-space: normal; }
 
 .clip-body { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 11px 13px 12px; }
 .clip-copy { flex: 1 1 0%; min-width: 0; transition: flex-basis .22s var(--ease); }

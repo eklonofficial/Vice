@@ -18,7 +18,7 @@ def _make_video(path: Path, *, fragmented: bool, duration: float = 1.0) -> None:
         "-f", "lavfi", "-i", f"testsrc=duration={duration}:size=128x72:rate=10",
     ]
     if fragmented:
-        # Fragmented MP4 has no per-stream duration tags — this is what
+        # Fragmented MP4 has no per-stream duration tags, this is what
         # gpu-screen-recorder writes for replay clips.
         cmd += ["-movflags", "frag_keyframe+empty_moov"]
     cmd += ["-y", str(path)]
@@ -41,7 +41,7 @@ class ProbeMediaTests(unittest.IsolatedAsyncioTestCase):
     async def test_probe_reads_duration_of_fragmented_mp4(self) -> None:
         """Regression test for #81: fragmented MP4 has no stream duration
         tag, and probing only the stream field reported 0 for healthy
-        clips — triggering bogus timeouts and a destructive remux."""
+        clips, triggering bogus timeouts and a destructive remux."""
         with tempfile.TemporaryDirectory() as tmp:
             clip = Path(tmp) / "clip.mp4"
             _make_video(clip, fragmented=True)

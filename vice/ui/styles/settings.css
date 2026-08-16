@@ -1,4 +1,4 @@
-/* ── settings.css — rail, glass cards, inputs, sliders, swatches ─────────── */
+/* ── settings.css: rail, glass cards, inputs, sliders, swatches ─────────── */
 .settings-layout { display: flex; gap: 20px; align-items: flex-start; }
 @media (max-width: 900px) { .settings-layout { flex-direction: column; } .settings-rail { position: static; flex-direction: row; flex-wrap: wrap; width: 100%; } }
 
@@ -25,6 +25,12 @@
   gap: 24px; border-bottom: 1px solid rgba(255,255,255,.06); }
 .settings-row:last-child { border-bottom: none; }
 .settings-row-stack { align-items: flex-start; }
+
+/* Custom notification sound paths, one row per event. */
+.sound-grid { display: grid; grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 10px; align-items: center; min-width: 0; }
+.sound-grid label { color: var(--text-dim); font-size: 11.5px; white-space: nowrap; }
+.sound-grid input { min-width: 0; width: 100%; }
 /* Long device labels must never squeeze the label column or overflow the
    card: the label keeps a readable width and wide controls get capped. */
 .settings-row > .s-label { flex: 1 1 45%; min-width: 170px; }
@@ -100,6 +106,9 @@ input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.25); }
 .track-add-row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .track-add-row select { max-width: min(260px, 100%); min-width: 0; }
 .track-list { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; max-width: 100%; }
+/* Says which tracks the desktop-audio toggle is about to silence (#137). */
+.track-warning { margin-top: 7px; color: #fcd34d; font-size: 11px;
+  line-height: 1.45; text-align: right; max-width: 100%; }
 .track-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
   padding: 4px 10px; border-radius: var(--r-pill);
   background: rgba(255,255,255,0.05); box-shadow: inset 0 0 0 1px rgba(255,255,255,.1);

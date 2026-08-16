@@ -1,5 +1,5 @@
 """
-Vice — Linux game clip recorder daemon + CLI.
+Vice: Linux game clip recorder daemon + CLI.
 
 Commands:
   vice start          Start the daemon (recorder + hotkey listener + share server)
@@ -45,7 +45,7 @@ from .config import (
 )
 from .hotkey import HotkeyListener, can_access_hotkeys, list_available_keys
 from .media import cleanup_temp_files
-from .recorder import create_recorder
+from .recorder import create_recorder, reap_orphaned_captures
 from .runtime import (
     actual_home_dir,
     normalize_runtime_environment,
@@ -157,7 +157,7 @@ class ViceDaemon:
         self._ready = False
         # Why the recorder is not running, for the UI banner. Empty when it is.
         self._recorder_error = ""
-        # Discord Rich Presence — default enabled, but only shown for matched games.
+        # Discord Rich Presence, default enabled, but only shown for matched games.
         self._discord_rpc = None  # type: ignore[var-annotated]
         self._discord_task: Optional[asyncio.Task] = None
         self._discord_client_id: Optional[str] = None
@@ -197,6 +197,15 @@ class ViceDaemon:
         Path("/tmp/vice").mkdir(parents=True, exist_ok=True)
         out_dir = resolve_path(self.cfg.output.directory)
 
+        # A capture process runs in its own session so its helper can be
+        # reaped with it (#129), which also means kill -9 on the daemon
+        # leaves it recording forever and the next start adds another one
+        # next to it (#121). Clear any survivor before starting our own.
+        try:
+            reap_orphaned_captures()
+        except Exception:
+            log.exception("Could not check for a leftover recorder")
+
         # Share server (web UI + REST API + WebSocket)
         if self.cfg.sharing.enabled:
             self.share = ShareServer(self.cfg)
@@ -233,21 +242,21 @@ class ViceDaemon:
             try:
                 server.close()
                 await server.wait_closed()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("IPC server did not close cleanly: %s", exc)
             try:
                 await self.hotkeys.stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Hotkey listener did not stop cleanly: %s", exc)
             try:
                 await self.recorder.stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Recorder did not stop cleanly: %s", exc)
             if self.share:
                 try:
                     await self.share.stop()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("Share server did not stop cleanly: %s", exc)
             for p in (PID_FILE, SOCKET_FILE):
                 try:
                     if p.exists():
@@ -725,7 +734,7 @@ class ViceDaemon:
             "timestamps": {"start": int(self._discord_started_at)},
             "assets": {
                 "large_image": "vice_logo",
-                "large_text": "Vice — Linux clip recorder",
+                "large_text": "Vice, Linux clip recorder",
             },
         }
 
@@ -760,7 +769,7 @@ class ViceDaemon:
             if not (tools["xdotool"] and tools["xprop"]):
                 log.warning(
                     "Game detection on this compositor needs xdotool and xprop "
-                    "(wmctrl helps too) — install them for Discord RPC and "
+                    "(wmctrl helps too), install them for Discord RPC and "
                     "game-tagged clips."
                 )
         try:
@@ -877,7 +886,7 @@ class ViceDaemon:
     def _clip_game_tag(self) -> Optional[str]:
         """Focused game name for clip filename tagging, or None.
 
-        Sync (the recorder runs it in a thread — window detection shells
+        Sync (the recorder runs it in a thread, window detection shells
         out to the compositor). Detection only matches the curated games
         list, so arbitrary window titles never end up in filenames.
 
@@ -918,7 +927,7 @@ class ViceDaemon:
         proc = (win.get("process") or "").lower()
         cls  = (win.get("class") or "").lower()
         haystacks = (proc, cls)
-        # User custom games first — explicit user intent beats the bundled list.
+        # User custom games first, explicit user intent beats the bundled list.
         custom = [(g.name, g.matches) for g in self.cfg.discord.custom_games]
         bundled = [(g["name"], g.get("matches")) for g in _DEFAULT_GAMES]
         return _best_game_match(custom, haystacks) or _best_game_match(bundled, haystacks)
@@ -1051,7 +1060,8 @@ class ViceDaemon:
             entry   = {"time": round(elapsed, 3), "label": label, "color": color}
             self._session_highlights.append(entry)
             click.echo(f"[Vice] Session highlight at {elapsed:.1f}s", err=True)
-            audio.play_highlight(self.cfg.notifications.sound_volume)
+            audio.play_highlight(self.cfg.notifications.sound_volume,
+                                 self.cfg.notifications.highlight_sound)
             if self.share:
                 asyncio.create_task(
                     self.share.broadcast({
@@ -1073,13 +1083,26 @@ class ViceDaemon:
             click.echo("[Vice] Clip triggered!", err=True)
             if self.share:
                 await self.share.broadcast({"type": "clip_saving"})
-            audio.play_clip(self.cfg.notifications.sound_volume)
+            # The sound stays here rather than moving to the success path:
+            # flushing a long buffer takes seconds and immediate feedback is
+            # the point of a clipper. Failure gets its own tone instead, so
+            # the confirmation is never a lie (#154).
+            audio.play_clip(self.cfg.notifications.sound_volume,
+                            self.cfg.notifications.clip_sound)
             saved = await self.recorder.save_clip(duration)
-            if saved is None and self.share:
-                await self.share.broadcast({
-                    "type": "clip_error",
-                    "error": "Clip save failed. Check vice.log for details.",
-                })
+            if saved is None:
+                audio.play_clip_failed(self.cfg.notifications.sound_volume,
+                                       self.cfg.notifications.clip_failed_sound)
+                if self.share:
+                    await self.share.broadcast({
+                        "type": "clip_error",
+                        "error": self._clip_error_text(),
+                    })
+
+    def _clip_error_text(self) -> str:
+        """What to show the user when a clip did not save."""
+        reason = getattr(self.recorder, "last_clip_error", "") or ""
+        return reason or "Clip save failed. Check vice.log for details."
 
     def _clip_task_done(self, task: asyncio.Task) -> None:
         if self._clip_task is task:
@@ -1093,7 +1116,7 @@ class ViceDaemon:
             if self.share:
                 asyncio.create_task(self.share.broadcast({
                     "type": "clip_error",
-                    "error": "Clip save failed. Check vice.log for details.",
+                    "error": self._clip_error_text(),
                 }))
 
     async def _handle_session_toggle(self) -> None:
@@ -1111,7 +1134,8 @@ class ViceDaemon:
             return
         self._session_active = True
         self._session_path   = path
-        audio.play_session_start(self.cfg.notifications.sound_volume)
+        audio.play_session_start(self.cfg.notifications.sound_volume,
+                                 self.cfg.notifications.session_start_sound)
         click.echo(f"[Vice] Session recording started → {path}", err=True)
         if self.share:
             asyncio.create_task(
@@ -1128,7 +1152,8 @@ class ViceDaemon:
         path = await self.recorder.stop_session()
         self._session_path = None
 
-        audio.play_session_end(self.cfg.notifications.sound_volume)
+        audio.play_session_end(self.cfg.notifications.sound_volume,
+                               self.cfg.notifications.session_end_sound)
         if path and self.share:
             slug = path.stem
             url  = self.share.add_clip(path)
@@ -1395,7 +1420,7 @@ def _http_probe(url: str, timeout: float = 2.0) -> tuple[bool, str]:
 @click.version_option(__version__, prog_name="vice")
 @click.pass_context
 def cli(ctx: click.Context) -> None:
-    """Vice — Linux game clip recorder (Medal.tv for Linux)."""
+    """Vice, Linux game clip recorder (Medal.tv for Linux)."""
     normalize_runtime_environment()
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
@@ -1468,7 +1493,7 @@ def ui() -> None:
         cfg = load_config()
         url = f"http://localhost:{cfg.sharing.port}/"
         if not raw:
-            click.echo("Daemon may not be running — opening default port anyway.")
+            click.echo("Daemon may not be running, opening default port anyway.")
     subprocess.Popen(
         ["xdg-open", url],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -1616,7 +1641,7 @@ def show_config() -> None:
     if CONFIG_PATH.exists():
         click.echo(CONFIG_PATH.read_text())
     else:
-        click.echo("(no config file yet — will be created on first `vice start`)")
+        click.echo("(no config file yet, will be created on first `vice start`)")
 
 
 @cli.command("open-config")
@@ -1661,7 +1686,7 @@ def clips() -> None:
 @cli.command()
 @click.option("--yes", "-y", is_flag=True, help="Skip all confirmation prompts.")
 def uninstall(yes: bool) -> None:
-    """Remove Vice cleanly — config, service, and optionally clips."""
+    """Remove Vice cleanly, config, service, and optionally clips."""
     click.echo("Vice uninstaller\n")
 
     if _installed_via_aur():

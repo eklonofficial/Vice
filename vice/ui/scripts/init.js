@@ -1,5 +1,5 @@
 'use strict';
-// init.js — DOMContentLoaded bootstrap
+// init.js: DOMContentLoaded bootstrap
 
 // The splash covers the first paint so the grid, stats and playlists are not
 // watched popping into place. It is dismissed once the first round of data
@@ -100,7 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 
-  // Initial backend data — chained because order matters
+  // Initial backend data, chained because order matters
   fetchConfig()
     .then(() => Promise.all([fetchClips(), fetchPlaylists(), fetchStatus()]))
     .catch(() => {})

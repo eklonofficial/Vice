@@ -1,4 +1,4 @@
-/* ── about.css — hero card, system + credits grid, danger zone ───────────── */
+/* ── about.css: hero card, system + credits grid, danger zone ───────────── */
 .about-wrap { max-width: 760px; display: flex; flex-direction: column; gap: 14px; }
 .about-hero { background: var(--card-sheen), rgba(255,255,255,.02); backdrop-filter: blur(26px);
   border-radius: var(--r-panel); padding: 22px;

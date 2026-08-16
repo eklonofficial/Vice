@@ -1,4 +1,4 @@
-/* ── nav.css — content top bar, ghost squares, rec chip, pill buttons ────── */
+/* ── nav.css: content top bar, ghost squares, rec chip, pill buttons ────── */
 .content-topbar { display: flex; align-items: center; gap: 10px; padding: 16px 28px 0; flex: none; }
 
 .nav-ghosts { display: flex; gap: 4px; }

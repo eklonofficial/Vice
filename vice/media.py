@@ -29,34 +29,61 @@ async def probe_media(path: Path) -> Optional[dict]:
 
     Returns ``{"width", "height", "duration", "vcodec", "audio_streams"}``
     or ``None`` when ffprobe fails or the file has no video stream.
+    """
+    meta, _ = await probe_media_detailed(path)
+    return meta
+
+
+async def probe_media_detailed(path: Path) -> tuple[Optional[dict], str]:
+    """Probe *path*, returning the metadata and why it failed.
+
+    Same result as :func:`probe_media`, plus ffprobe's own explanation when
+    the probe comes back empty. Vice used to run ffprobe with ``-v quiet``
+    and discard stderr, so a clip that could not be read produced a log line
+    saying only that JSON parsing failed. That cost #154 three round trips
+    with the reporter, so the reason is kept and logged now.
 
     Duration prefers the container (format) value over the stream value:
-    fragmented MP4 — which gpu-screen-recorder writes for replay clips —
-    has no per-stream duration tag, so reading only the stream field
-    reports 0 for perfectly healthy files.
+    fragmented MP4, which gpu-screen-recorder writes for replay clips, has
+    no per-stream duration tag, so reading only the stream field reports 0
+    for perfectly healthy files.
     """
+    stderr = b""
     try:
         proc = await asyncio.create_subprocess_exec(
-            "ffprobe", "-v", "quiet", "-print_format", "json",
+            "ffprobe", "-v", "error", "-print_format", "json",
             "-show_format", "-show_streams", str(path),
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
         data = json.loads(stdout)
     except FileNotFoundError:
-        log.error("ffprobe not found — install ffmpeg to read clip metadata")
-        return None
+        reason = "ffprobe not found, install ffmpeg to read clip metadata"
+        log.error("%s", reason)
+        return None, reason
+    except asyncio.TimeoutError:
+        reason = "ffprobe timed out after 15s"
+        log.warning("Could not read %s: %s", path.name, reason)
+        return None, reason
     except Exception as exc:
-        log.debug("ffprobe failed for %s: %s", path.name, exc)
-        return None
+        reason = _ffprobe_reason(stderr, path) or str(exc)
+        log.warning("Could not read %s: %s", path.name, reason)
+        return None, reason
+
+    if proc.returncode != 0 or not data:
+        reason = _ffprobe_reason(stderr, path) or f"ffprobe exited {proc.returncode}"
+        log.warning("Could not read %s: %s", path.name, reason)
+        return None, reason
 
     video = next(
         (s for s in data.get("streams", []) if s.get("codec_type") == "video"),
         None,
     )
     if video is None:
-        return None
+        reason = "the file has no video stream"
+        log.warning("Could not read %s: %s", path.name, reason)
+        return None, reason
 
     duration = _parse_duration(data.get("format", {}).get("duration"))
     if duration <= 0:
@@ -70,7 +97,31 @@ async def probe_media(path: Path) -> Optional[dict]:
         "duration": duration,
         "vcodec": (video.get("codec_name") or "").lower(),
         "audio_streams": audio_streams,
-    }
+    }, ""
+
+
+def _ffprobe_reason(stderr: Optional[bytes], path: Optional[Path] = None) -> str:
+    """The most useful line of ffprobe's stderr, short enough for a toast.
+
+    ffprobe prefixes its message with the full path it was given, which is
+    redundant next to a log line that already names the file and too long
+    for the UI, so it comes off.
+    """
+    if not stderr:
+        return ""
+    lines = [
+        line.strip()
+        for line in stderr.decode("utf-8", "replace").splitlines()
+        if line.strip()
+    ]
+    if not lines:
+        return ""
+    reason = lines[-1]
+    if path:
+        prefix = f"{path}: "
+        if reason.startswith(prefix):
+            reason = reason[len(prefix):]
+    return reason[:300]
 
 
 def _parse_duration(raw) -> float:

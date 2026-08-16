@@ -1,5 +1,5 @@
 'use strict';
-// trim.js — trim modal: video + draggable timeline handles
+// trim.js: trim modal: video + draggable timeline handles
 
 // ═══════════════════════════════════════════════════════════════════
 // Trim modal

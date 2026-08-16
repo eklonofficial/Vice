@@ -1,5 +1,5 @@
 'use strict';
-// status.js — recording status chip + session timer
+// status.js: recording status chip + session timer
 
 // ═══════════════════════════════════════════════════════════════════
 // Recording status + session timer

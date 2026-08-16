@@ -1,5 +1,5 @@
 'use strict';
-// editor-core.js — timeline editor state, project ops, autosave, keyboard
+// editor-core.js: timeline editor state, project ops, autosave, keyboard
 
 // ═══════════════════════════════════════════════════════════════════
 // Editor state
@@ -140,7 +140,7 @@ function edRefreshMissing() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Undo / redo — JSON snapshots pushed on every committed edit
+// Undo / redo, JSON snapshots pushed on every committed edit
 // ═══════════════════════════════════════════════════════════════════
 function edSnapshot() {
   edUndoStack.push(JSON.stringify(edProject));

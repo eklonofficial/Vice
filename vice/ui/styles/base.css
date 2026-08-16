@@ -1,11 +1,11 @@
-/* ── base.css — fonts, reset, tokens, app shell, ambient background ──────── */
+/* ── base.css: fonts, reset, tokens, app shell, ambient background ──────── */
 /* ── Local fonts (variable: one woff2 covers all weights) ───────── */
 @font-face { font-family: 'Geist'; font-weight: 100 900; font-style: normal; src: url('/fonts/Geist.woff2') format('woff2-variations'); font-display: swap; }
 @font-face { font-family: 'Inter'; font-weight: 100 900; font-style: normal; src: url('/fonts/Inter.woff2') format('woff2-variations'); font-display: swap; }
 @font-face { font-family: 'JetBrains Mono'; font-weight: 100 900; font-style: normal; src: url('/fonts/JetBrainsMono.woff2') format('woff2-variations'); font-display: swap; }
 
 /* ════════════════════════════════════════════════════════════════════
-   VICE — Liquid Glass dark UI
+   VICE, Liquid Glass dark UI
    Cold void canvas · drifting theme glows · glass panels · pill geometry
    ════════════════════════════════════════════════════════════════════ */
 

@@ -1,5 +1,5 @@
 'use strict';
-// editor-timeline.js — ruler, lanes, items, drag/trim/snap, junctions, menus
+// editor-timeline.js: ruler, lanes, items, drag/trim/snap, junctions, menus
 
 const ED_RAIL = 54;
 let edDropHint = null;   // {trackId, t, w} or {trackId, junctionX}

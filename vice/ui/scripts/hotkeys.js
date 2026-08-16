@@ -1,5 +1,5 @@
 'use strict';
-// hotkeys.js — rebind clip key (e.code -> evdev KEY_*)
+// hotkeys.js: rebind clip key (e.code -> evdev KEY_*)
 
 // ═══════════════════════════════════════════════════════════════════
 // Hotkey capture (e.code → evdev KEY_* names)
@@ -34,7 +34,7 @@ function codeToEvdev(code) {
   return named[code] || null;
 }
 
-// Modifiers, in the canonical Ctrl/Alt/Shift/Meta order the backend stores.
+// Modifiers: in the canonical Ctrl/Alt/Shift/Meta order the backend stores.
 // Left names are canonical; either physical key produces the same combo.
 const MOD_ORDER = [
   ['ctrlKey', 'KEY_LEFTCTRL'],
@@ -73,7 +73,7 @@ function startKeyCapture(buttonId = 's-key-btn', inputId = 's-key', persistPrima
       return;
     }
     const main = codeToEvdev(e.code);
-    if (!main) { toast('Unsupported key — try another', 'err'); return; }
+    if (!main) { toast('Unsupported key, try another', 'err'); return; }
     const evdev = comboFromEvent(e, main);
     input.value = evdev;
     btn.textContent = evdev;
@@ -83,7 +83,7 @@ function startKeyCapture(buttonId = 's-key-btn', inputId = 's-key', persistPrima
     if (persistPrimary) {
       persistConfig({ hotkeys: { clip: evdev } })
         .then(() => { toast(`Hotkey saved: ${evdev}`, 'ok'); populateHomeFromCfg(); })
-        .catch(() => toast('Key captured but save failed — press Save Settings', 'err'));
+        .catch(() => toast('Key captured but save failed, press Save Settings', 'err'));
     }
   };
   document.addEventListener('keydown', onKey, true);

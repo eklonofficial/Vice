@@ -1,5 +1,5 @@
 'use strict';
-// editor-preview.js — stage playback: per-track video pool, rAF clock,
+// editor-preview.js: stage playback: per-track video pool, rAF clock,
 // transition approximation, draggable text overlays, inspector
 
 let edRaf = null;
@@ -80,7 +80,7 @@ function edInitStage() {
 // Video pool
 // ═══════════════════════════════════════════════════════════════════
 
-// Detaching an element does not free what it decoded — the source has to go
+// Detaching an element does not free what it decoded, the source has to go
 // first, and load() is what actually tears the player down.
 function edDropVideo(v) {
   v.pause();

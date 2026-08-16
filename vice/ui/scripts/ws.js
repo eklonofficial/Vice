@@ -1,5 +1,5 @@
 'use strict';
-// ws.js — WebSocket connect + message dispatch
+// ws.js: WebSocket connect + message dispatch
 
 // ═══════════════════════════════════════════════════════════════════
 // WebSocket
@@ -67,7 +67,7 @@ function handleWS(msg) {
     toast(msg.error || 'Public share tunnel unavailable', 'err');
   } else if (msg.type === 'session_start') {
     setRecStatus(true, runtimeBackend, true);
-    toast(`Session recording started — ${hotkeyLabel()} marks highlights, double-tap to stop`, 'ok');
+    toast(`Session recording started, ${hotkeyLabel()} marks highlights, double-tap to stop`, 'ok');
   } else if (msg.type === 'session_stop') {
     setRecStatus(false, runtimeBackend, false);
     toast('Session recording saved!', 'ok');

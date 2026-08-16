@@ -1,4 +1,4 @@
-/* ── sidebar.css — persistent left panel: brand, search, nav, playlists ──── */
+/* ── sidebar.css: persistent left panel: brand, search, nav, playlists ──── */
 /* Floating rounded panel. The tint is kept very light so the ambient
    gradient runs seamlessly through it; the edge ring is the separator. */
 #sidebar { width: 236px; flex: none; display: flex; flex-direction: column; gap: 2px;

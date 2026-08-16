@@ -1,5 +1,5 @@
 """
-Vice share server — HTTP server that powers:
+Vice share server, HTTP server that powers:
   • A local control UI/server  (/ → UI, /api/*, /ws, media)
   • A public share-only server  (/c/{slug}, /v/{slug}, /t/{slug})
 
@@ -43,7 +43,7 @@ from .editor import (EditorProjectStore, ExportBusy, ExportManager, Source,
                      build_export_cmd, default_export_name, project_extent,
                      sanitize_export_name, text_file_contents,
                      validate_project)
-from .media import probe_media
+from .media import probe_media, probe_media_detailed
 from .playlists import PlaylistStore, build_tag_index
 from .recorder import (KEEP_ALL_STREAMS, list_display_options,
                        list_gsr_audio_sources, slugify_clip_name)
@@ -151,7 +151,7 @@ def _resolve_ui_asset(kind: str, name: str) -> Path | None:
             continue
     return None
 
-# Thumbnails go in the cache dir — separate from the clip files.
+# Thumbnails go in the cache dir, separate from the clip files.
 THUMB_DIR      = actual_home_dir() / ".cache" / "vice" / "thumbs"
 # H.264 preview copies of clips the native WebEngine can't decode (H.265).
 PROXY_DIR      = actual_home_dir() / ".cache" / "vice" / "proxies"
@@ -326,7 +326,7 @@ _PROBE_DEFAULTS = {"width": 1920, "height": 1080, "duration": 0, "vcodec": ""}
 async def _remux_moov(path: Path) -> bool:
     """Try to recover `path` via `ffmpeg -c copy -movflags +faststart`.
 
-    Used for clips whose MP4 container is damaged (no moov atom) — happens
+    Used for clips whose MP4 container is damaged (no moov atom), happens
     when the encoder was killed mid-finalize. The original file is only
     replaced when the remuxed copy probes as a sane video of comparable
     size; a remux that produces a near-empty file means the input was
@@ -356,7 +356,7 @@ async def _remux_moov(path: Path) -> bool:
                 return True
             log.warning(
                 "Remux of %s produced an invalid or truncated file "
-                "(duration=%.2fs, %d → %d bytes) — keeping the original",
+                "(duration=%.2fs, %d → %d bytes), keeping the original",
                 path.name,
                 remuxed["duration"] if remuxed else 0.0,
                 orig_size,
@@ -366,8 +366,8 @@ async def _remux_moov(path: Path) -> bool:
         log.warning("Remux of %s failed: %s", path.name, exc)
     try:
         tmp.unlink(missing_ok=True)
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("Could not remove the remux temp file %s: %s", tmp.name, exc)
     return False
 
 
@@ -375,24 +375,37 @@ async def _ffprobe(path: Path) -> dict:
     """Return {"width", "height", "duration"} via ffprobe.
 
     If the file cannot be probed at all, its container is probably missing
-    the moov atom — try one (validated, non-destructive) remux + re-probe
+    the moov atom, so try one (validated, non-destructive) remux and re-probe
     before giving up.
+
+    A file that still cannot be read comes back carrying "unreadable" and the
+    reason, so the gallery can say so. It used to fall back to the defaults
+    and be listed as an ordinary clip of 0:00 with no thumbnail, which is
+    what a broken clip looks like to the person who recorded it (#154).
     """
-    meta = await probe_media(path)
+    meta, why = await probe_media_detailed(path)
     if meta and meta["duration"] > 0:
         return meta
     if path.suffix.lower() != ".mp4":
         # The remux below repairs MP4 moov atoms; other containers are
         # served as-is.
-        return meta or dict(_PROBE_DEFAULTS)
-    log.warning("ffprobe cannot read %s — attempting moov remux", path.name)
+        return meta or _unreadable_meta(why)
+    log.warning("ffprobe cannot read %s (%s), attempting moov remux",
+                path.name, why or "no reason from ffprobe")
     if await _remux_moov(path):
-        meta = await probe_media(path)
+        meta, why = await probe_media_detailed(path)
         log.info(
-            "Remuxed %s — duration now %.2fs",
+            "Remuxed %s, duration now %.2fs",
             path.name, meta["duration"] if meta else 0.0,
         )
-    return meta or dict(_PROBE_DEFAULTS)
+    return meta or _unreadable_meta(why)
+
+
+def _unreadable_meta(reason: str) -> dict:
+    meta = dict(_PROBE_DEFAULTS)
+    meta["unreadable"] = True
+    meta["unreadable_reason"] = reason or "ffprobe could not read this file"
+    return meta
 
 
 async def _make_thumb(path: Path, duration: float = 0.0) -> Path:
@@ -663,14 +676,14 @@ class ShareServer:
         for ws in list(self._ws_clients):
             try:
                 await ws.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("A websocket client did not close cleanly: %s", exc)
         if self._tunnel_proc:
             try:
                 self._tunnel_proc.terminate()
                 await asyncio.wait_for(self._tunnel_proc.wait(), timeout=5)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("cloudflared did not stop cleanly: %s", exc)
         if self._local_runner:
             await self._local_runner.cleanup()
         if self._public_runner:
@@ -769,13 +782,18 @@ class ShareServer:
             # Lets the UI request an H.264 preview proxy for codecs the native
             # WebEngine can't decode (H.265).
             "vcodec":     meta.get("vcodec",   ""),
+            # ffmpeg cannot read this file. It is still listed, because it is
+            # the user's recording and may be recoverable by hand, but the
+            # card says so instead of showing a 0:00 clip that will not play.
+            "unreadable": bool(meta.get("unreadable")),
+            "unreadable_reason": meta.get("unreadable_reason", ""),
             # Keep share links public, but serve media via local relative URLs
             # so the app UI never fetches video through an external tunnel.
             "share_url":  f"{public_base}/c/{enc}",
             "share_is_public": self.public_is_reachable(),
             # Cache-bust media URLs by clip file identity: deleted clip numbers
             # get reused (Vice_Clip_5 can name a brand-new file), and a trim
-            # rewrites the file under the same slug — without the version the
+            # rewrites the file under the same slug, without the version the
             # browser may play a cached older video for the clip it shows.
             "video_url":  f"/v/{enc}?v={thumb_rev}",
             "thumb_url":  thumb_url,
@@ -843,7 +861,7 @@ class ShareServer:
         suffix = path.suffix.lower() or ".mp4"
         enc = quote(slug, safe="")
         page = _EMBED_PAGE.format(
-            title=html.escape(f"Vice clip — {slug}", quote=True),
+            title=html.escape(f"Vice clip, {slug}", quote=True),
             page_url=f"{base}/c/{enc}",
             video_url=f"{base}/v/{enc}{suffix}",
             video_type="video/x-matroska" if suffix == ".mkv" else "video/mp4",
@@ -1427,7 +1445,7 @@ class ShareServer:
         # Use a shell subprocess in a *new session* so it survives after we
         # send SIGTERM to this daemon process.  The `sleep 2` delay lets the
         # daemon finish shutting down (and the Unix socket disappear) before
-        # the uninstall script tries to stop it via IPC — avoiding a deadlock
+        # the uninstall script tries to stop it via IPC, avoiding a deadlock
         # where the uninstall blocks waiting to talk to a daemon that is
         # waiting for the uninstall to finish.
         exe = sys.executable.replace("'", r"\'")
@@ -1645,7 +1663,7 @@ class ShareServer:
         return web.json_response({"ok": True, "update": found})
 
     async def _api_quit(self, _: web.Request) -> web.Response:
-        """Stop the daemon (browser-mode quit — native window uses pywebview API)."""
+        """Stop the daemon (browser-mode quit, native window uses pywebview API)."""
         import os, signal as _sig
         response = web.json_response({"ok": True})
         asyncio.get_event_loop().call_later(0.2, lambda: os.kill(os.getpid(), _sig.SIGTERM))

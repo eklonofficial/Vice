@@ -1,5 +1,5 @@
 'use strict';
-// theme.js — accent-color swatches with localStorage persistence
+// theme.js: accent-color swatches with localStorage persistence
 
 // ═══════════════════════════════════════════════════════════════════
 // Theme (5 swatches; persists in localStorage)

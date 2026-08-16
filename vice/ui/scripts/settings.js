@@ -1,12 +1,21 @@
 'use strict';
-// settings.js — settings form, persistence, mic/audio/tunnel toggles
+// settings.js: settings form, persistence, mic/audio/tunnel toggles
 
 // Separate-audio-track ids in order (track 1 first). Mirrors
 // cfg.recording.audio_tracks; empty means "mix into one track".
 let audioTracks = [];
 
+// Field id to notifications config key, for the custom sound paths.
+const CUSTOM_SOUND_FIELDS = [
+  ['s-snd-clip',          'clip_sound'],
+  ['s-snd-clip-failed',   'clip_failed_sound'],
+  ['s-snd-session-start', 'session_start_sound'],
+  ['s-snd-session-end',   'session_end_sound'],
+  ['s-snd-highlight',     'highlight_sound'],
+];
+
 // ═══════════════════════════════════════════════════════════════════
-// Settings — fetch + save against /api/config
+// Settings: fetch + save against /api/config
 // ═══════════════════════════════════════════════════════════════════
 async function fetchConfig() {
   try {
@@ -42,6 +51,10 @@ function syncFormFromCfg() {
   const volNotify = Math.round((n.sound_volume ?? 1) * 100);
   document.getElementById('s-vol-notify').value = volNotify;
   setText('s-vol-notify-v', volNotify ? volNotify + '%' : 'Off');
+  for (const [id, key] of CUSTOM_SOUND_FIELDS) {
+    const el = document.getElementById(id);
+    if (el) el.value = n[key] ?? '';
+  }
 
   const buf = r.buffer_duration ?? 120;
   document.getElementById('s-buf').value = buf;
@@ -291,15 +304,31 @@ function renderDisplayOptions(info, selectedDisplay = null) {
         || v.includes('failed to open');
   };
   const displays = raw.filter(d => !(looksLikeError(d.id) || looksLikeError(d.label)));
-  const desired = selectedDisplay ?? '';
+  // Same fallback order as renderAudioSources: an explicit choice, then what
+  // is already picked but unsaved, then the saved config. A refresh must
+  // never be the thing that forgets which display you chose.
+  const desired = selectedDisplay
+    ?? (el.dataset.ready ? el.value : cfg.recording?.display)
+    ?? '';
   el.innerHTML = '';
+  el.dataset.ready = '1';
   el.add(new Option('Auto (backend default)', ''));
   for (const item of displays) el.add(new Option(item.label || item.id, item.id));
   if (desired && displays.some(item => item.id === desired)) {
     el.value = desired; setDisplayNote(defaultDisplayNote()); return;
   }
+  // A display the backend is not listing right now still has to survive a
+  // save. Dropping to Auto here wrote display=null on the next save and
+  // destroyed a value the user had set by hand, which is the only way to
+  // reach a monitor gpu-screen-recorder will not enumerate (#160). The
+  // audio source picker below already handles this the same way.
+  if (desired) {
+    el.add(new Option(`${desired} (saved)`, desired));
+    el.value = desired;
+    setDisplayNote(`Display "${desired}" is not being reported right now. It is still saved and will be used if it comes back.`, true);
+    return;
+  }
   el.value = '';
-  if (desired) { setDisplayNote(`Saved display "${desired}" is unavailable right now. Auto will be used.`, true); return; }
   if (info.warning) { setDisplayNote(`${info.warning} Auto will still work.`, true); return; }
   if (!displays.length) { setDisplayNote('No individual displays were detected. Auto will still work.', true); return; }
   setDisplayNote(defaultDisplayNote());
@@ -545,10 +574,56 @@ function moveAudioTrack(index, delta) {
   renderAudioTracks();
 }
 
+// Mirrors _classify_gsr_source in recorder.py. A track id can be several
+// sources joined with "|", so classification is per part.
+function trackPartKind(id) {
+  const value = (id || '').trim();
+  if (value === 'default_output') return 'monitor';
+  if (value === 'default_input') return 'input';
+  if (value.startsWith('app:') || value.startsWith('app-inverse:')) return 'app';
+  if (value.startsWith('device:')) return value.endsWith('.monitor') ? 'monitor' : 'input';
+  return 'unknown';
+}
+
+// With desktop audio off the recorder keeps only microphone sources, so a
+// game track vanishes and the user is left with just their voice with
+// nothing anywhere saying why (#137). Work out what would go, so the UI can.
+function tracksLostWithoutDesktopAudio() {
+  const dropped = [];
+  const trimmed = [];
+  for (const id of audioTracks) {
+    const parts = String(id).split('|').filter(Boolean);
+    const kept = parts.filter(p => trackPartKind(p) === 'input');
+    if (!kept.length) dropped.push(id);
+    else if (kept.length !== parts.length) trimmed.push(id);
+  }
+  return { dropped, trimmed };
+}
+
+function syncTrackWarning() {
+  const el = document.getElementById('s-track-warning');
+  if (!el) return;
+  const desktopOn = document.getElementById('s-audio')?.checked !== false;
+  const { dropped, trimmed } = tracksLostWithoutDesktopAudio();
+  if (desktopOn || (!dropped.length && !trimmed.length)) { el.hidden = true; el.textContent = ''; return; }
+  const names = dropped.map(sourceLabel).join(', ');
+  const parts = [];
+  if (dropped.length) {
+    parts.push(`"Capture desktop audio" is off, so ${dropped.length === 1 ? 'this track will not be recorded' : 'these tracks will not be recorded'}: ${names}.`);
+  }
+  if (trimmed.length) {
+    parts.push(`${trimmed.length} more will keep only their microphone sources.`);
+  }
+  parts.push('Turn desktop audio back on above to keep them.');
+  el.textContent = parts.join(' ');
+  el.hidden = false;
+}
+
 function renderAudioTracks() {
   const list = document.getElementById('s-track-list');
   if (!list) return;
   syncVolumeRows();
+  syncTrackWarning();
   list.innerHTML = '';
   // Mirror the recorder: the combined track is only added when there are at
   // least two tracks to mix, and it always becomes track 1.
@@ -635,6 +710,8 @@ async function saveSettings() {
     },
     notifications: {
       sound_volume: (+document.getElementById('s-vol-notify').value) / 100,
+      ...Object.fromEntries(CUSTOM_SOUND_FIELDS.map(([id, key]) =>
+        [key, document.getElementById(id)?.value.trim() || null])),
     },
     ui: {
       hardware_video_decode: document.getElementById('s-hw-decode').checked,

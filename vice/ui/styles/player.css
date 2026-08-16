@@ -1,4 +1,4 @@
-/* ── player.css — mini player bar (docked + floating) and viewer modal ───── */
+/* ── player.css: mini player bar (docked + floating) and viewer modal ───── */
 #player-bar { position: fixed; left: 276px; right: 28px; bottom: 20px; z-index: 30;
   display: flex; align-items: center; gap: 16px; padding: 12px 18px 12px 12px;
   border-radius: var(--r-panel); background: var(--float-sheen), rgba(16,24,44,.46);

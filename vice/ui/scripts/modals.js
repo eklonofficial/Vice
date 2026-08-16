@@ -1,5 +1,5 @@
 'use strict';
-// modals.js — tutorial / restart / wf-mic modal open/close
+// modals.js: tutorial / restart / wf-mic modal open/close
 
 // ═══════════════════════════════════════════════════════════════════
 // Tutorial / restart / wf-mic modals

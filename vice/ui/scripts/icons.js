@@ -1,5 +1,5 @@
 'use strict';
-// icons.js — inline SVG icon helpers
+// icons.js: inline SVG icon helpers
 
 // ───── Inline icon helper for dynamically-built DOM
 const ICONS = {

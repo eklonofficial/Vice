@@ -1,10 +1,10 @@
 """
-Vice recorder — manages the continuous capture buffer and clip extraction.
+Vice recorder, manages the continuous capture buffer and clip extraction.
 
 Backend priority (auto mode):
-  1. gpu-screen-recorder (gsr)  — best: native replay buffer, NVIDIA NVENC, Wayland + X11
-  2. wf-recorder                — good: Wayland (wlroots, GNOME portal, KDE portal)
-  3. ffmpeg x11grab             — fallback: X11 only
+  1. gpu-screen-recorder (gsr):  best: native replay buffer, NVIDIA NVENC, Wayland + X11
+  2. wf-recorder:                good: Wayland (wlroots, GNOME portal, KDE portal)
+  3. ffmpeg x11grab:             fallback: X11 only
 
 Environment detection
 ---------------------
@@ -18,6 +18,7 @@ Environment detection
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -36,6 +37,7 @@ from typing import Callable, List, Optional
 
 from .config import Config
 from .media import get_duration as _get_duration
+from .media import probe_media_detailed
 from .runtime import recover_wayland_display, resolve_path
 
 log = logging.getLogger("vice.recorder")
@@ -190,7 +192,7 @@ def _color_depth(rc) -> str:
     """Validated bits per channel ("8" or "10")."""
     value = str(getattr(rc, "color_depth", "") or "8").strip()
     if value not in {"8", "10"}:
-        log.warning("Unknown recording.color_depth=%r — using 8", value)
+        log.warning("Unknown recording.color_depth=%r, using 8", value)
         return "8"
     return value
 
@@ -370,7 +372,7 @@ def _container(rc) -> str:
     """Validated clip container ("mp4" or "mkv")."""
     value = (getattr(rc, "container", "") or "mp4").strip().lower()
     if value not in {"mp4", "mkv"}:
-        log.warning("Unknown recording.container=%r — using mp4", value)
+        log.warning("Unknown recording.container=%r, using mp4", value)
         return "mp4"
     return value
 
@@ -447,7 +449,7 @@ def _gsr_resolution_args(rc, extra: list[str]) -> list[str]:
         return []
     if not re.fullmatch(r"\d+x\d+", resolution):
         log.warning(
-            "Ignoring recording.resolution=%r — expected WIDTHxHEIGHT (e.g. 1920x1080)",
+            "Ignoring recording.resolution=%r, expected WIDTHxHEIGHT (e.g. 1920x1080)",
             resolution,
         )
         return []
@@ -489,8 +491,8 @@ def _detect_x11_resolution() -> Optional[str]:
         for line in out.splitlines():
             if "dimensions:" in line:
                 return line.split()[1]  # e.g. "1920x1080"
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("xdpyinfo could not report the screen size: %s", exc)
     return None
 
 
@@ -516,7 +518,7 @@ def _parse_gsr_display_lines(raw: str) -> list[dict]:
             continue
         line = line.lstrip("-*• ").strip()
         lowered = line.lower()
-        # Filter GSR diagnostic noise — `--list-capture-options` is known to
+        # Filter GSR diagnostic noise, `--list-capture-options` is known to
         # print error strings (e.g. "gsr error: for_each_active_monitor_output_drm
         # failed, ...") on systems where DRM enumeration fails. They share stdout
         # with the real options because _run_command_capture merges stdout+stderr.
@@ -823,7 +825,7 @@ def _pactl_audio_source(kind: str, preferred: str = "default") -> str:
     kind="microphone": the default input source.
 
     Falls back to `preferred` (logged at debug) when pactl is missing or
-    fails — gpu-screen-recorder resolves "default" itself, so this only
+    fails, gpu-screen-recorder resolves "default" itself, so this only
     degrades the ffmpeg/wf-recorder paths.
     """
     if preferred and preferred != "default":
@@ -929,7 +931,7 @@ def _warn_if_desktop_source_is_mic(desktop_source: str) -> None:
         return
     _warned_desktop_sources.add(desktop_source)
     log.warning(
-        "Desktop audio source %r is a microphone input — clips will have no "
+        "Desktop audio source %r is a microphone input, clips will have no "
         "desktop audio. Pick a monitor source under Settings → Audio.",
         desktop_source,
     )
@@ -1071,12 +1073,141 @@ async def _spawn_capture(cmd: list[str], stderr) -> asyncio.subprocess.Process:
     until the daemon hit EMFILE and stopped clipping (#129). Own group means
     the helper can be reaped with the recorder.
     """
-    return await asyncio.create_subprocess_exec(
+    proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=stderr,
         start_new_session=True,
     )
+    _register_capture(proc.pid, cmd)
+    return proc
+
+
+# ── Orphaned capture processes ────────────────────────────────────────────────
+#
+# Its own session is what keeps the recorder alive when the daemon is killed
+# outright: SIGTERM is handled and tears the group down, but `kill -9` and a
+# hard crash are not, so gpu-screen-recorder carries on recording with nothing
+# supervising it and the next daemon start adds a second one (#121). The
+# session cannot be given up, it is the #129 fix, so instead every capture
+# process is written down and a stale one is reaped at startup.
+
+CAPTURE_REGISTRY = Path("/tmp/vice/capture.json")
+
+
+def _register_capture(pid: int, cmd: list[str]) -> None:
+    entries = [e for e in _read_capture_registry() if e.get("pid") != pid]
+    entries.append({"pid": pid, "argv": list(cmd), "owner": os.getpid()})
+    _write_capture_registry(entries)
+
+
+def _unregister_capture(pid: int) -> None:
+    entries = [e for e in _read_capture_registry() if e.get("pid") != pid]
+    _write_capture_registry(entries)
+
+
+def _read_capture_registry() -> list[dict]:
+    try:
+        data = json.loads(CAPTURE_REGISTRY.read_text())
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as exc:
+        log.debug("Could not read %s: %s", CAPTURE_REGISTRY, exc)
+        return []
+    return [e for e in data if isinstance(e, dict)] if isinstance(data, list) else []
+
+
+def _write_capture_registry(entries: list[dict]) -> None:
+    try:
+        CAPTURE_REGISTRY.parent.mkdir(parents=True, exist_ok=True)
+        CAPTURE_REGISTRY.write_text(json.dumps(entries))
+    except OSError as exc:
+        # Losing the registry costs a reap, never a recording, so this is
+        # not worth failing a clip over.
+        log.debug("Could not write %s: %s", CAPTURE_REGISTRY, exc)
+
+
+def _process_argv(pid: int) -> Optional[list[str]]:
+    """The argv of a live process, or None when it is gone or unreadable."""
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    except OSError as exc:
+        log.debug("Could not read the command line of pid %d: %s", pid, exc)
+        return None
+    return [part.decode("utf-8", "replace") for part in raw.split(b"\0") if part]
+
+
+def reap_orphaned_captures() -> int:
+    """Kill capture processes left behind by a daemon that did not shut down.
+
+    A pid on its own proves nothing, because pids get recycled and killing
+    the wrong process would be far worse than the orphan. The recorded argv
+    has to still match what is running, or the entry is dropped untouched.
+    Returns how many were killed.
+    """
+    entries = _read_capture_registry()
+    if not entries:
+        return 0
+
+    killed = 0
+    kept: list[dict] = []
+    for entry in entries:
+        pid = entry.get("pid")
+        argv = entry.get("argv")
+        if not isinstance(pid, int) or not isinstance(argv, list):
+            continue
+        if pid == os.getpid():
+            continue
+        # A recorder whose daemon is still alive belongs to that daemon. This
+        # machine has already had two daemons running at once, and taking the
+        # working one's recorder away would be a far worse bug than the
+        # orphan this is here to clear.
+        owner = entry.get("owner")
+        if isinstance(owner, int) and owner != os.getpid() and _process_argv(owner) is not None:
+            log.info(
+                "Leaving pid %d alone, the daemon that started it (pid %d) is still running",
+                pid, owner,
+            )
+            kept.append(entry)
+            continue
+        running = _process_argv(pid)
+        if running is None:
+            continue
+        if running != [str(a) for a in argv]:
+            log.debug(
+                "Pid %d is alive but is not the recorder we started, leaving it alone",
+                pid,
+            )
+            continue
+        # Capture processes are always started with start_new_session, so a
+        # real one leads its own group. If this pid does not, the group is
+        # somebody else's and killpg would signal every process in it.
+        try:
+            if os.getpgid(pid) != pid:
+                log.warning(
+                    "Pid %d is not its own process group leader, so it is not "
+                    "one of ours. Leaving it alone.", pid,
+                )
+                continue
+        except (ProcessLookupError, PermissionError, OSError) as exc:
+            log.debug("Could not read the process group of pid %d: %s", pid, exc)
+            continue
+
+        log.warning(
+            "Found a recorder left over from a previous run (pid %d, %s). "
+            "Stopping it before starting a new one.",
+            pid, Path(argv[0]).name if argv else "?",
+        )
+        try:
+            os.killpg(pid, signal.SIGTERM)
+            killed += 1
+        except (ProcessLookupError, PermissionError, OSError) as exc:
+            log.warning("Could not stop the leftover recorder pid %d: %s", pid, exc)
+
+    _write_capture_registry(kept)
+    return killed
 
 
 def _signal_group(proc: asyncio.subprocess.Process, sig: int) -> None:
@@ -1109,8 +1240,9 @@ async def _terminate_group(proc: asyncio.subprocess.Process, timeout: float = 5.
     _signal_group(proc, signal.SIGKILL)
     try:
         await proc.wait()
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("Capture process %d was already reaped: %s", proc.pid, exc)
+    _unregister_capture(proc.pid)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1192,6 +1324,9 @@ class Recorder(ABC):
         self._session_path: Optional[Path] = None
         self._session_start: float = 0.0
         self._session_program = ""
+        # Why the last clip failed, for the toast. A generic "check the log"
+        # is no use to somebody whose clips are silently unreadable (#154).
+        self.last_clip_error = ""
 
     def on_clip_saved(self, cb: Callable[[Path], None]) -> None:
         """Register a callback invoked with the clip Path once it's ready."""
@@ -1302,6 +1437,7 @@ class Recorder(ABC):
             # Session recording uses GSR on Wayland, so the same helper can
             # be left behind here (#129).
             _signal_group(self._session_proc, signal.SIGKILL)
+            _unregister_capture(self._session_proc.pid)
             self._session_proc = None
             self._session_program = ""
             return None
@@ -1430,8 +1566,8 @@ def _media_file_names(out_dir: Path) -> set[str]:
 def _gsr_replay_candidates(current: set[str], baseline: set[str]) -> set[str]:
     """New media files that could be a replay GSR just flushed.
 
-    GSR names its replay files itself (date-based); anything Vice creates —
-    sequential clips, session recordings, in-place-edit temp files — can
+    GSR names its replay files itself (date-based); anything Vice creates,
+    sequential clips, session recordings, in-place-edit temp files, can
     never be the flushed replay, so those names are never claimed even if
     they appear in the output directory mid-save.
     """
@@ -1559,7 +1695,7 @@ def _next_clip_path(
         if path is not None:
             return path
         log.warning(
-            "Clip name template %r produced no usable filename — using default naming",
+            "Clip name template %r produced no usable filename, using default naming",
             template,
         )
     return _next_numbered_path(out_dir, "Vice_Clip", ext, tag)
@@ -1853,7 +1989,7 @@ class GSRRecorder(Recorder):
         # ones are all at startup, so a small budget covers them.
         self._stderr_info_budget = 40
         # Set when the GPU encoder was unusable this run and CPU encoding
-        # took over. Never persisted — every start tries the GPU first, so a
+        # took over. Never persisted, every start tries the GPU first, so a
         # driver that gets fixed is picked up without the user doing anything.
         self.cpu_fallback = False
         # Set when the configured codec would not open and GSR was left to
@@ -1933,6 +2069,7 @@ class GSRRecorder(Recorder):
         )
         # GSR may have forked its helper before giving up.
         _signal_group(self._proc, signal.SIGKILL)
+        _unregister_capture(self._proc.pid)
         self._proc = None
         return detail
 
@@ -2025,7 +2162,9 @@ class GSRRecorder(Recorder):
             self._watch_task = None
 
     async def save_clip(self, duration: Optional[int] = None) -> Optional[Path]:
+        self.last_clip_error = ""
         if not self._proc or self._proc.returncode is not None:
+            self.last_clip_error = "The recorder is not running. Check Settings for an encoder error."
             log.error("GSR process is not running")
             return None
         clip_duration = int(duration or self.cfg.recording.clip_duration)
@@ -2034,13 +2173,14 @@ class GSRRecorder(Recorder):
         # Diffing against a baseline captured at recorder start misattributed
         # files that appeared in between (a finished session recording, a clip
         # renamed in the UI, a late flush from a timed-out save) as the new
-        # replay — the wrong clip then got renamed, trimmed, and shown.
+        # replay, the wrong clip then got renamed, trimmed, and shown.
         baseline = _media_file_names(self._out_dir)
 
         log.info("Sending SIGUSR1 to GSR (pid=%d) to save replay", self._proc.pid)
         try:
             os.kill(self._proc.pid, signal.SIGUSR1)
         except ProcessLookupError:
+            self.last_clip_error = "The recorder stopped before the clip could be saved."
             log.error("GSR process not found")
             return None
 
@@ -2060,10 +2200,20 @@ class GSRRecorder(Recorder):
             if new:
                 newest = max((self._out_dir / n for n in new), key=_mtime)
                 if not await _wait_for_finalized_clip(newest):
+                    # The file has stopped changing by now, so one more probe
+                    # is cheap and is the only way to learn why it cannot be
+                    # read. Without it the reporter and I both get nothing
+                    # more than "clip save failed" (#154).
+                    _, why = await probe_media_detailed(newest)
+                    self.last_clip_error = (
+                        f"{newest.name} was written but cannot be read"
+                        + (f": {why}" if why else ".")
+                        + " The file is still there, nothing was deleted."
+                    )
                     log.error(
-                        "GSR clip %s stopped being written but is unreadable — "
-                        "leaving the file in place for inspection",
-                        newest,
+                        "GSR clip %s stopped being written but is unreadable (%s). "
+                        "Leaving the file in place for inspection.",
+                        newest, why or "no reason from ffprobe",
                     )
                     return None
                 # Rename GSR's auto-generated filename to a sequential
@@ -2085,6 +2235,10 @@ class GSRRecorder(Recorder):
                 self._emit(trimmed)
                 return trimmed
 
+        self.last_clip_error = (
+            "gpu-screen-recorder did not write a clip within 20 seconds. "
+            "The log has its output."
+        )
         log.error("Timed out waiting for GSR to write clip")
         return None
 

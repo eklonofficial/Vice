@@ -1,11 +1,11 @@
 """
-Playlist store — persisted clip groupings that survive renames and deletes.
+Playlist store, persisted clip groupings that survive renames and deletes.
 
 Two kinds of playlists:
-  • auto   — created when a game is detected at clip-save time; keyed by the
+  • auto:   created when a game is detected at clip-save time; keyed by the
              sanitized game name so filename backfill and live detection
              converge on the same playlist.
-  • custom — user-created (name, emoji, gradient colors); clips are added
+  • custom, user-created (name, emoji, gradient colors); clips are added
              from the UI.
 
 Clip identity is the filename stem ("slug"), which is not stable: renames

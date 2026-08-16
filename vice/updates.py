@@ -1,5 +1,5 @@
 """
-Update check — is there a newer Vice release on GitHub?
+Update check, is there a newer Vice release on GitHub?
 
 Deliberately quiet: at most one request a day, nothing is shown unless the
 release is strictly newer than what is installed, and every failure path is

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Vice installer — sets up system dependencies and Python package.
+# Vice installer: sets up system dependencies and Python package.
 # Run as your normal user (not root); sudo is used internally where needed.
 
 set -euo pipefail
@@ -187,7 +187,7 @@ ensure_pacman_packages_resolvable() {
 install_pkgs_pacman() {
     # Python deps mirror PKGBUILD's depends list so that --system-site-packages
     # venv finds them and pywebview/aiohttp/etc don't fall back to PyPI.
-    # Qt/QtWebEngine is preferred over WebKit2GTK — gives the native window a
+    # Qt/QtWebEngine is preferred over WebKit2GTK, gives the native window a
     # Chromium-based GPU-accelerated engine. webkit2gtk-4.1 is kept as a
     # fallback for systems missing Qt bindings.
     local pkgs=(python python-pip ffmpeg
@@ -202,14 +202,14 @@ install_pkgs_pacman() {
     # install (#147).
     if $HAS_NVIDIA; then
         if pacman -Qq 2>/dev/null | grep -qE '^nvidia(-[0-9]+xx)?-utils$'; then
-            info "NVIDIA driver userspace already installed — leaving it alone"
+            info "NVIDIA driver userspace already installed, leaving it alone"
         else
             pkgs+=(nvidia-utils)
             info "Will install NVIDIA utilities"
         fi
     fi
 
-    # Clipboard tool for "Copy share link" — the in-page clipboard API is
+    # Clipboard tool for "Copy share link", the in-page clipboard API is
     # unreliable in QtWebEngine on http:// origins, so the app shells out.
     if [[ "$SESSION" == "wayland" ]]; then
         pkgs+=(wl-clipboard)
@@ -217,7 +217,7 @@ install_pkgs_pacman() {
         pkgs+=(xclip)
     fi
 
-    # wf-recorder is best-effort — only needed if a user explicitly sets
+    # wf-recorder is best-effort, only needed if a user explicitly sets
     # recording.backend=wf-recorder in their config. GSR is the auto default,
     # installed separately via install_gpu_screen_recorder.
     if [[ "$SESSION" == "wayland" ]] && ! command -v wf-recorder &>/dev/null; then
@@ -259,13 +259,13 @@ install_pkgs_apt() {
     sudo apt-get install -y python3-pyqt6 python3-pyqt6.qtwebengine python3-qtpy >/dev/null 2>&1 || \
         warn_webengine_wheel "sudo apt install python3-pyqt6 python3-pyqt6.qtwebengine python3-qtpy"
     # Mirror the pacman branch: install Vice's Python runtime deps as system
-    # packages so --system-site-packages picks them up. Per-package loop —
+    # packages so --system-site-packages picks them up. Per-package loop,
     # batched apt-get install aborts on the first NotFound, leaving the rest.
     for p in python3-aiohttp python3-tomli-w python3-click python3-psutil python3-evdev; do
         sudo apt-get install -y "$p" >/dev/null 2>&1 || \
             warn "$p not available via apt; will fall back to PyPI wheel."
     done
-    # Clipboard tool for "Copy share link" — the in-page clipboard API is
+    # Clipboard tool for "Copy share link", the in-page clipboard API is
     # unreliable in QtWebEngine on http:// origins, so the app shells out.
     if [[ "$SESSION" == "wayland" ]]; then
         sudo apt-get install -y wl-clipboard >/dev/null 2>&1 || \
@@ -307,13 +307,13 @@ install_pkgs_dnf() {
     sudo dnf install -y python3-pyqt6-webengine >/dev/null 2>&1 || \
         warn_webengine_wheel "sudo dnf install python3-pyqt6 python3-pyqt6-webengine python3-QtPy"
     # Mirror the pacman branch: install Vice's Python runtime deps as system
-    # packages so --system-site-packages picks them up. Per-package loop —
+    # packages so --system-site-packages picks them up. Per-package loop,
     # a single missing pkg on RHEL-without-EPEL must not skip the rest.
     for p in python3-aiohttp python3-tomli-w python3-click python3-psutil python3-evdev; do
         sudo dnf install -y "$p" >/dev/null 2>&1 || \
             warn "$p not available via dnf; will fall back to PyPI wheel."
     done
-    # Clipboard tool for "Copy share link" — the in-page clipboard API is
+    # Clipboard tool for "Copy share link", the in-page clipboard API is
     # unreliable in QtWebEngine on http:// origins, so the app shells out.
     if [[ "$SESSION" == "wayland" ]]; then
         sudo dnf install -y wl-clipboard >/dev/null 2>&1 || \
@@ -344,13 +344,13 @@ install_pkgs_zypper() {
     sudo zypper install -y python3-qt6 python3-qt6-webengine python3-qtpy >/dev/null 2>&1 || \
         warn_webengine_wheel "sudo zypper install python3-qt6 python3-qt6-webengine python3-qtpy"
     # Mirror the pacman branch: install Vice's Python runtime deps as system
-    # packages so --system-site-packages picks them up. Per-package loop —
+    # packages so --system-site-packages picks them up. Per-package loop,
     # Leap 15.x is missing python3-tomli-w; pip fallback handles it.
     for p in python3-aiohttp python3-tomli-w python3-click python3-psutil python3-evdev; do
         sudo zypper install -y "$p" >/dev/null 2>&1 || \
             warn "$p not available via zypper; will fall back to PyPI wheel."
     done
-    # Clipboard tool for "Copy share link" — the in-page clipboard API is
+    # Clipboard tool for "Copy share link", the in-page clipboard API is
     # unreliable in QtWebEngine on http:// origins, so the app shells out.
     if [[ "$SESSION" == "wayland" ]]; then
         sudo zypper install -y wl-clipboard >/dev/null 2>&1 || \
@@ -372,7 +372,7 @@ install_pkgs_zypper() {
 
 # ── gpu-screen-recorder install (mandatory; no fallback) ──────────────────────
 # Vice's auto backend is GSR-only. Other recorders (wf-recorder, ffmpeg) only
-# fire when the user explicitly sets recording.backend in config — they're
+# fire when the user explicitly sets recording.backend in config, they're
 # edge-case overrides, never defaults. install.sh aborts if GSR can't be installed.
 GSR_REPO_URL="${VICE_GSR_REPO_URL:-https://repo.dec05eba.com/gpu-screen-recorder}"
 GSR_DEFAULT_REF="5.13.3"
@@ -581,7 +581,7 @@ install_cloudflared() {
             elif command -v paru &>/dev/null; then
                 paru -S --noconfirm cloudflared && _cf_ok=true
             else
-                warn "AUR helper (yay/paru) not found — cloudflared skipped."
+                warn "AUR helper (yay/paru) not found, cloudflared skipped."
                 warn "Install it manually from AUR: https://aur.archlinux.org/packages/cloudflared"
             fi
             ;;
@@ -721,14 +721,14 @@ install_vice_venv() {
     #      packages` already provides them via pacman (python-pywebview etc.)
     #      so nothing is installed here; on Debian/Fedora where those packages
     #      don't exist, pip fetches them into the venv. Crucially, this path
-    #      NEVER shadows a working system package with a newer PyPI wheel —
+    #      NEVER shadows a working system package with a newer PyPI wheel,
     #      that regression was the source of Gdk "Protocol error" crashes on
     #      Hyprland + NVIDIA + Wayland (pywebview 6.2.1 vs. system 6.1).
     "$VENV_DIR/bin/pip" install --force-reinstall --no-deps "$SCRIPT_DIR"
     "$VENV_DIR/bin/python" - <<'PY'
 import importlib.util, subprocess, sys
 # Import name → PyPI name. Import names mirror pyproject.toml dependencies.
-# CORE deps are required at runtime — if pip can't install one, abort the
+# CORE deps are required at runtime, if pip can't install one, abort the
 # install with a loud error rather than leaving a silently broken venv.
 # OPTIONAL deps power the QtWebEngine native-window backend; if their
 # (heavy ~100 MB) wheels fail, vice-app gracefully falls back to GTK.
@@ -787,7 +787,7 @@ PY
         "$VENV_DIR/bin/python" -c "import $mod" >/dev/null 2>&1 || failed+=("$mod")
     done
     if [[ ${#failed[@]} -gt 0 ]]; then
-        error "Vice venv is broken — these CORE modules are not importable: ${failed[*]}"
+        error "Vice venv is broken, these CORE modules are not importable: ${failed[*]}"
         error "Try:  $VENV_DIR/bin/pip install ${failed[*]}"
         error "Then rerun: ./install.sh"
         exit 1
@@ -819,7 +819,7 @@ add_to_path_posix "$HOME/.zshrc"
 # Also update .profile if no .bash_profile (sourced by some login managers).
 [[ ! -f "$HOME/.bash_profile" ]] && add_to_path_posix "$HOME/.profile"
 
-# Fish uses its own path management — fish_add_path is idempotent.
+# Fish uses its own path management, fish_add_path is idempotent.
 FISH_CONFIG="$HOME/.config/fish/config.fish"
 if command -v fish &>/dev/null || [[ -d "$HOME/.config/fish" ]]; then
     mkdir -p "$(dirname "$FISH_CONFIG")"
@@ -865,7 +865,7 @@ info "Vice now appears in your app launcher as 'Vice'."
 # ── Hyprland keybind hint ─────────────────────────────────────────────────────
 if [[ "$DE" == "Hyprland" ]]; then
     echo
-    info "Hyprland detected. Vice uses evdev — no compositor keybind config needed."
+    info "Hyprland detected. Vice uses evdev, no compositor keybind config needed."
 fi
 
 # ── systemd user service (keeps daemon running even when window is closed) ───
@@ -908,7 +908,7 @@ EOF
         # old symlinks otherwise and never picks up the new WantedBy.
         systemctl --user reenable vice.service
         systemctl --user restart vice.service
-        info "Vice daemon service enabled — it will start automatically on login."
+        info "Vice daemon service enabled, it will start automatically on login."
     fi
 fi
 

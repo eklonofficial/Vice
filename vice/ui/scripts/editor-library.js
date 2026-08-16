@@ -1,5 +1,5 @@
 'use strict';
-// editor-library.js — editor left panel: clip library, effects, text presets
+// editor-library.js: editor left panel: clip library, effects, text presets
 
 let edTab = 'library';
 let edLibQuery = '';

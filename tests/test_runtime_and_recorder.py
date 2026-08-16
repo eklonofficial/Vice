@@ -5,6 +5,7 @@ import signal
 import socket
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -16,12 +17,20 @@ from vice import app as app_mod
 from vice import audio as audio_mod
 from vice import config as config_mod
 from vice import main as main_mod
+from vice import media as media_mod
+from vice import share as share_mod
 from vice.main import _RECORDER_DEATH_BACKOFF_AFTER
 from vice.config import Config, HotkeyClipPreset, HotkeyConfig, OutputConfig, RecordingConfig, SharingConfig
 from vice.recorder import (
+    CAPTURE_REGISTRY,
     GSRRecorder,
     SegmentRecorder,
     _classify_gsr_source,
+    _read_capture_registry,
+    _register_capture,
+    _unregister_capture,
+    _write_capture_registry,
+    reap_orphaned_captures,
     _gsr_audio_args,
     _gsr_codec_args,
     _gsr_codec_choice,
@@ -349,7 +358,12 @@ class AppStartupTests(unittest.TestCase):
     def test_app_main_uses_ipv4_loopback_url(self) -> None:
         fake_cfg = mock.Mock()
         fake_cfg.sharing.port = 8765
-        with mock.patch("vice.app.normalize_runtime_environment"):
+        # The lock has to be pinned: unpinned this takes the real
+        # single-window lock for the rest of the run, and it would take the
+        # "a window is already open" exit whenever the suite runs on a
+        # machine with Vice open.
+        with mock.patch("vice.app._claim_app_lock", return_value=True), \
+             mock.patch("vice.app.normalize_runtime_environment"):
             with mock.patch("vice.app._setup_logging"):
                 with mock.patch("vice.app.signal.signal"):
                     with mock.patch("vice.config.load", return_value=fake_cfg):
@@ -2956,7 +2970,7 @@ class UpdateNoticeTests(unittest.IsolatedAsyncioTestCase):
         from vice.config import Config
         from vice.main import ViceDaemon
 
-        daemon = ViceDaemon.__new__(ViceDaemon)
+        daemon = main_mod.ViceDaemon.__new__(main_mod.ViceDaemon)
         daemon.cfg = Config()
         daemon._update = None
         daemon.share = mock.MagicMock()
@@ -3081,9 +3095,370 @@ class NotificationVolumeTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(audio_mod, "_play", new=mock.AsyncMock()) as play:
             audio_mod.play_clip(0.4)
             await asyncio.sleep(0)
-        play.assert_awaited_once_with("clip", 0.4)
+        play.assert_awaited_once_with("clip", 0.4, None)
+
+    async def test_custom_sound_is_passed_through(self) -> None:
+        with mock.patch.object(audio_mod, "_play", new=mock.AsyncMock()) as play:
+            audio_mod.play_clip(0.4, "~/sounds/ping.wav")
+            await asyncio.sleep(0)
+        play.assert_awaited_once_with("clip", 0.4, "~/sounds/ping.wav")
 
     def test_daemon_passes_the_configured_volume(self) -> None:
         source = (Path(__file__).resolve().parents[1] / "vice" / "main.py").read_text()
         for fn in ("play_clip", "play_session_start", "play_session_end", "play_highlight"):
-            self.assertIn(f"audio.{fn}(self.cfg.notifications.sound_volume)", source)
+            self.assertIn(f"audio.{fn}(self.cfg.notifications.sound_volume,", source)
+
+    def test_daemon_passes_the_configured_custom_sounds(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / "vice" / "main.py").read_text()
+        for setting in ("clip_sound", "clip_failed_sound", "session_start_sound",
+                        "session_end_sound", "highlight_sound"):
+            self.assertIn(f"self.cfg.notifications.{setting}", source)
+
+
+class ProbeFailureReasonTests(unittest.IsolatedAsyncioTestCase):
+    """ffprobe's own explanation has to survive.
+
+    It used to run with -v quiet and stderr to /dev/null, so a clip that
+    could not be read produced a log line about JSON parsing and nothing
+    about the file. That is why #154 took three round trips.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        if shutil.which("ffprobe") is None or shutil.which("ffmpeg") is None:
+            raise unittest.SkipTest("ffmpeg/ffprobe not installed")
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+
+    def _good_clip(self) -> Path:
+        path = self.dir / "good.mp4"
+        subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-f", "lavfi",
+             "-i", "testsrc=size=64x64:rate=15", "-t", "1", str(path)],
+            check=True,
+        )
+        return path
+
+    async def test_healthy_clip_reports_no_reason(self) -> None:
+        meta, why = await media_mod.probe_media_detailed(self._good_clip())
+        self.assertIsNotNone(meta)
+        self.assertEqual(why, "")
+        self.assertGreater(meta["duration"], 0)
+
+    async def test_unreadable_file_reports_ffprobes_own_message(self) -> None:
+        junk = self.dir / "junk.mp4"
+        junk.write_bytes(os.urandom(4096))
+        meta, why = await media_mod.probe_media_detailed(junk)
+        self.assertIsNone(meta)
+        self.assertTrue(why)
+        # The message is ffprobe's, not a generic one of ours.
+        self.assertIn("Invalid data", why)
+        # And it does not repeat the path the log line already names.
+        self.assertNotIn(str(junk), why)
+
+    async def test_missing_file_reports_a_reason(self) -> None:
+        meta, why = await media_mod.probe_media_detailed(self.dir / "nope.mp4")
+        self.assertIsNone(meta)
+        self.assertIn("No such file", why)
+
+    async def test_probe_media_keeps_its_old_signature(self) -> None:
+        # Every existing caller still gets a dict or None, never a tuple.
+        self.assertIsInstance(await media_mod.probe_media(self._good_clip()), dict)
+        junk = self.dir / "junk2.mp4"
+        junk.write_bytes(os.urandom(2048))
+        self.assertIsNone(await media_mod.probe_media(junk))
+
+    async def test_failure_is_logged_at_warning_with_the_file_name(self) -> None:
+        junk = self.dir / "broken.mp4"
+        junk.write_bytes(os.urandom(2048))
+        with self.assertLogs("vice.media", level="WARNING") as caught:
+            await media_mod.probe_media_detailed(junk)
+        joined = "\n".join(caught.output)
+        self.assertIn("broken.mp4", joined)
+        self.assertIn("Invalid data", joined)
+
+
+class UnreadableClipListingTests(unittest.IsolatedAsyncioTestCase):
+    """A clip ffmpeg cannot read is listed as broken, not as a 0:00 clip."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        if shutil.which("ffprobe") is None or shutil.which("ffmpeg") is None:
+            raise unittest.SkipTest("ffmpeg/ffprobe not installed")
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+
+    async def test_broken_mp4_is_flagged_with_a_reason(self) -> None:
+        junk = self.dir / "Vice_Clip_9.mp4"
+        junk.write_bytes(os.urandom(8192))
+        meta = await share_mod._ffprobe(junk)
+        self.assertTrue(meta.get("unreadable"))
+        self.assertTrue(meta.get("unreadable_reason"))
+
+    async def test_healthy_clip_is_not_flagged(self) -> None:
+        path = self.dir / "Vice_Clip_1.mp4"
+        subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-f", "lavfi",
+             "-i", "testsrc=size=64x64:rate=15", "-t", "1", str(path)],
+            check=True,
+        )
+        meta = await share_mod._ffprobe(path)
+        self.assertFalse(meta.get("unreadable"))
+        self.assertGreater(meta["duration"], 0)
+
+
+class OrphanedCaptureTests(unittest.IsolatedAsyncioTestCase):
+    """A capture process runs in its own session so its helper dies with it
+    (#129), which also means kill -9 on the daemon leaves it recording with
+    nothing supervising it (#121). It gets reaped at the next start."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        patcher = mock.patch(
+            "vice.recorder.CAPTURE_REGISTRY", Path(self.tmp.name) / "capture.json"
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def _running(pid: int) -> bool:
+        """Running, not merely present: a killed child stays as a zombie
+        until it is waited on, and signal 0 succeeds on those."""
+        try:
+            stat_line = Path(f"/proc/{pid}/stat").read_text()
+        except (FileNotFoundError, ProcessLookupError):
+            return False
+        except OSError:
+            return True
+        return stat_line.rsplit(")", 1)[1].split()[0] != "Z"
+
+    async def test_a_leftover_recorder_is_stopped(self) -> None:
+        proc = await asyncio.create_subprocess_exec(
+            "sleep", "60", stdout=asyncio.subprocess.DEVNULL, start_new_session=True
+        )
+        self.addCleanup(lambda: proc.kill() if proc.returncode is None else None)
+        _write_capture_registry([{"pid": proc.pid, "argv": ["sleep", "60"]}])
+
+        self.assertEqual(reap_orphaned_captures(), 1)
+        await asyncio.wait_for(proc.wait(), timeout=5)
+        self.assertFalse(self._running(proc.pid))
+        self.assertEqual(_read_capture_registry(), [])
+
+    async def test_a_recycled_pid_is_left_completely_alone(self) -> None:
+        # The regression guard. Pids get reused, and killing an unrelated
+        # process would be far worse than the orphan this is here to clear.
+        # Its own session even though the guard should stop the reap dead:
+        # the code under test calls killpg, so a regression here would take
+        # the test runner's whole process group with it.
+        proc = await asyncio.create_subprocess_exec(
+            "sleep", "60", stdout=asyncio.subprocess.DEVNULL, start_new_session=True
+        )
+        self.addCleanup(lambda: proc.kill() if proc.returncode is None else None)
+        _write_capture_registry([
+            {"pid": proc.pid, "argv": ["gpu-screen-recorder", "-w", "screen"]}
+        ])
+
+        self.assertEqual(reap_orphaned_captures(), 0)
+        await asyncio.sleep(0.2)
+        self.assertTrue(self._running(proc.pid))
+
+    async def test_a_recorder_whose_daemon_is_alive_is_left_alone(self) -> None:
+        # Two Vice daemons have run at once on a real machine. Taking the
+        # working one's recorder away would be worse than the bug.
+        recorder = await asyncio.create_subprocess_exec(
+            "sleep", "60", stdout=asyncio.subprocess.DEVNULL, start_new_session=True
+        )
+        daemon = await asyncio.create_subprocess_exec(
+            "sleep", "60", stdout=asyncio.subprocess.DEVNULL, start_new_session=True
+        )
+        for p in (recorder, daemon):
+            self.addCleanup(lambda p=p: p.kill() if p.returncode is None else None)
+        _write_capture_registry([
+            {"pid": recorder.pid, "argv": ["sleep", "60"], "owner": daemon.pid}
+        ])
+
+        self.assertEqual(reap_orphaned_captures(), 0)
+        await asyncio.sleep(0.2)
+        self.assertTrue(self._running(recorder.pid))
+        # And the entry survives, so the live daemon can still clean up.
+        self.assertEqual(len(_read_capture_registry()), 1)
+
+    def test_a_dead_pid_is_not_an_error(self) -> None:
+        _write_capture_registry([{"pid": 0x7FFFFFFF, "argv": ["sleep", "60"]}])
+        self.assertEqual(reap_orphaned_captures(), 0)
+
+    def test_a_corrupt_registry_is_survivable(self) -> None:
+        from vice import recorder as recorder_mod
+        recorder_mod.CAPTURE_REGISTRY.parent.mkdir(parents=True, exist_ok=True)
+        recorder_mod.CAPTURE_REGISTRY.write_text("{not json")
+        self.assertEqual(reap_orphaned_captures(), 0)
+
+    def test_no_registry_at_all_is_not_an_error(self) -> None:
+        self.assertEqual(reap_orphaned_captures(), 0)
+
+    def test_register_and_unregister_round_trip(self) -> None:
+        _register_capture(4242, ["gpu-screen-recorder", "-w", "screen"])
+        entries = _read_capture_registry()
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["pid"], 4242)
+        self.assertEqual(entries[0]["owner"], os.getpid())
+        _unregister_capture(4242)
+        self.assertEqual(_read_capture_registry(), [])
+
+
+class SingleAppWindowTests(unittest.TestCase):
+    """Two Vice windows drive the same daemon and disagree with each other
+    (#121), so the second one raises the first instead of opening."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.lock = Path(self.tmp.name) / "vice-app.pid"
+        patcher = mock.patch("vice.app.APP_LOCK_FILE", self.lock)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(self._release_lock)
+        app_mod._app_lock_handle = None
+
+    @staticmethod
+    def _release_lock() -> None:
+        # The real app holds this open for its whole life; a test must not.
+        handle, app_mod._app_lock_handle = app_mod._app_lock_handle, None
+        if handle is not None:
+            handle.close()
+
+    def test_the_first_window_takes_the_lock(self) -> None:
+        self.assertTrue(app_mod._claim_app_lock())
+        self.assertEqual(self.lock.read_text().strip(), str(os.getpid()))
+
+    def test_a_second_process_is_refused_while_it_is_held(self) -> None:
+        self.assertTrue(app_mod._claim_app_lock())
+        script = (
+            "import sys; sys.path.insert(0, %r)\n"
+            "import vice.app as app\n"
+            "from pathlib import Path\n"
+            "app.APP_LOCK_FILE = Path(%r)\n"
+            "print('GOT' if app._claim_app_lock() else 'REFUSED')\n"
+        ) % (str(Path(__file__).resolve().parents[1]), str(self.lock))
+        out = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True, timeout=30
+        )
+        self.assertEqual(out.stdout.strip(), "REFUSED", out.stderr)
+
+    def test_an_unusable_lock_path_never_blocks_the_window(self) -> None:
+        # A duplicate window is annoying. No window at all is a broken app.
+        with mock.patch("vice.app.APP_LOCK_FILE", Path("/proc/nope/vice-app.pid")):
+            self.assertTrue(app_mod._claim_app_lock())
+
+
+class CustomNotificationSoundTests(unittest.TestCase):
+    """A mistyped path must never turn into silence: the sound is how you
+    know the clip landed (#123)."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+
+    def test_a_readable_file_is_used(self) -> None:
+        sound = self.dir / "ping.wav"
+        sound.write_bytes(b"RIFF....WAVEfmt ")
+        self.assertEqual(audio_mod.resolve_custom_sound(str(sound)), sound)
+
+    def test_blank_settings_fall_back_to_the_tone(self) -> None:
+        for value in (None, "", "   "):
+            self.assertIsNone(audio_mod.resolve_custom_sound(value))
+
+    def test_a_missing_file_falls_back_to_the_tone(self) -> None:
+        self.assertIsNone(audio_mod.resolve_custom_sound(str(self.dir / "nope.wav")))
+
+    def test_an_empty_file_falls_back_to_the_tone(self) -> None:
+        empty = self.dir / "empty.wav"
+        empty.touch()
+        self.assertIsNone(audio_mod.resolve_custom_sound(str(empty)))
+
+    def test_a_directory_falls_back_to_the_tone(self) -> None:
+        self.assertIsNone(audio_mod.resolve_custom_sound(str(self.dir)))
+
+    def test_an_unreadable_file_falls_back_to_the_tone(self) -> None:
+        if os.geteuid() == 0:
+            self.skipTest("root can read anything")
+        locked = self.dir / "locked.wav"
+        locked.write_bytes(b"RIFF")
+        os.chmod(locked, 0o000)
+        try:
+            self.assertIsNone(audio_mod.resolve_custom_sound(str(locked)))
+        finally:
+            os.chmod(locked, 0o644)
+
+    def test_a_home_relative_path_is_expanded(self) -> None:
+        # Settings takes a typed path, and people type ~.
+        with mock.patch.dict(os.environ, {"HOME": str(self.dir)}):
+            sound = self.dir / "tilde.wav"
+            sound.write_bytes(b"RIFF")
+            self.assertEqual(audio_mod.resolve_custom_sound("~/tilde.wav"), sound)
+
+    def test_every_sound_has_a_synthesised_tone_to_fall_back_on(self) -> None:
+        for name in ("clip", "clip_failed", "session_start", "session_end", "highlight"):
+            self.assertTrue(audio_mod._wav_for(name, 1.0))
+
+
+class ClipErrorReasonTests(unittest.TestCase):
+    """"Clip save failed. Check vice.log" is no use to somebody whose clips
+    are silently unreadable (#154)."""
+
+    def test_the_recorders_reason_is_used_when_there_is_one(self) -> None:
+        daemon = main_mod.ViceDaemon.__new__(main_mod.ViceDaemon)
+        daemon.recorder = mock.Mock()
+        daemon.recorder.last_clip_error = "Vice_Clip_3.mp4 was written but cannot be read"
+        self.assertIn("cannot be read", daemon._clip_error_text())
+
+    def test_it_falls_back_when_the_recorder_has_nothing_to_say(self) -> None:
+        daemon = main_mod.ViceDaemon.__new__(main_mod.ViceDaemon)
+        daemon.recorder = mock.Mock()
+        daemon.recorder.last_clip_error = ""
+        self.assertIn("vice.log", daemon._clip_error_text())
+
+    def test_a_recorder_without_the_attribute_does_not_crash(self) -> None:
+        # Third-party or older recorder objects must not break the toast.
+        daemon = main_mod.ViceDaemon.__new__(main_mod.ViceDaemon)
+        daemon.recorder = object()
+        self.assertIn("vice.log", daemon._clip_error_text())
+
+
+class ReapGroupSafetyTests(unittest.IsolatedAsyncioTestCase):
+    """reap_orphaned_captures signals a process *group*. Capture processes
+    always lead their own group, so anything that does not is somebody
+    else's group and must never be signalled."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        patcher = mock.patch(
+            "vice.recorder.CAPTURE_REGISTRY", Path(self.tmp.name) / "capture.json"
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    async def test_a_pid_that_does_not_lead_its_group_is_not_signalled(self) -> None:
+        # Shares this process's group, so a killpg here would take the test
+        # runner down with it.
+        proc = await asyncio.create_subprocess_exec(
+            "sleep", "60", stdout=asyncio.subprocess.DEVNULL
+        )
+        self.addCleanup(lambda: proc.kill() if proc.returncode is None else None)
+        self.assertNotEqual(os.getpgid(proc.pid), proc.pid)
+        # Matching argv and no live owner, so only the group check can save us.
+        _write_capture_registry([{"pid": proc.pid, "argv": ["sleep", "60"]}])
+
+        with mock.patch("vice.recorder.os.killpg") as killpg:
+            self.assertEqual(reap_orphaned_captures(), 0)
+        killpg.assert_not_called()
+        self.assertIsNone(proc.returncode)

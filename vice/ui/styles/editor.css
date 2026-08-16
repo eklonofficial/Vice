@@ -1,4 +1,4 @@
-/* ── editor.css — timeline editor: library / preview / timeline panels ───── */
+/* ── editor.css: timeline editor: library / preview / timeline panels ───── */
 
 #view-editor { --ed-lib-w: 300px; --ed-tl-h: 300px; }
 #view-editor.active { display: flex; flex-direction: column; height: 100%; min-height: 0; }

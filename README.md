@@ -300,6 +300,7 @@ Vice is better because these people sent patches:
 - [@jethrothelion](https://github.com/jethrothelion), for working out why dropdowns were white on white under Plasma, and fixing it
 - [@quadruplea0](https://github.com/quadruplea0), for making the resolution setting actually reach gpu-screen-recorder
 - [@DeveloperSpoot](https://github.com/DeveloperSpoot), for themed Discord embeds, their idea and their first implementation
+- [@editeurlaruelle-cmd](https://github.com/editeurlaruelle-cmd), for GeoGuessr Steam Edition
 
 And to everyone who has opened an issue with a log attached: that is most of how the hard bugs get found.
 

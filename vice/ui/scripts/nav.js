@@ -1,5 +1,5 @@
 'use strict';
-// nav.js — sidebar navigation + search
+// nav.js: sidebar navigation + search
 
 // ═══════════════════════════════════════════════════════════════════
 // Navigation

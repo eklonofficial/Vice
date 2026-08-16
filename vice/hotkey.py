@@ -1,10 +1,10 @@
 """
-Vice hotkey listener — uses Linux evdev to read global keyboard events.
+Vice hotkey listener: uses Linux evdev to read global keyboard events.
 
 evdev reads directly from /dev/input/event* kernel devices, bypassing the
 display server entirely. This means hotkeys work on:
   • X11 (any WM/DE)
-  • Wayland (Hyprland, GNOME, KDE, sway — any compositor)
+  • Wayland (Hyprland, GNOME, KDE, sway, any compositor)
   • Even TTY sessions
 
 Requirement: the running user must have read access to /dev/input/event*
@@ -162,9 +162,9 @@ class HotkeyListener:
             return
         self.available = value
         if value:
-            log.info("Keyboard available — hotkeys active")
+            log.info("Keyboard available, hotkeys active")
         else:
-            log.warning("All keyboards disconnected — hotkeys inactive until one reappears")
+            log.warning("All keyboards disconnected, hotkeys inactive until one reappears")
         if self.on_availability_change:
             try:
                 self.on_availability_change(value)
@@ -199,7 +199,7 @@ class HotkeyListener:
                     await self._handle_press(self._combo_for(key_name))
         except OSError as exc:
             log.warning(
-                "Device %s disconnected: %s — will reattach when it returns",
+                "Device %s disconnected: %s, will reattach when it returns",
                 dev.path, exc,
             )
         except asyncio.CancelledError:
@@ -225,7 +225,7 @@ class HotkeyListener:
         if not has_single and not has_double:
             return
 
-        # If there's a pending single-tap timer for this key, cancel it —
+        # If there's a pending single-tap timer for this key, cancel it,
         # this is the second press, so fire double-tap callbacks instead.
         if key_name in self._pending:
             self._pending.pop(key_name).cancel()
@@ -235,7 +235,7 @@ class HotkeyListener:
             return
 
         if not has_double:
-            # No double-tap binding — fire single immediately.
+            # No double-tap binding, fire single immediately.
             if has_single:
                 for cb in self._bindings[key_name]:
                     asyncio.create_task(_safe_call(cb, key_name))
@@ -267,8 +267,8 @@ async def _safe_call(cb: AsyncCallback, key_name: str) -> None:
 def _close_quietly(dev: InputDevice) -> None:
     try:
         dev.close()
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("Could not close %s: %s", getattr(dev, "path", dev), exc)
 
 
 def _find_keyboards(skip_paths: set[str] | None = None) -> list[InputDevice]:
@@ -281,7 +281,7 @@ def _find_keyboards(skip_paths: set[str] | None = None) -> list[InputDevice]:
         try:
             dev = InputDevice(path)
         except (PermissionError, OSError):
-            # Not readable — user not in input group, or device vanished.
+            # Not readable, user not in input group, or device vanished.
             continue
         try:
             # Require that the device has at least some normal keys.
