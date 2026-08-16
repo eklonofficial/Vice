@@ -82,6 +82,7 @@
   {"name": "Among Us", "matches": ["Among Us.exe", "amongus", "steam_app_945360"]},
   {"name": "Brawlhalla", "matches": ["Brawlhalla.exe", "brawlhalla", "steam_app_291550"]},
   {"name": "Big Walk", "matches": ["BigWalk.exe", "bigwalk", "steam_app_1478500"]},
+  {"name": "Supermarket Simulator", "matches": ["Supermarket Simulator.exe", "supermarketsimulator", "steam_app_2670630"]},
   {"name": "Lethal Company", "matches": ["Lethal Company.exe", "lethalcompany", "lethal company", "steam_app_1966720"]},
   {"name": "Phasmophobia", "matches": ["Phasmophobia.exe", "phasmophobia", "steam_app_739630"]},
   {"name": "V Rising", "matches": ["VRising.exe", "vrising", "steam_app_1604030"]},
