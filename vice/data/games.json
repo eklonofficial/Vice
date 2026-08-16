@@ -178,6 +178,7 @@
   {"name": "Final Fantasy XVI", "matches": ["ffxvi.exe", "finalfantasyxvi", "steam_app_2515020"]},
   {"name": "Five Nights at Freddy's: Security Breach", "matches": ["FNAF-Security-Breach.exe", "fivenightsatfreddyssecuritybreach", "steam_app_747660"]},
   {"name": "Forza Motorsport", "matches": ["ForzaMotorsport.exe", "forzamotorsport", "steam_app_2440510"]},
+  {"name": "Forza Horizon 4", "matches": ["ForzaHorizon4.exe", "forzahorizon4", "steam_app_1293830"]},
   {"name": "Frostpunk", "matches": ["Frostpunk.exe", "steam_app_323190"]},
   {"name": "Frostpunk 2", "matches": ["Frostpunk2-Win64-Shipping.exe", "steam_app_1601580"]},
   {"name": "Garry's Mod", "matches": ["gmod.exe", "garrysmod", "steam_app_4000"]},
