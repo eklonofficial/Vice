@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Vice installer: sets up system dependencies and Python package.
+# Vice installer: sets up system dependencies and Python package. 
 # Run as your normal user (not root); sudo is used internally where needed.
 
 set -euo pipefail
