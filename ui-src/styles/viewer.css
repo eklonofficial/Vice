@@ -578,11 +578,97 @@ kbd {
 
 .player-extra {
   display: flex;
+  align-items: center;
   gap: 2px;
+}
+
+.player-volume {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 8px;
+  margin-right: 4px;
+  border-right: 1px solid var(--color-border);
+}
+
+.player-volume-range {
+  appearance: none;
+  -moz-appearance: none;
+  width: 64px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(
+    to right,
+    var(--color-accent) 0 var(--filled, 100%),
+    var(--control) var(--filled, 100%) 100%
+  );
+  cursor: pointer;
+}
+
+/* Chromium / Qt WebEngine */
+.player-volume-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 11px;
+  height: 11px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  cursor: grab;
+  transition: transform var(--duration-fast) var(--vice-ease-spring);
+}
+
+.player-volume-range:hover::-webkit-slider-thumb {
+  transform: scale(1.15);
+}
+
+.player-volume-range:active::-webkit-slider-thumb {
+  cursor: grabbing;
+  transform: scale(1.25);
+}
+
+/* Firefox */
+.player-volume-range::-moz-range-track {
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--control);
+}
+
+.player-volume-range::-moz-range-progress {
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+}
+
+.player-volume-range::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  cursor: grab;
+  transition: transform var(--duration-fast) var(--vice-ease-spring);
+}
+
+.player-volume-range:hover::-moz-range-thumb {
+  transform: scale(1.15);
+}
+
+.player-volume-range:active::-moz-range-thumb {
+  cursor: grabbing;
+  transform: scale(1.25);
+}
+
+.player-volume-range:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
 }
 
 @media (max-width: 720px) {
   .player-clip {
+    display: none;
+  }
+
+  .player-volume-range {
     display: none;
   }
 }

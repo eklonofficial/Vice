@@ -81,13 +81,32 @@ export function Viewer(props: ViewerProps) {
   );
   const [renaming, setRenaming] = useState<string | null>(null);
   const failed = useVideoFailure(videoRef);
+  const [volume, setVolume] = useState<number>(readStoredVolume);
+  const lastVolume = useRef(volume > 0 ? volume : 1);
+
+  const applyVolume = useCallback((next: number) => {
+    const clamped = clamp01(next);
+    setVolume(clamped);
+    if (clamped > 0) lastVolume.current = clamped;
+    try {
+      localStorage.setItem(VOLUME_STORAGE_KEY, String(clamped));
+    } catch {
+
+    }
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    applyVolume(volume > 0 ? 0 : lastVolume.current);
+  }, [applyVolume, volume]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video) video.volume = volume;
+  }, [volume, clip]);
 
   const index = clip ? clips.findIndex(c => c.slug === clip.slug) : -1;
   const open = clip !== null;
 
-  // Attach the source only when it actually changes. Stepping back to the clip
-  // already loaded must not reload it, because a fresh load is what counts as
-  // a view.
   useLayoutEffect(() => {
     const video = videoRef.current;
     if (!video || !clip) return;
@@ -495,9 +514,12 @@ export function Viewer(props: ViewerProps) {
           duration={duration}
           canStepBack={index > 0}
           canStepForward={index >= 0 && index < clips.length - 1}
+          volume={volume}
           onToggle={toggle}
           onStep={step}
           onSeek={ratio => seekTo(videoRef.current, ratio * duration)}
+          onVolumeChange={applyVolume}
+          onToggleMute={toggleMute}
           onShare={() => props.onShare(clip)}
           onClose={onClose}
         />
@@ -525,9 +547,12 @@ function PlayerBar({
   duration,
   canStepBack,
   canStepForward,
+  volume,
   onToggle,
   onStep,
   onSeek,
+  onVolumeChange,
+  onToggleMute,
   onShare,
   onClose,
 }: {
@@ -537,9 +562,12 @@ function PlayerBar({
   duration: number;
   canStepBack: boolean;
   canStepForward: boolean;
+  volume: number;
   onToggle: () => void;
   onStep: (delta: number) => void;
   onSeek: (ratio: number) => void;
+  onVolumeChange: (next: number) => void;
+  onToggleMute: () => void;
   onShare: () => void;
   onClose: () => void;
 }) {
@@ -594,6 +622,7 @@ function PlayerBar({
       </div>
 
       <div className="player-extra">
+        <VolumeControl volume={volume} onChange={onVolumeChange} onToggleMute={onToggleMute} />
         <button type="button" className="player-btn" onClick={onShare} aria-label={t('viewer.copyShareLink')}>
           <ShareGlyph />
         </button>
@@ -601,6 +630,39 @@ function PlayerBar({
           <IconClose size={15} />
         </button>
       </div>
+    </div>
+  );
+}
+
+function VolumeControl({
+  volume,
+  onChange,
+  onToggleMute,
+}: {
+  volume: number;
+  onChange: (next: number) => void;
+  onToggleMute: () => void;
+}) {
+  return (
+    <div className="player-volume">
+      <button
+        type="button"
+        className="player-btn"
+        onClick={onToggleMute}
+        aria-label={volume === 0 ? t('viewer.unmute') : t('viewer.mute')}>
+        <VolumeGlyph level={volume} />
+      </button>
+      <input
+        type="range"
+        className="player-volume-range"
+        min={0}
+        max={1}
+        step={0.01}
+        value={volume}
+        aria-label={t('viewer.volume')}
+        style={{['--filled' as string]: `${volume * 100}%`}}
+        onChange={e => onChange(Number(e.target.value))}
+      />
     </div>
   );
 }
@@ -694,6 +756,20 @@ function HighlightRename({
   );
 }
 
+const VOLUME_STORAGE_KEY = 'vice-volume';
+
+/** Last volume the user set, so a fresh clip does not default back to full. */
+function readStoredVolume(): number {
+  try {
+    const raw = localStorage.getItem(VOLUME_STORAGE_KEY);
+    if (raw == null) return 1;
+    const n = Number(raw);
+    return Number.isFinite(n) ? clamp01(n) : 1;
+  } catch {
+    return 1;
+  }
+}
+
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 const round3 = (n: number) => Number(n.toFixed(3));
 const sortHighlights = (list: Highlight[]) => [...list].sort((a, b) => a.time - b.time);
@@ -749,5 +825,21 @@ const ShareGlyph = () => (
     <circle cx="6" cy="12" r="3" />
     <circle cx="18" cy="19" r="3" />
     <path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4" />
+  </svg>
+);
+/** Speaker glyph with zero, one, or two sound waves, by volume level. */
+const VolumeGlyph = ({level}: {level: number}) => (
+  <svg viewBox="0 0 24 24" width={15} height={15} aria-hidden="true">
+    <path d="M4 9v6h4l5 5V4L8 9H4z" fill="currentColor" />
+    {level === 0 ? (
+      <g {...stroke} strokeWidth={2.2}>
+        <path d="m16 9 5 6M21 9l-5 6" />
+      </g>
+    ) : (
+      <g {...stroke} strokeWidth={2.2} fill="none">
+        {level > 0.1 ? <path d="M16.3 8.6a5 5 0 0 1 0 6.8" /> : null}
+        {level > 0.55 ? <path d="M19 5.8a9 9 0 0 1 0 12.4" /> : null}
+      </g>
+    )}
   </svg>
 );
