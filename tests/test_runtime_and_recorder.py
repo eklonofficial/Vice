@@ -2632,7 +2632,7 @@ class WindowCaptureLoopTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unrecognized_window_does_not_release_an_active_pin(self) -> None:
         # The pinned game keeps running in the background (Discord, a
-        # browser, etc focused instead) — only a dead pinned window releases.
+        # browser, etc focused instead); only a dead pinned window releases.
         recorder = _FakeRecorder()
         daemon = self._daemon(recorder, window_capture_id="0xOLD")
 
