@@ -492,6 +492,7 @@
     "viceLibrary": "Vice library (default)",
     "customPath": "Custom path",
     "alsoAddToLibrary": "Also add to the Vice library",
+    "discordOptimize": "Optimize for Discord (under 20 MB)",
     "encoding": "Encoding H.264. You can leave this open or carry on elsewhere in Vice.",
     "videoTrack": "Video track",
     "audioTrack": "Audio track",

@@ -1945,7 +1945,8 @@ class ShareServer:
         tmp = dest / f".{final.stem}.export.mp4"
         cmd = build_export_cmd(project, sources, tmp,
                                accent=str(body.get("accent", "")) or "#0099ff",
-                               text_dir=work)
+                               text_dir=work,
+                               discord_optimized=bool(body.get("discord_optimized")))
         add_to_library = bool(body.get("add_to_library"))
 
         async def on_done(path: Path) -> Optional[dict]:

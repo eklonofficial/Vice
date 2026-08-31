@@ -341,6 +341,23 @@ class GraphBuilderTests(unittest.TestCase):
         # top-listed track wins.
         self.assertIn(overlays[0].split("[")[-1].rstrip("]"), overlays[1])
 
+    def test_discord_optimized_caps_bitrate_to_fit_20mb(self) -> None:
+        # Duration alone drives the bitrate budget, so build raw (unvalidated)
+        # projects rather than routing through the 30s-capped SRC fixture.
+        def raw_build(dur: float) -> list[str]:
+            return build_export_cmd(proj([clip("i1", "V1", "Clip_A", 0, dur)]), SRC,
+                                    Path("/out/.x.export.mp4"), fonts=Path("/f"),
+                                    text_dir=Path("/tx"), discord_optimized=True)
+        short = raw_build(10)
+        long = raw_build(200)
+        self.assertNotIn("-crf", short)
+        self.assertIn("-b:v", short)
+        self.assertIn("-maxrate", short)
+        short_kbps = int(short[short.index("-b:v") + 1].rstrip("k"))
+        long_kbps = int(long[long.index("-b:v") + 1].rstrip("k"))
+        self.assertGreater(short_kbps, long_kbps)
+        self.assertGreaterEqual(long_kbps, 150)  # DISCORD_MIN_VIDEO_KBPS floor
+
     def test_empty_upper_track_emits_no_overlay(self) -> None:
         g = self.graph(self.build([clip("i1", "V1", "Clip_A", 0, 10)]))
         self.assertNotIn("overlay", g)

@@ -417,6 +417,7 @@ function ExportModal({
   const [location, setLocation] = useState('library');
   const [custom, setCustom] = useState('');
   const [addToLibrary, setAddToLibrary] = useState(true);
+  const [discordOptimized, setDiscordOptimized] = useState(false);
   const [phase, setPhase] = useState<'form' | 'busy' | 'done'>('form');
   const [progress, setProgress] = useState(0);
   const [donePath, setDonePath] = useState('');
@@ -464,7 +465,9 @@ function ExportModal({
 
   const dir =
     location === 'library' ? libraryDir : location === 'videos' ? '~/Videos' : custom.trim() || '';
-  const summary = `${Math.round(duration)}s · H.264 and AAC into ${dir || 'a folder you pick'}/${
+  const summary = `${Math.round(duration)}s · ${
+    discordOptimized ? 'Discord-optimized (under 20 MB)' : 'H.264 and AAC'
+  } into ${dir || 'a folder you pick'}/${
     (name.trim() || 'Vice_Edit_N').replace(/\.mp4$/i, '')
   }.mp4`;
 
@@ -479,6 +482,7 @@ function ExportModal({
       location,
       add_to_library: addToLibrary,
       accent,
+      discord_optimized: discordOptimized,
     };
     if (name.trim()) body.filename = name.trim();
     if (location === 'custom') body.path = custom.trim();
@@ -590,6 +594,14 @@ function ExportModal({
               />
             </label>
           ) : null}
+          <label className="ed-export-field">
+            <span>{t('editor.discordOptimize')}</span>
+            <Toggle
+              label={t('editor.discordOptimize')}
+              checked={discordOptimized}
+              onChange={setDiscordOptimized}
+            />
+          </label>
           <p className="ed-export-summary mono">{summary}</p>
           {recording ? (
             <p className="ed-export-warn">
