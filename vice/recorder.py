@@ -260,39 +260,13 @@ def _gsr_supported_codecs() -> frozenset[str]:
     return frozenset(codecs)
 
 
-# --info lists the concrete backend GSR picked for a codec (Vulkan Video,
-# a software fallback, ...), not just the codec name -k expects. On GPUs/
-# drivers whose only path is Vulkan Video, every entry carries one of these
-# suffixes (e.g. "hevc_vulkan", "hevc_hdr_vulkan", "h264_software"), and none
-# of them ever matches the plain "h264"/"hevc"/"av1"/"hevc_10bit"/"av1_10bit"
-# names -k and _GSR_CODEC_PREFERENCE work with. Left unnormalized, every
-# codec on such a system reads as "unsupported", -k is dropped entirely, and
-# GSR falls back to its own default (h264) which is not offered under that
-# name either (#156 follow-up).
-_GSR_CODEC_NAME_SUFFIXES = ("_hdr_vulkan", "_vulkan", "_software")
-
-
-def _normalize_gsr_codec_name(name: str) -> str:
-    for suffix in _GSR_CODEC_NAME_SUFFIXES:
-        if name.endswith(suffix):
-            return name[: -len(suffix)]
-    return name
-
-
-def _gsr_supported_codecs_normalized() -> frozenset[str]:
-    """_gsr_supported_codecs(), with backend suffixes stripped for capability
-    checks. Not cached on its own: it's cheap to recompute, and a second
-    lru_cache here would need its own cache_clear() everywhere the existing
-    one already gets cleared (tests included) or it goes stale."""
-    return frozenset(_normalize_gsr_codec_name(c) for c in _gsr_supported_codecs())
-
-
 def _gsr_codec_unsupported(codec: Optional[str]) -> bool:
     """Whether GSR has told us this -k value will not work on this GPU."""
     if not codec:
         return False
-    supported = _gsr_supported_codecs_normalized()
+    supported = _gsr_supported_codecs()
     return bool(supported) and codec not in supported
+
 
 # Order to reach for when the configured codec is out. HEVC first: every GPU
 # with an AV1 encoder also has HEVC, and HEVC is the wider bet for players.
@@ -319,7 +293,7 @@ def _gsr_codec_choice(rc, avoid: Optional[str] = None) -> Optional[str]:
     if codec and codec not in rejected:
         return codec
 
-    supported = _gsr_supported_codecs_normalized()
+    supported = _gsr_supported_codecs()
     if not supported:
         return None
     order = _GSR_CODEC_PREFERENCE_10BIT if depth == "10" else _GSR_CODEC_PREFERENCE
@@ -1703,7 +1677,7 @@ def _next_templated_path(
         # Build a matcher from the template so numbering survives a change to
         # anything around $n. The marker is a private-use codepoint: it lives
         # through sanitizing and cannot occur in a real filename.
-        placeholder = "\ue000"
+        placeholder = ""
         literal = _render_clip_name(template.replace("$n", placeholder), 0, tag, now)
         if placeholder not in literal:
             return None
