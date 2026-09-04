@@ -237,7 +237,7 @@ class PlaylistStore:
         """Manually set (or clear) the game/tag a clip is filed under. Pulls
         the clip out of whatever auto playlist it currently sits in, then
         (when *game* is given) files it under that tag's auto playlist,
-        creating it if needed — same mechanism as live detection, just
+        creating it if needed, same mechanism as live detection, just
         triggered by the user instead of a matched process. Passing
         game=None just untags the clip."""
         changed = False
