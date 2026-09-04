@@ -11,7 +11,7 @@ const CUSTOM = '__custom__';
 
 /**
  * Tag editor for a single clip: the bundled/custom games list, same shape as
- * the resolution and accent pickers elsewhere in the app — a `Select` with a
+ * the resolution and accent pickers elsewhere in the app, a `Select` with a
  * trailing "Custom" entry that reveals a free-text field.
  *
  * Owns its own list fetch and local draft state; the caller only supplies

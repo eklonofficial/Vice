@@ -1,4 +1,5 @@
 [
+  {"name": "Sandcastle", "matches": ["Sandcastle.exe", "sandcastle", "steam_app_3216520"]},
   {"name": "Roblox", "matches": ["RobloxPlayerBeta.exe", "robloxplayerbeta", "roblox"]},
   {"name": "Minecraft", "matches": ["minecraft", "minecraft-launcher", "PrismLauncher", "tlauncher"]},
   {"name": "Counter-Strike 2", "matches": ["cs2", "cs2.exe", "counter-strike 2"]},
