@@ -769,6 +769,102 @@ class PreviewProxyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(list(proxy_dir.glob("*.mp4")), [])
 
 
+class DiscordCopyTests(unittest.IsolatedAsyncioTestCase):
+    """The share sheet drags a copy sized for Discord's upload cap."""
+
+    class _FakeProc:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    def _recording_ffmpeg(self, captured: list) -> "callable":
+        """Stand-in for ffmpeg that records the argv and writes the output."""
+        async def fake_exec(*cmd, **_kwargs):
+            captured.append(list(cmd))
+            Path(cmd[-1]).write_bytes(b"encoded")
+            return self._FakeProc()
+        return fake_exec
+
+    @staticmethod
+    def _kbps(cmd: list) -> int:
+        return int(cmd[cmd.index("-b:v") + 1].rstrip("k"))
+
+    async def test_an_mp4_under_the_cap_is_dragged_as_is(self) -> None:
+        import vice.share as share_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "Vice_Clip_1.mp4"
+            src.write_bytes(b"small")
+            out = await share_mod._make_discord_copy(src, 10)
+            self.assertEqual(out, src)
+            self.assertFalse((root / share_mod.DISCORD_SUBDIR).exists())
+
+    async def test_the_copy_lands_beside_the_clip(self) -> None:
+        """A sandboxed drop target (Discord ships as a Flatpak) can only read
+        the folders it was granted, and the clip's own is one of them. A copy
+        in ~/.cache dropped as a path it cannot open, which Discord reported
+        as an empty file."""
+        import vice.share as share_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "clips" / "Vice_Clip_1.mkv"
+            src.parent.mkdir()
+            src.write_bytes(b"not-a-real-mkv")
+            with mock.patch("asyncio.create_subprocess_exec",
+                            self._recording_ffmpeg([])):
+                out = await share_mod._make_discord_copy(src, 10)
+            self.assertEqual(out.parent, src.parent / share_mod.DISCORD_SUBDIR)
+
+    async def test_bitrate_budget_shrinks_with_duration_and_audio_tracks(self) -> None:
+        import vice.share as share_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # .mkv, so the "already small enough" shortcut never applies and
+            # every case actually goes through the budget.
+            src = root / "Vice_Clip_1.mkv"
+            src.write_bytes(b"not-a-real-mkv")
+            captured: list = []
+            with mock.patch("asyncio.create_subprocess_exec",
+                            self._recording_ffmpeg(captured)):
+                for duration, tracks in ((10, 1), (200, 1), (10, 2)):
+                    share_mod._purge_clip_discord(src)
+                    out = await share_mod._make_discord_copy(src, duration, tracks)
+                    self.assertIsNotNone(out)
+
+        short, long, two_tracks = (self._kbps(c) for c in captured)
+        self.assertGreater(short, long)
+        self.assertEqual(short - two_tracks, share_mod.DISCORD_AUDIO_KBPS)
+        self.assertGreaterEqual(long, share_mod.DISCORD_MIN_VIDEO_KBPS)
+        # The budget has to fit the cap, not just be smaller than the source.
+        self.assertLess(short * 10 / 8192, share_mod.DISCORD_MAX_MB)
+
+    async def test_the_copy_is_cached_and_transcoded_once(self) -> None:
+        import vice.share as share_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "Vice_Clip_1.mkv"
+            src.write_bytes(b"not-a-real-mkv")
+            captured: list = []
+            with mock.patch("asyncio.create_subprocess_exec",
+                            self._recording_ffmpeg(captured)):
+                first = await share_mod._make_discord_copy(src, 10)
+                again = await share_mod._make_discord_copy(src, 10)
+            self.assertEqual(first, again)
+            self.assertEqual(len(captured), 1)
+
+    def test_purge_removes_the_cached_copy(self) -> None:
+        import vice.share as share_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            clip = Path(tmp) / "Vice_Clip_9.mp4"
+            copies = Path(tmp) / share_mod.DISCORD_SUBDIR
+            copies.mkdir()
+            (copies / "Vice_Clip_9_123_456.mp4").write_bytes(b"x")
+            (copies / "Vice_Clip_8_123_456.mp4").write_bytes(b"x")
+            share_mod._purge_clip_discord(clip)
+            self.assertEqual([p.name for p in copies.glob("*.mp4")],
+                             ["Vice_Clip_8_123_456.mp4"])
+
+
 @unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
 class TrimKeyframeTests(unittest.IsolatedAsyncioTestCase):
     """Regression tests for #172. A stream copy that starts between keyframes
