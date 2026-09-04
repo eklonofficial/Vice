@@ -40,6 +40,7 @@ export interface ViewerProps {
   onDelete: (clip: Clip) => void;
   onOpenExternally: (clip: Clip) => void;
   onRename: (clip: Clip, name: string) => void;
+  onTag: (clip: Clip) => void;
   notify: (title: string, detail?: string, tone?: 'accent' | 'error') => void;
 }
 
@@ -516,6 +517,14 @@ export function Viewer(props: ViewerProps) {
               disabled={index < 0 || index >= clips.length - 1}
               aria-label={t('viewer.nextClip')}>
               <Chevron dir="right" />
+            </button>
+            <button
+              type="button"
+              className="viewer-nav"
+              onClick={() => props.onTag(clip)}
+              title={t('card.tagTitle')}
+              aria-label={t('card.tagTitle')}>
+              <TagGlyph />
             </button>
             <button
               type="button"
@@ -1081,6 +1090,12 @@ const CameraGlyph = () => (
   <svg {...stroke} width={15} height={15} strokeWidth={2}>
     <path d="M3 8.5A1.5 1.5 0 0 1 4.5 7h2L8 4.5h8L17.5 7h2A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" />
     <circle cx="12" cy="13" r="3.4" />
+  </svg>
+);
+const TagGlyph = () => (
+  <svg {...stroke} width={15} height={15} strokeWidth={2}>
+    <path d="M12.6 3.5h5.4a1.5 1.5 0 0 1 1.5 1.5v5.4a1.5 1.5 0 0 1-.44 1.06l-8 8a1.5 1.5 0 0 1-2.12 0l-6.4-6.4a1.5 1.5 0 0 1 0-2.12l8-8A1.5 1.5 0 0 1 12.6 3.5Z" />
+    <circle cx="16.5" cy="7.5" r="1.3" fill="currentColor" stroke="none" />
   </svg>
 );
 /* Corners pointing out to grow, pointing in to shrink. The same pair the

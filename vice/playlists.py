@@ -232,6 +232,28 @@ class PlaylistStore:
         user has edited it (then it's theirs to keep)."""
         return p.get("kind") == "auto" and not p.get("clip_slugs") and not p.get("edited")
 
+    def set_clip_tag(self, slug: str, game: Optional[str],
+                     display_name: Optional[str] = None) -> bool:
+        """Manually set (or clear) the game/tag a clip is filed under. Pulls
+        the clip out of whatever auto playlist it currently sits in, then
+        (when *game* is given) files it under that tag's auto playlist,
+        creating it if needed — same mechanism as live detection, just
+        triggered by the user instead of a matched process. Passing
+        game=None just untags the clip."""
+        changed = False
+        for p in list(self._playlists):
+            if p.get("kind") == "auto" and slug in p.get("clip_slugs", []):
+                p["clip_slugs"].remove(slug)
+                if self._prunable_when_empty(p):
+                    self._playlists.remove(p)
+                changed = True
+        game = (game or "").strip()
+        if game and self.record_auto(game, slug, display_name=display_name or game):
+            changed = True
+        elif changed:
+            self.save()
+        return changed
+
     def record_auto(self, game: str, slug: str,
                     display_name: Optional[str] = None,
                     from_backfill: bool = False) -> bool:

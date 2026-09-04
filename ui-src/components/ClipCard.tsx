@@ -26,6 +26,7 @@ export interface ClipActions {
   onCopyFile?: (clip: Clip) => void;
   onCopyLink?: (clip: Clip) => void;
   onRename?: (clip: Clip, name: string) => Promise<void>;
+  onTag?: (clip: Clip) => void;
   onContextMenu?: (clip: Clip, at: {x: number; y: number}) => void;
   /** Set by the context menu to open this card's rename field. */
   renamingSlug?: string | null;
@@ -192,9 +193,20 @@ export function ClipCard({
             })}
           </p>
         ) : null}
-        <span className="clip-game" data-untagged={clip.game ? undefined : true}>
-          {clip.game || t('common.untagged')}
-        </span>
+        {actions.onTag ? (
+          <button
+            type="button"
+            className="clip-game clip-game-btn"
+            data-untagged={clip.game ? undefined : true}
+            title={t('card.tagTitle')}
+            onClick={() => actions.onTag?.(clip)}>
+            {clip.game || t('common.untagged')}
+          </button>
+        ) : (
+          <span className="clip-game" data-untagged={clip.game ? undefined : true}>
+            {clip.game || t('common.untagged')}
+          </span>
+        )}
 
         {hasActions(actions) ? (
           <div className="clip-actions">

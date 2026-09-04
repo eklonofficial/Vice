@@ -140,7 +140,14 @@
     "linkCopiedLocalDetail": "Install cloudflared for links that work off your network",
     "shareLinkCopied": "Share link copied",
     "alreadyIn": "Already in {playlist}",
-    "errAddClip": "Could not add the clip"
+    "errAddClip": "Could not add the clip",
+    "tag": "Tag",
+    "tagTitle": "Tag this clip",
+    "tagCustom": "Custom…",
+    "tagCustomPlaceholder": "e.g. My Game",
+    "tagFailed": "Could not update the tag",
+    "tagged": "Tagged as {game}",
+    "untaggedNotice": "Tag removed"
   },
   "playlistModal": {
     "editTitle": "Edit playlist",
