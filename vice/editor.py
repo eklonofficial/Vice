@@ -477,9 +477,19 @@ class _VideoChain:
         return self.cur
 
 
+# Discord's plain (non-Nitro) upload cap. The margin covers container
+# overhead and single-pass ABR variance so the file lands under it in one
+# encode rather than needing a slower two-pass run.
+DISCORD_MAX_MB = 20
+DISCORD_SIZE_MARGIN = 0.92
+DISCORD_AUDIO_KBPS = 128
+DISCORD_MIN_VIDEO_KBPS = 150
+
+
 def build_export_cmd(project: dict, sources: dict[str, Source], out_path: Path,
                      *, accent: str = "#0099ff", fonts: Optional[Path] = None,
-                     text_dir: Optional[Path] = None) -> list[str]:
+                     text_dir: Optional[Path] = None,
+                     discord_optimized: bool = False) -> list[str]:
     """Build the full ffmpeg argv for a validated project. Pure: callers
     write out the text files (text_file_contents) before running it."""
     fonts = fonts or font_dir()
@@ -567,6 +577,19 @@ def build_export_cmd(project: dict, sources: dict[str, Source], out_path: Path,
                      + f"amix=inputs={len(alabels)}:duration=longest:normalize=0,"
                      f"atrim=0:{_n(extent)},asetpts=PTS-STARTPTS[aout]")
 
+    if discord_optimized:
+        audio_kbps = DISCORD_AUDIO_KBPS
+        budget_kbps = DISCORD_MAX_MB * 8192 * DISCORD_SIZE_MARGIN / max(extent, 1)
+        video_kbps = max(DISCORD_MIN_VIDEO_KBPS, round(budget_kbps - audio_kbps))
+        video_args = ["-c:v", "libx264", "-preset", "medium",
+                     "-b:v", f"{video_kbps}k",
+                     "-maxrate", f"{round(video_kbps * 1.45)}k",
+                     "-bufsize", f"{video_kbps * 2}k"]
+        audio_args = ["-c:a", "aac", "-b:a", f"{audio_kbps}k"]
+    else:
+        video_args = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
+        audio_args = ["-c:a", "aac", "-b:a", "192k"]
+
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostats",
            "-progress", "pipe:1"]
     for cid in input_order:
@@ -574,9 +597,9 @@ def build_export_cmd(project: dict, sources: dict[str, Source], out_path: Path,
     cmd += [
         "-filter_complex", ";".join(lines),
         "-map", f"[{vout}]", "-map", "[aout]",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        *video_args,
         "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "192k",
+        *audio_args,
         "-movflags", "+faststart",
         "-t", _n(extent),
         "-f", "mp4",

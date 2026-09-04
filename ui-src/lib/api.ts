@@ -66,6 +66,21 @@ export const api = {
   revealClip: (slug: string) => post<void>(`/api/clips/${enc(slug)}/reveal`),
   openClip: (slug: string) => post<void>(`/api/clips/${enc(slug)}/open`),
   copyClipFile: (slug: string) => post<void>(`/api/clips/${enc(slug)}/copy-file`),
+  /**
+   * Build (or reuse) a Discord-sized copy of the clip and return where it is.
+   * Slow the first time: it transcodes.
+   */
+  discordCopy: (slug: string) =>
+    request<{
+      ok?: boolean;
+      error?: string;
+      url: string;
+      path: string;
+      filename: string;
+      size: number;
+    }>(
+      `/api/clips/${enc(slug)}/discord`,
+    ),
   trimClip: (slug: string, start: number, end: number) =>
     post<Clip>(`/api/clips/${enc(slug)}/trim`, {start, end}),
   markViewed: (slug: string) => post<{ok?: boolean; views: number}>(`/api/clips/${enc(slug)}/view`),
