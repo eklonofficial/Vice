@@ -348,7 +348,7 @@ Vice is better because these people sent patches:
 - [@quadruplea0](https://github.com/quadruplea0), for making the resolution setting actually reach gpu-screen-recorder
 - [@DeveloperSpoot](https://github.com/DeveloperSpoot), for themed Discord embeds, their idea and their first implementation
 - [@jethrothelion](https://github.com/jethrothelion), for Chivalry 2 and Clone Drone in The Danger Zone
-- [@voltek-laruelle](https://github.com/voltek-laruelle), for the clip volume slider, custom clip tags, and for GeoGuessr Steam Edition, Forza Horizon 4, Big Walk, Supermarket Simulator, and Sandustry.
+- [@voltek-laruelle](https://github.com/voltek-laruelle), for the clip volume slider, custom clip tags, and for GeoGuessr Steam Edition, Forza Horizon 4, Big Walk, Supermarket Simulator, and Sandustry
 
 
 And to everyone who has opened an issue with a log attached: that is most of how the hard bugs get found.
