@@ -790,6 +790,8 @@ class ShareServer:
         r.add_delete("/api/clips/{slug}",    self._api_delete)
         r.add_post("/api/clips/{slug}/trim",              self._api_trim)
         r.add_post("/api/clips/{slug}/rename",            self._api_rename)
+        r.add_post("/api/clips/{slug}/tag",               self._api_tag_clip)
+        r.add_get("/api/games",                           self._api_games)
         r.add_post("/api/clips/{slug}/reveal",            self._api_reveal)
         r.add_post("/api/clips/{slug}/open",              self._api_open)
         r.add_post("/api/clips/{slug}/copy-file",         self._api_copy_file)
@@ -1465,6 +1467,45 @@ class ShareServer:
         await self.broadcast({"type": "clip_deleted", "slug": slug})
         asyncio.create_task(self._broadcast_clip(new_slug, new_path))
         return web.json_response({"ok": True, "slug": new_slug, "name": new_path.name})
+
+    async def _api_tag_clip(self, req: web.Request) -> web.Response:
+        """Manually set or clear the tag (game) shown on a clip's card. Body:
+        {"game": "Elden Ring"} to tag it, or {"game": null} / {"game": ""} to
+        untag. This reuses the auto-playlist machinery: filing a clip under a
+        tag is the same whether a running game was detected or the user
+        picked/typed the name themselves."""
+        slug = req.match_info["slug"]
+        path = self._clips.get(slug)
+        if not path or not path.exists():
+            raise web.HTTPNotFound()
+
+        try:
+            body = await req.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+        if not isinstance(body, dict):
+            return web.json_response({"ok": False, "error": "expected an object"}, status=400)
+
+        game = body.get("game")
+        game = str(game).strip() if game else ""
+        if len(game) > 64:
+            return web.json_response({"ok": False, "error": "tag is too long"}, status=400)
+
+        self.playlists.set_clip_tag(slug, game or None)
+        await self._broadcast_playlists()
+        asyncio.create_task(self._broadcast_clip(slug, path))
+        return web.json_response({"ok": True, "slug": slug, "game": game or None})
+
+    async def _api_games(self, _: web.Request) -> web.Response:
+        """Tag picker source: the bundled game list plus the user's Discord
+        custom games, merged and de-duplicated the same way auto-detection
+        does. Used by the UI to offer a default list before falling back to
+        a free-typed custom tag."""
+        names = sorted(
+            {n for n in build_tag_index(self.cfg.discord.custom_games).values() if n},
+            key=str.casefold,
+        )
+        return web.json_response({"games": names})
 
     async def _api_reveal(self, req: web.Request) -> web.Response:
         slug = req.match_info["slug"]

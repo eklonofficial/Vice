@@ -13,9 +13,10 @@ import {api} from '../lib/api';
 import {copyShareLink} from '../lib/share';
 import {clipTitle, type Clip, type Highlight} from '../lib/types';
 import {Modal} from '../components/Modal';
+import {TagPicker} from '../components/TagPicker';
 import {TrimModal} from '../components/TrimModal';
 import {Viewer} from '../components/Viewer';
-import {useRenameClip} from './clipActions';
+import {useRenameClip, useTagClip} from './clipActions';
 import {useStore} from './store';
 import {t} from '../lib/i18n';
 
@@ -40,6 +41,7 @@ export function PlaybackProvider({children}: {children: ReactNode}) {
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [confirmDelete, setConfirmDelete] = useState<Clip | null>(null);
   const [manualCopy, setManualCopy] = useState<string | null>(null);
+  const [tagging, setTagging] = useState<Clip | null>(null);
 
   const viewerClip = clips.find(c => c.slug === viewerSlug) ?? null;
   const trimClip = clips.find(c => c.slug === trimSlug) ?? null;
@@ -135,6 +137,8 @@ export function PlaybackProvider({children}: {children: ReactNode}) {
     [notify],
   );
 
+  const tagClip = useTagClip();
+
   const value = useMemo<Playback>(() => ({openViewer, openTrim}), [openViewer, openTrim]);
 
   return (
@@ -155,6 +159,7 @@ export function PlaybackProvider({children}: {children: ReactNode}) {
         onReveal={reveal}
         onOpenExternally={openExternally}
         onDelete={setConfirmDelete}
+        onTag={setTagging}
         notify={say}
       />
 
@@ -206,6 +211,8 @@ export function PlaybackProvider({children}: {children: ReactNode}) {
         <p>{t('viewer.copyLinkBody')}</p>
         <textarea className="manual-copy" readOnly value={manualCopy ?? ''} rows={3} />
       </Modal>
+
+      <TagPicker clip={tagging} onClose={() => setTagging(null)} onSave={tagClip} />
     </PlaybackContext.Provider>
   );
 }

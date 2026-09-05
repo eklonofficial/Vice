@@ -6,6 +6,7 @@ import {clipTitle, type Clip} from '../lib/types';
 import type {ClipActions} from '../components/ClipCard';
 import {ContextMenu} from '../components/ContextMenu';
 import {Modal} from '../components/Modal';
+import {TagPicker} from '../components/TagPicker';
 import {useStore} from './store';
 import {usePlayback} from './playback';
 import {t} from '../lib/i18n';
@@ -56,6 +57,39 @@ export function useRenameClip(): (clip: Clip, name: string) => Promise<Clip | nu
   );
 }
 
+/**
+ * Set or clear a clip's tag, wherever the gesture came from (card, viewer
+ * header, or the card's context menu all share this).
+ */
+export function useTagClip(): (clip: Clip, game: string | null) => Promise<boolean> {
+  const {notify, refreshClips, refreshPlaylists} = useStore();
+  return useCallback(
+    async (clip: Clip, game: string | null) => {
+      try {
+        await api.tagClip(clip.slug, game);
+        await Promise.all([refreshClips(), refreshPlaylists()]);
+        notify({
+          kind: 'info',
+          title: game ? t('card.tagged', {game}) : t('card.untaggedNotice'),
+          tone: 'accent',
+          holdMs: 3000,
+        });
+        return true;
+      } catch (err) {
+        notify({
+          kind: 'error',
+          title: t('card.tagFailed'),
+          detail: (err as Error).message,
+          tone: 'error',
+          holdMs: 7000,
+        });
+        return false;
+      }
+    },
+    [notify, refreshClips, refreshPlaylists],
+  );
+}
+
 export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
   const {state, notify, refreshPlaylists} = useStore();
   const {openViewer, openTrim} = usePlayback();
@@ -65,6 +99,7 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
   const [confirmDelete, setConfirmDelete] = useState<Clip | null>(null);
   const [manualCopy, setManualCopy] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [tagging, setTagging] = useState<Clip | null>(null);
 
   const fail = useCallback(
     (title: string) => (err: Error) =>
@@ -105,6 +140,8 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
     [renameClip],
   );
 
+  const tagClip = useTagClip();
+
   const actions = useMemo<ClipActions>(
     () => ({
       onOpen: clip => openViewer(clip.slug),
@@ -114,6 +151,7 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
       onReveal: reveal,
       onDelete: setConfirmDelete,
       onRename: rename,
+      onTag: setTagging,
       onContextMenu: (clip, at) => setMenu({clip, at}),
       renamingSlug: renaming,
       onRenameDone: () => setRenaming(null),
@@ -134,6 +172,7 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
             {id: 'open', label: t('card.open'), onSelect: () => openViewer(menuClip.slug)},
             {id: 'trim', label: t('card.trim'), onSelect: () => openTrim(menuClip.slug)},
             {id: 'rename', label: t('card.rename'), onSelect: () => setRenaming(menuClip.slug)},
+            {id: 'tag', label: t('card.tag'), onSelect: () => setTagging(menuClip)},
             {
               id: 'copy-link',
               label: menuClip.share_url ? t('card.copyShareLink') : t('card.noShareLink'),
@@ -220,6 +259,8 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
         <p>{t('viewer.copyLinkBody')}</p>
         <textarea className="manual-copy" readOnly value={manualCopy ?? ''} rows={3} />
       </Modal>
+
+      <TagPicker clip={tagging} onClose={() => setTagging(null)} onSave={tagClip} />
     </>
   );
 

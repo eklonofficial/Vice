@@ -63,6 +63,11 @@ export const api = {
   clips: async () => (await request<{clips: Clip[]}>('/api/clips')).clips,
   deleteClip: (slug: string) => request<void>(`/api/clips/${enc(slug)}`, {method: 'DELETE'}),
   renameClip: (slug: string, name: string) => post<Clip>(`/api/clips/${enc(slug)}/rename`, {name}),
+  /** `game: null` clears the tag. */
+  tagClip: (slug: string, game: string | null) =>
+    post<{ok?: boolean; error?: string; game: string | null}>(`/api/clips/${enc(slug)}/tag`, {game}),
+  /** Bundled + custom game names, for the tag picker's default list. */
+  games: async () => (await request<{games: string[]}>('/api/games')).games,
   revealClip: (slug: string) => post<void>(`/api/clips/${enc(slug)}/reveal`),
   openClip: (slug: string) => post<void>(`/api/clips/${enc(slug)}/open`),
   copyClipFile: (slug: string) => post<void>(`/api/clips/${enc(slug)}/copy-file`),
