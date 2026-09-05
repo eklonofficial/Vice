@@ -28,6 +28,7 @@ import re
 import shutil
 import socket
 import subprocess
+import tempfile
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -549,7 +550,7 @@ async def _remux_moov(path: Path) -> bool:
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        await asyncio.wait_for(proc.wait(), timeout=60)
+        await communicate_with_timeout(proc, timeout=60)
         if proc.returncode == 0 and tmp.exists():
             remuxed = await probe_media(tmp)
             orig_size = path.stat().st_size
@@ -570,10 +571,11 @@ async def _remux_moov(path: Path) -> bool:
             )
     except Exception as exc:
         log.warning("Remux of %s failed: %s", path.name, exc)
-    try:
-        tmp.unlink(missing_ok=True)
-    except Exception as exc:
-        log.debug("Could not remove the remux temp file %s: %s", tmp.name, exc)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError as exc:
+            log.debug("Could not remove the remux temp file %s: %s", tmp.name, exc)
     return False
 
 
@@ -624,12 +626,18 @@ async def _make_thumb(path: Path, duration: float = 0.0) -> Path:
     """
     THUMB_DIR.mkdir(parents=True, exist_ok=True)
     thumb = _thumb_path(path)
-    if thumb.exists():
+    if thumb.exists() and thumb.stat().st_size > 0:
         return thumb
     if duration and duration > 0:
         seek_ts = min(duration / 2.0, 0.75)
     else:
         seek_ts = 0.0
+    # Publish only complete images. Concurrent requests get separate temporary
+    # files, so cancellation cannot delete another request's finished thumbnail.
+    with tempfile.NamedTemporaryFile(
+        prefix=f".{thumb.stem}.", suffix=".jpg", dir=THUMB_DIR, delete=False,
+    ) as handle:
+        tmp = Path(handle.name)
     try:
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-hide_banner", "-loglevel", "error",
@@ -638,13 +646,17 @@ async def _make_thumb(path: Path, duration: float = 0.0) -> Path:
             "-frames:v", "1",
             "-vf", "scale=640:-2",
             "-q:v", "4",
-            str(thumb),
+            "-y", str(tmp),
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        await asyncio.wait_for(proc.wait(), timeout=20)
+        await communicate_with_timeout(proc, timeout=20)
+        if proc.returncode == 0 and tmp.stat().st_size > 0:
+            tmp.replace(thumb)
     except Exception as exc:
         log.debug("Thumbnail generation failed for %s: %s", path.name, exc)
+    finally:
+        tmp.unlink(missing_ok=True)
     return thumb
 
 
@@ -906,6 +918,7 @@ class ShareServer:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        await self._exports.stop()
         for ws in list(self._ws_clients):
             try:
                 await ws.close()
@@ -1264,7 +1277,7 @@ class ShareServer:
             raise web.HTTPNotFound()
         meta = await self._get_meta(slug, path)
         t = await _make_thumb(path, duration=meta.get("duration", 0))
-        if not t.exists():
+        if not t.exists() or t.stat().st_size == 0:
             raise web.HTTPNotFound()
         return web.FileResponse(t, headers={"Content-Type": "image/jpeg"})
 
@@ -1283,7 +1296,8 @@ class ShareServer:
 
         sem = asyncio.Semaphore(3)
         async def _ensure(slug: str, path: Path) -> None:
-            if _thumb_path(path).exists():
+            thumb = _thumb_path(path)
+            if thumb.exists() and thumb.stat().st_size > 0:
                 return
             async with sem:
                 await _make_thumb(path, duration=metas[slug].get("duration", 0))

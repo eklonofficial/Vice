@@ -1669,7 +1669,7 @@ class ExportManagerTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.05)
             self.assertTrue(mgr.busy)
             self.assertTrue(await mgr.cancel("exp-1"))
-            await asyncio.wait_for(mgr._task, timeout=5)
+            self.assertFalse(mgr.busy)
 
         self.assertEqual(messages[-1]["type"], "export_error")
         self.assertTrue(messages[-1]["canceled"])
