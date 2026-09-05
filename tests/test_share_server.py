@@ -359,6 +359,10 @@ class PlaylistApiTests(unittest.IsolatedAsyncioTestCase):
         self.thumb_dir.mkdir()
         self.highlights_dir = root / "highlights"
         self.highlights_dir.mkdir()
+        # Sandboxed too, or the backfill scans the real ~/Pictures/Vice and
+        # seeds an auto playlist per game found there.
+        self.image_dir = root / "pictures"
+        self.image_dir.mkdir()
 
         self.clip_path = self.output_dir / "Vice_Clip_1_Minecraft.mp4"
         self.clip_path.write_bytes(b"not-a-real-mp4")
@@ -390,7 +394,10 @@ class PlaylistApiTests(unittest.IsolatedAsyncioTestCase):
             self.addCleanup(patcher.stop)
 
         cfg = Config(
-            output=OutputConfig(directory=str(self.output_dir)),
+            output=OutputConfig(
+                directory=str(self.output_dir),
+                image_directory=str(self.image_dir),
+            ),
             sharing=SharingConfig(
                 port=self.local_port,
                 public_port=self.public_port,

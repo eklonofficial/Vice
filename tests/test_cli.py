@@ -1,4 +1,5 @@
 import unittest
+import tempfile
 from pathlib import Path
 from unittest import mock
 
@@ -62,6 +63,14 @@ class CliVersionTests(unittest.TestCase):
 
 
 class StartCommandTests(unittest.TestCase):
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.socket_path = Path(tmp.name) / "vice.sock"
+        patcher = mock.patch("vice.main.PID_FILE", Path(tmp.name) / "vice.pid")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_start_help_documents_no_open_ui_flag(self) -> None:
         runner = CliRunner()
         result = runner.invoke(cli, ["start", "--help"])
@@ -81,7 +90,7 @@ class StartCommandTests(unittest.TestCase):
              mock.patch("vice.main._setup_daemon_logging"), \
              mock.patch("vice.main.runtime_env_snapshot", return_value={}), \
              mock.patch("vice.main.wait_for_display"), \
-             mock.patch("vice.main.SOCKET_FILE", Path("/tmp/vice-test-missing.sock")), \
+             mock.patch("vice.main.SOCKET_FILE", self.socket_path), \
              mock.patch("vice.main.ViceDaemon", return_value=daemon), \
              mock.patch("vice.main.subprocess.Popen") as popen_mock:
             result = runner.invoke(cli, ["start", "--no-open-ui"])
@@ -129,6 +138,14 @@ class SessionWaitTests(unittest.TestCase):
     reach before the compositor exports anything (#139). Waiting for that is
     only ever right under systemd."""
 
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.socket_path = Path(tmp.name) / "vice.sock"
+        patcher = mock.patch("vice.main.PID_FILE", Path(tmp.name) / "vice.pid")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_terminal_start_never_waits(self) -> None:
         runner = CliRunner()
         daemon = _FakeStartDaemon()
@@ -138,7 +155,7 @@ class SessionWaitTests(unittest.TestCase):
              mock.patch("vice.main.runtime_env_snapshot", return_value={}), \
              mock.patch("vice.main.running_under_systemd", return_value=False), \
              mock.patch("vice.main.has_display", return_value=False), \
-             mock.patch("vice.main.SOCKET_FILE", Path("/tmp/vice-test-missing.sock")), \
+             mock.patch("vice.main.SOCKET_FILE", self.socket_path), \
              mock.patch("vice.main.ViceDaemon", return_value=daemon), \
              mock.patch("vice.main.wait_for_display") as wait_mock:
             runner.invoke(cli, ["start", "--no-open-ui"])
@@ -154,7 +171,7 @@ class SessionWaitTests(unittest.TestCase):
              mock.patch("vice.main.runtime_env_snapshot", return_value={}), \
              mock.patch("vice.main.running_under_systemd", return_value=True), \
              mock.patch("vice.main.has_display", return_value=False), \
-             mock.patch("vice.main.SOCKET_FILE", Path("/tmp/vice-test-missing.sock")), \
+             mock.patch("vice.main.SOCKET_FILE", self.socket_path), \
              mock.patch("vice.main.ViceDaemon", return_value=daemon), \
              mock.patch("vice.main.wait_for_display") as wait_mock:
             runner.invoke(cli, ["start", "--no-open-ui"])
@@ -170,7 +187,7 @@ class SessionWaitTests(unittest.TestCase):
              mock.patch("vice.main.runtime_env_snapshot", return_value={}), \
              mock.patch("vice.main.running_under_systemd", return_value=True), \
              mock.patch("vice.main.has_display", return_value=True), \
-             mock.patch("vice.main.SOCKET_FILE", Path("/tmp/vice-test-missing.sock")), \
+             mock.patch("vice.main.SOCKET_FILE", self.socket_path), \
              mock.patch("vice.main.ViceDaemon", return_value=daemon), \
              mock.patch("vice.main.wait_for_display") as wait_mock:
             runner.invoke(cli, ["start", "--no-open-ui"])

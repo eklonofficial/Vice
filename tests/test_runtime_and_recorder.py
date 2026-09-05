@@ -312,6 +312,15 @@ class WebviewEnvironmentTests(unittest.TestCase):
 
 
 class AppStartupTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        root = Path(self._tmp.name)
+        for name in ("PID_FILE", "SOCKET_FILE", "DAEMON_STDERR_LOG_FILE"):
+            patcher = mock.patch.object(app_mod, name, root / name.lower())
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_start_daemon_passes_normalized_environment_to_child(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             socket_path = Path(tmp) / "vice.sock"

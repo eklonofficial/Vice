@@ -126,6 +126,35 @@ class UISourcePresenceTests(unittest.TestCase):
         ):
             self.assertIn(phrase, bundle, f"the bundle is stale: {phrase!r} is missing")
 
+    def test_bundle_carries_every_locale(self) -> None:
+        """The same staleness check, for languages nobody here reads.
+
+        The English phrases above only catch a forgotten build when English
+        changed. A translator who edits their own JSON and does not rebuild
+        ships a bundle that disagrees with the source, and no reviewer reading
+        the diff would see it.
+        """
+        bundle = BUNDLE_JS.read_text()
+        for path in sorted(LOCALES.glob("*.json")):
+            strings = _leaf_strings(json.loads(path.read_text()))
+            # Vite inlines the JSON, so a value reaches the bundle verbatim
+            # unless it carries a character the emitter has to escape.
+            checkable = [
+                v for v in strings
+                if v and len(v) >= 12 and not set(v) & set("`\\'\"") and "${" not in v
+            ]
+            self.assertGreater(
+                len(checkable), 20, f"{path.name}: too few strings to check"
+            )
+            missing = [v for v in checkable if v not in bundle]
+            self.assertEqual(
+                missing,
+                [],
+                f"the bundle is stale for {path.name}: "
+                f"{len(missing)} of {len(checkable)} strings are missing, "
+                f"first is {missing[0]!r}" if missing else "",
+            )
+
     def test_index_only_loads_the_two_built_assets(self) -> None:
         index = UI_INDEX.read_text()
         scripts = re.findall(r'<script[^>]*src="([^"]+)"', index)

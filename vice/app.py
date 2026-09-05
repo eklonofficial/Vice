@@ -38,7 +38,8 @@ from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 from . import __version__
-from .runtime import actual_home_dir, normalize_runtime_environment, systemd_unit_loaded
+from .runtime import (actual_home_dir, claim_daemon_lock, daemon_is_running,
+                      normalize_runtime_environment, systemd_unit_loaded)
 
 SOCKET_FILE = Path("/tmp/vice/vice.sock")
 PID_FILE    = Path("/tmp/vice/vice.pid")
@@ -128,22 +129,29 @@ def _daemon_status(timeout: float = 1.0) -> dict | None:
         return None
 
     async def _probe() -> dict | None:
+        writer = None
         try:
             reader, writer = await asyncio.wait_for(
                 asyncio.open_unix_connection(str(SOCKET_FILE)),
                 timeout=timeout,
             )
             writer.write(b"status\n")
-            await writer.drain()
+            await asyncio.wait_for(writer.drain(), timeout=timeout)
             resp = await asyncio.wait_for(reader.readline(), timeout=timeout)
-            writer.close()
-            await writer.wait_closed()
             if not resp:
                 return None
-            import json
-            return json.loads(resp)
-        except Exception:
+            status = json.loads(resp)
+            return status if isinstance(status, dict) else None
+        except Exception as exc:
+            log.debug("Daemon status probe at %s failed: %s", SOCKET_FILE, exc)
             return None
+        finally:
+            if writer is not None:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except OSError as exc:
+                    log.debug("Closing the daemon status connection failed: %s", exc)
 
     return asyncio.run(_probe())
 
@@ -193,12 +201,10 @@ def _start_daemon() -> None:
         if _daemon_responds():
             log.info("Daemon already running (socket is responsive)")
             return
-        log.warning("Found stale daemon socket at %s; removing it", SOCKET_FILE)
-        try:
-            SOCKET_FILE.unlink()
-        except OSError as exc:
-            log.error("Could not remove stale socket %s: %s", SOCKET_FILE, exc)
-            raise
+        _clear_stale_socket()
+    if daemon_is_running(SOCKET_FILE, PID_FILE):
+        log.info("A daemon process is already starting or stopping; waiting for it")
+        return
     # Hand the job back to systemd when it owns the unit. Starting our own
     # detached child instead is what used to strand the daemon outside the
     # service: the unit then had nothing to supervise, and the next time
@@ -236,55 +242,38 @@ def _stop_daemon() -> None:
         return
     try:
         async def _send():
-            reader, writer = await asyncio.open_unix_connection(str(SOCKET_FILE))
-            writer.write(b"stop\n")
-            await writer.drain()
-            writer.close()
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_unix_connection(str(SOCKET_FILE)), timeout=2.0,
+            )
+            try:
+                writer.write(b"stop\n")
+                await asyncio.wait_for(writer.drain(), timeout=2.0)
+                # Closing before the reply can break the daemon's drain before
+                # it reaches shutdown (#198).
+                response = await asyncio.wait_for(reader.readline(), timeout=2.0)
+                if response != b"ok\n":
+                    log.warning("Daemon did not acknowledge the stop request: %r", response)
+            finally:
+                writer.close()
+                await writer.wait_closed()
         asyncio.run(_send())
     except Exception as exc:
-        log.debug("Stop IPC error: %s", exc)
+        log.warning("Stop IPC failed: %s", exc)
 
 
 def _wait_for_daemon_exit(timeout: float = 10.0) -> bool:
     """Wait for the running daemon to fully exit. Returns True if it did.
 
-    Cloudflared tunnel teardown can take several seconds, so we poll the
-    PID file (cleaned up only after full shutdown) plus the IPC socket.
-    Force-kills the process via SIGKILL if it doesn't exit by `timeout`.
+    Recorder finalization can outlast the deadline. Leave the process and
+    its state alone on timeout so a slow save does not become a lost recording.
     """
     deadline = time.monotonic() + timeout
-    pid: int | None = None
-    try:
-        pid = int(PID_FILE.read_text().strip())
-    except (OSError, ValueError):
-        pid = None
-
     while time.monotonic() < deadline:
-        # Daemon writes its PID at startup and unlinks PID_FILE + SOCKET_FILE on exit.
-        if not PID_FILE.exists() and not SOCKET_FILE.exists():
+        if not daemon_is_running(SOCKET_FILE, PID_FILE):
             return True
-        if pid is not None:
-            try:
-                os.kill(pid, 0)  # signal 0 = "is process alive?"
-            except ProcessLookupError:
-                # Process is gone; let any final socket cleanup happen, then succeed.
-                time.sleep(0.05)
-                return True
-            except PermissionError:
-                pass  # alive but we can't signal it
         time.sleep(0.1)
-
-    if pid is not None:
-        log.warning("Daemon (pid=%s) did not exit in %.1fs, sending SIGKILL", pid, timeout)
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError) as exc:
-            log.warning("SIGKILL on pid=%s failed: %s", pid, exc)
-        # Best-effort: give the kernel a moment, then clean lingering files.
-        time.sleep(0.3)
-    for path in (PID_FILE, SOCKET_FILE):
-        path.unlink(missing_ok=True)
-    return True
+    log.warning("Daemon did not finish shutting down within %.1fs; leaving it running", timeout)
+    return False
 
 
 def _wait_for_server(url: str, timeout: float = 20.0) -> bool:
@@ -427,8 +416,16 @@ def _clear_stale_socket() -> None:
         return
     if _daemon_responds():
         return
-    log.warning("Removing stale daemon socket at %s", SOCKET_FILE)
-    SOCKET_FILE.unlink(missing_ok=True)
+    # A launcher may race with a daemon that has claimed ownership but has not
+    # yet written its PID or bound its socket. Use the same lock as CLI start.
+    with claim_daemon_lock(SOCKET_FILE):
+        if daemon_is_running(SOCKET_FILE, PID_FILE):
+            raise RuntimeError(
+                "Vice's daemon is still running but its control socket did not answer. "
+                "Wait for it to finish starting or stopping, then try again."
+            )
+        log.warning("Removing stale daemon socket at %s", SOCKET_FILE)
+        SOCKET_FILE.unlink(missing_ok=True)
 
 
 def _ensure_server(default_url: str, startup_timeout: float = 20.0) -> str | None:
@@ -446,7 +443,8 @@ def _ensure_server(default_url: str, startup_timeout: float = 20.0) -> str | Non
                     daemon_version, __version__,
                 )
                 _stop_daemon()
-                _wait_for_daemon_exit(timeout=10.0)
+                if not _wait_for_daemon_exit(timeout=10.0):
+                    raise RuntimeError("Vice is still shutting down. Wait before opening it again.")
                 _clear_stale_socket()
                 # Fall through to _start_daemon() below.
             else:
@@ -465,12 +463,14 @@ def _ensure_server(default_url: str, startup_timeout: float = 20.0) -> str | Non
                     return serving
                 log.warning("Daemon HTTP stopped responding; restarting daemon")
                 _stop_daemon()
-                _wait_for_daemon_exit(timeout=10.0)
+                if not _wait_for_daemon_exit(timeout=10.0):
+                    raise RuntimeError("Vice is still shutting down. Wait before opening it again.")
                 _clear_stale_socket()
         else:
             log.warning("Daemon IPC responded but UI server did not (%s); restarting daemon", url)
             _stop_daemon()
-            _wait_for_daemon_exit(timeout=10.0)
+            if not _wait_for_daemon_exit(timeout=10.0):
+                raise RuntimeError("Vice is still shutting down. Wait before opening it again.")
             _clear_stale_socket()
     else:
         _clear_stale_socket()
@@ -891,6 +891,23 @@ def _patch_pywebview_qt_permissions() -> None:
     QWebEnginePage.setFeaturePermission = _patched
 
 
+def _close_window_after_bridge(win) -> None:
+    """Let pywebview return the JS call before tearing down its event loop."""
+    caller = threading.current_thread()
+
+    def close() -> None:
+        # pywebview evaluates JS to deliver the result after an API method
+        # returns. Destroying the window inside that method strands its
+        # non-daemon bridge thread on Qt's result semaphore (#198).
+        caller.join()
+        try:
+            win.destroy()
+        except Exception:
+            log.exception("Could not close the native window")
+
+    threading.Thread(target=close, name="window-close", daemon=True).start()
+
+
 def _run_webview(url: str) -> None:
     _prepare_webview_environment()
     import webview  # type: ignore[import]
@@ -908,12 +925,12 @@ def _run_webview(url: str) -> None:
             """Stop the daemon and close the window."""
             _stop_daemon()
             if self._win:
-                self._win.destroy()
+                _close_window_after_bridge(self._win)
 
         def keep_running(self) -> None:
             """Close the window but keep the daemon recording."""
             if self._win:
-                self._win.destroy()
+                _close_window_after_bridge(self._win)
 
         def open_url(self, url: str) -> None:
             """Open a URL in the system's default browser via xdg-open."""
