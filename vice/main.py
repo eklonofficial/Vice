@@ -46,7 +46,7 @@ from .config import (
 )
 from .hotkey import HotkeyListener, can_access_hotkeys, list_available_keys
 from .media import cleanup_temp_files
-from .recorder import (capture_screenshot, create_recorder, filename_tag,
+from .recorder import (GSRRecorder, capture_screenshot, create_recorder, filename_tag,
                        reap_orphaned_captures)
 from .runtime import (
     actual_home_dir,
@@ -135,6 +135,13 @@ _RECORDER_DEATH_BACKOFF_AFTER = 3
 # up to twice this.
 FOLLOW_MOUSE_INTERVAL = 2.0
 
+# How often window_capture re-checks the focused window against games.json.
+# Checked once immediately too, so an already-focused game gets pinned right
+# away at startup. Slower than FOLLOW_MOUSE_INTERVAL since a late pin/release
+# just means the previous target keeps recording a bit longer, not a visible
+# glitch.
+WINDOW_CAPTURE_INTERVAL = 5.0
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Daemon
@@ -186,6 +193,10 @@ class ViceDaemon:
         # None means "use recording.display".
         self._display_override: Optional[str] = None
         self._follow_mouse_task: Optional[asyncio.Task] = None
+        # Window id capture is pinned to, when window_capture is on and a
+        # recognized game (games.json) is focused. None means full display.
+        self._window_capture_id: Optional[str] = None
+        self._window_capture_task: Optional[asyncio.Task] = None
 
     @staticmethod
     def _output_dir_problem(out_dir: Path) -> str:
@@ -380,6 +391,7 @@ class ViceDaemon:
         self._watchdog_task = asyncio.create_task(self._recorder_watchdog_loop())
         self._upgrade_task = asyncio.create_task(self._upgrade_watch_loop())
         self._sync_follow_mouse_task()
+        self._sync_window_capture_task()
 
         if self.cfg.updates.check_on_start:
             self._update_task = asyncio.create_task(self._update_check_soon())
@@ -596,6 +608,22 @@ class ViceDaemon:
                     async with self._clip_lock:
                         if not resumed and self.recorder.is_healthy():
                             continue  # a config apply already replaced it
+                        if not resumed and self._window_capture_id:
+                            # The dead process was pinned to a game window,
+                            # relaunching against the same window id can come
+                            # back "healthy" but capturing solid black (the
+                            # window's NVFBC/capture session is wedged, not
+                            # just the process). Drop the pin so the restart
+                            # captures full-display, and let
+                            # _window_capture_loop re-resolve and re-pin the
+                            # window fresh on its next tick, the same
+                            # recovery a manual Game Capture off/on does.
+                            log.warning(
+                                "Recorder died while pinned to a game window. "
+                                "Dropping the pin so it re-acquires the window fresh"
+                            )
+                            self._window_capture_id = None
+                            self.recorder.window_override = None
                         await self.recorder.stop()
                         await self.recorder.start()
             except Exception as exc:
@@ -635,6 +663,7 @@ class ViceDaemon:
         # detection as Discord Rich Presence); also feeds the auto playlists.
         recorder.clip_tag_cb = self._clip_game_tag
         recorder.display_override = self._display_override
+        recorder.window_override = self._window_capture_id
 
     async def _restart_recorder_for_config(self) -> bool:
         """Restart recorder without running two capture processes at once."""
@@ -729,6 +758,118 @@ class ViceDaemon:
         except asyncio.CancelledError:
             pass
 
+    # ── game-window capture ─────────────────────────────────────────────────
+    # Pins the replay buffer to a recognized game's window id (games.json),
+    # instead of GSR's own `-w focused` which would jump to Discord/a browser
+    # on alt-tab. A pin change means a recorder restart, so switching an
+    # active pin (or releasing one) waits for two agreeing samples first,
+    # to ride out the transient window id a game hands back during a
+    # fullscreen/resolution change. Also releases the pin once the window is
+    # confirmed gone, so quitting drops to full-display instead of GSR
+    # crashing on a dead target.
+
+    def _sync_window_capture_task(self) -> None:
+        # Window pinning only exists on GSR (-w flag); segment backends would
+        # just eat pointless recorder restarts for a pin that's never applied.
+        wanted = bool(self.cfg.recording.window_capture) and isinstance(self.recorder, GSRRecorder)
+        running = self._window_capture_task is not None and not self._window_capture_task.done()
+        if wanted and not running:
+            self._window_capture_task = asyncio.create_task(self._window_capture_loop())
+        elif not wanted and running:
+            self._window_capture_task.cancel()
+            self._window_capture_task = None
+            self._window_capture_id = None
+            self.recorder.window_override = None
+
+    async def _window_capture_loop(self) -> None:
+        from .active_window import get_active_window, get_focused_window_id, get_window_geometry
+
+        # Candidate window id for swapping an active pin, held for one tick
+        # before it's acted on. None means no swap is pending.
+        pending_switch: Optional[str] = None
+        # Whether the last tick already saw the pinned window's geometry
+        # lookup fail once. Only a second consecutive failure releases it.
+        pending_release = False
+        try:
+            first = True
+            while True:
+                if first:
+                    first = False
+                else:
+                    await asyncio.sleep(WINDOW_CAPTURE_INTERVAL)
+                if self._session_active or (self._clip_task and not self._clip_task.done()):
+                    continue
+                try:
+                    win = await asyncio.to_thread(get_active_window)
+                except Exception:
+                    log.debug("Active window detection failed", exc_info=True)
+                    continue
+                game = self._match_game(win) if win else None
+                if game:
+                    pending_release = False
+                    try:
+                        current = await asyncio.to_thread(get_focused_window_id)
+                    except Exception:
+                        log.debug("Focused window id lookup failed", exc_info=True)
+                        continue
+                    if not current or current == self._window_capture_id:
+                        pending_switch = None
+                        continue
+                    if self._window_capture_id and current != pending_switch:
+                        # Already pinned to something else; confirm the new
+                        # id sticks for a tick before paying for a restart.
+                        pending_switch = current
+                        continue
+                    pending_switch = None
+                    log.info("%s is focused; pinning capture to its window", game)
+                    previous = self._window_capture_id
+                    self._window_capture_id = current
+                    async with self._config_apply_lock:
+                        async with self._clip_lock:
+                            try:
+                                await self._restart_recorder_for_config()
+                            except Exception as exc:
+                                self._window_capture_id = previous
+                                log.warning("Could not pin capture to %s: %s", game, exc)
+                    continue
+
+                # Focus is on something unrecognized (or nothing). That's
+                # normal while the pinned game keeps running in the
+                # background (Discord, a browser, etc). Only act if the
+                # pinned window itself is actually gone, so we drop to
+                # full-display capture before GSR notices and dies, instead
+                # of after (the watchdog would otherwise catch a hard crash).
+                pending_switch = None
+                if not self._window_capture_id:
+                    continue
+                try:
+                    still_open = await asyncio.to_thread(get_window_geometry, self._window_capture_id)
+                except Exception:
+                    log.debug("Pinned window liveness check failed", exc_info=True)
+                    continue
+                if still_open:
+                    pending_release = False
+                    continue
+                if not pending_release:
+                    # A window recreated by a fullscreen or resolution change
+                    # can miss one lookup before the new id shows up as
+                    # focused; confirm it's really gone before releasing.
+                    pending_release = True
+                    continue
+                pending_release = False
+                log.info("Pinned game window closed; releasing pin, capturing full display")
+                previous = self._window_capture_id
+                self._window_capture_id = None
+                async with self._config_apply_lock:
+                    async with self._clip_lock:
+                        try:
+                            await self._restart_recorder_for_config()
+                        except Exception as exc:
+                            self._window_capture_id = previous
+                            log.warning("Could not release capture pin: %s", exc)
+        except asyncio.CancelledError:
+            pass
+
     async def _hotkeys_suppressed(self) -> bool:
         """Whether the focused app is one the user asked Vice to keep its hands
         off (#130). Only the keyboard path checks this, so the UI's clip button
@@ -787,10 +928,12 @@ class ViceDaemon:
             # Before the restart check, so turning follow-the-pointer off drops
             # the override and the recorder goes back to the saved display.
             self._sync_follow_mouse_task()
+            self._sync_window_capture_task()
 
             async with self._clip_lock:
                 if self._recording_signature() != self._recording_sig:
                     await self._restart_recorder_for_config()
+                    self._sync_window_capture_task()  # backend may have changed
 
             await self._sync_discord_presence_task()
 
@@ -1148,6 +1291,12 @@ class ViceDaemon:
             self._follow_mouse_task.cancel()
             try:
                 await self._follow_mouse_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        if self._window_capture_task and not self._window_capture_task.done():
+            self._window_capture_task.cancel()
+            try:
+                await self._window_capture_task
             except (asyncio.CancelledError, Exception):
                 pass
         if self.share:

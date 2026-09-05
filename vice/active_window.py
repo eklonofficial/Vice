@@ -161,6 +161,67 @@ def _get_active_window_x11() -> Optional[ActiveWindow]:
     return {"process": proc, "class": cls, "pid": pid}
 
 
+def _active_window_id_x11() -> Optional[str]:
+    wid = _run(["xdotool", "getactivewindow"]).strip()
+    return wid or None
+
+
+def _active_window_geometry_hyprland() -> Optional[tuple[int, int]]:
+    out = _run(["hyprctl", "activewindow", "-j"])
+    if not out:
+        return None
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        return None
+    size = data.get("size") or []
+    if len(size) == 2:
+        try:
+            w, h = int(size[0]), int(size[1])
+            if w > 0 and h > 0:
+                return (w, h)
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def _active_window_geometry_sway() -> Optional[tuple[int, int]]:
+    out = _run(["swaymsg", "-t", "get_tree"])
+    if not out:
+        return None
+    try:
+        tree = json.loads(out)
+    except json.JSONDecodeError:
+        return None
+    leaf = _walk_sway_tree(tree)
+    if not leaf:
+        return None
+    rect = leaf.get("rect") or {}
+    try:
+        w, h = int(rect.get("width") or 0), int(rect.get("height") or 0)
+        if w > 0 and h > 0:
+            return (w, h)
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _window_geometry_by_id_x11(wid: str) -> Optional[tuple[int, int]]:
+    out = _run(["xdotool", "getwindowgeometry", "--shell", wid])
+    width = height = 0
+    for line in out.splitlines():
+        if line.startswith("WIDTH="):
+            width = int(line.split("=", 1)[1] or 0)
+        elif line.startswith("HEIGHT="):
+            height = int(line.split("=", 1)[1] or 0)
+    return (width, height) if width > 0 and height > 0 else None
+
+
+def _active_window_geometry_x11() -> Optional[tuple[int, int]]:
+    wid = _run(["xdotool", "getactivewindow"]).strip()
+    return _window_geometry_by_id_x11(wid) if wid else None
+
+
 def _candidate_windows_wmctrl() -> list[ActiveWindow]:
     out = _run(["wmctrl", "-lpx"], timeout=2.0)
     windows: list[ActiveWindow] = []
@@ -402,6 +463,12 @@ def _current_adapter() -> Optional[Callable[[], Optional[ActiveWindow]]]:
         _ADAPTER = _detect_compositor_adapter()
     return _ADAPTER
 
+_GEOMETRY_ADAPTERS: dict = {
+    _get_active_window_hyprland: _active_window_geometry_hyprland,
+    _get_active_window_sway: _active_window_geometry_sway,
+    _get_active_window_x11: _active_window_geometry_x11,
+}
+
 
 def get_active_window() -> Optional[ActiveWindow]:
     """Return the currently focused window, or None on unsupported compositors
@@ -413,6 +480,49 @@ def get_active_window() -> Optional[ActiveWindow]:
         return adapter()
     except Exception as exc:
         log.debug("active_window adapter raised: %s", exc)
+        return None
+
+
+def get_active_window_geometry() -> Optional[tuple[int, int]]:
+    """Pixel (width, height) of the currently focused window, or None when
+    unsupported or undetectable. Used by window_capture to size gpu-screen-
+    recorder's `-s` flag, which it requires for `-w focused`."""
+    fn = _GEOMETRY_ADAPTERS.get(_ADAPTER)
+    if fn is None:
+        return None
+    try:
+        return fn()
+    except Exception as exc:
+        log.debug("active_window geometry adapter raised: %s", exc)
+        return None
+
+
+def get_focused_window_id() -> Optional[str]:
+    """A stable id for the currently focused window, suitable for gpu-screen-
+    recorder's `-w <window_id>` mode, which pins capture to that window
+    instead of following focus around like `-w focused` does. X11/XWayland
+    only (GSR's per-window capture doesn't support native-Wayland windows);
+    None on Hyprland/Sway sessions with no XWayland fallback in play."""
+    if _ADAPTER is not _get_active_window_x11:
+        return None
+    try:
+        return _active_window_id_x11()
+    except Exception as exc:
+        log.debug("active_window id lookup raised: %s", exc)
+        return None
+
+
+def get_window_geometry(window_id: str) -> Optional[tuple[int, int]]:
+    """Pixel (width, height) of a specific window by id, same id space as
+    get_focused_window_id(), so this works even after focus has moved
+    elsewhere. Used to size gpu-screen-recorder's `-s` flag for a pinned
+    window_capture target."""
+    if _ADAPTER is not _get_active_window_x11 or not window_id:
+        return None
+    try:
+        return _window_geometry_by_id_x11(window_id)
+    except Exception as exc:
+        log.debug("active_window geometry-by-id lookup raised: %s", exc)
         return None
 
 
