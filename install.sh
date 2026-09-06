@@ -753,7 +753,6 @@ clean_previous_local_install() {
     stop_running_service_for_reinstall
 
     rm -f "$USER_BIN/vice" "$USER_BIN/vice-app"
-    rm -rf "$VENV_DIR"
 
     shopt -s nullglob
     local stale_paths=(
@@ -776,7 +775,6 @@ clean_previous_local_install() {
 
 install_vice_venv() {
     info "Creating a dedicated virtual environment at $VENV_DIR"
-    rm -rf "$VENV_DIR"
 
     # On Arch-family systems, pacman installs Python modules for the distro
     # interpreter under /usr/bin. A pyenv/asdf/conda Python earlier in PATH
@@ -801,6 +799,8 @@ install_vice_venv() {
         info "System PyQt6 + QtWebEngine are importable; preserving distro H.264 support."
     fi
 
+    clean_previous_local_install
+    rm -rf "$VENV_DIR"
     "$python_bin" -m venv --system-site-packages "$VENV_DIR"
     "$VENV_DIR/bin/python" -m pip install --upgrade pip
 
@@ -897,7 +897,6 @@ PY
 }
 
 info "Installing Vice Python package..."
-clean_previous_local_install
 install_vice_venv
 
 # Ensure $USER_BIN is on PATH for the rest of this script.
