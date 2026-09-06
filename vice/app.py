@@ -40,6 +40,7 @@ from urllib.request import urlopen
 from . import __version__
 from .runtime import (actual_home_dir, claim_daemon_lock, daemon_is_running,
                       normalize_runtime_environment, systemd_unit_loaded)
+from .tray import WindowTrayController, request_window_activation
 
 SOCKET_FILE = Path("/tmp/vice/vice.sock")
 PID_FILE    = Path("/tmp/vice/vice.pid")
@@ -259,6 +260,38 @@ def _stop_daemon() -> None:
         asyncio.run(_send())
     except Exception as exc:
         log.warning("Stop IPC failed: %s", exc)
+
+
+def _stop_daemon_completely(timeout: float = 10.0) -> None:
+    """Stop the recorder owner and wait until Vice has actually exited.
+
+    A systemd user unit owns the daemon on installer-managed setups. Stop
+    that unit first so its restart policy cannot immediately respawn Vice,
+    then send the normal IPC stop as a fallback for directly launched
+    daemons and wait for shutdown to complete.
+    """
+    if _systemd_unit_available():
+        try:
+            result = subprocess.run(
+                ["systemctl", "--user", "stop", "vice.service"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            if result.returncode != 0:
+                log.warning(
+                    "systemctl stop vice.service failed (%s): %s",
+                    result.returncode,
+                    (result.stderr or "").strip()[:200],
+                )
+        except (OSError, subprocess.SubprocessError) as exc:
+            log.warning("Could not stop Vice systemd service: %s", exc)
+
+    _stop_daemon()
+    if not _wait_for_daemon_exit(timeout=timeout):
+        raise RuntimeError("Vice did not finish shutting down before the timeout")
 
 
 def _wait_for_daemon_exit(timeout: float = 10.0) -> bool:
@@ -545,6 +578,11 @@ def _claim_app_lock() -> bool:
 
 def _raise_existing_window() -> bool:
     """Bring the window that already exists to the front."""
+    activation_socket = APP_LOCK_FILE.with_name("vice-app.sock")
+    if request_window_activation(activation_socket):
+        log.info("Asked the existing Vice process to restore its window")
+        return True
+
     if not shutil.which("wmctrl"):
         log.info("wmctrl is not installed, so the existing Vice window cannot be raised")
         return False
@@ -917,20 +955,35 @@ def _run_webview(url: str) -> None:
 
         def __init__(self) -> None:
             self._win: webview.Window | None = None
+            self._tray_controller: WindowTrayController | None = None
 
         def _bind(self, win: "webview.Window") -> None:
             self._win = win
 
+        def _bind_tray(self, controller: WindowTrayController) -> None:
+            self._tray_controller = controller
+
         def quit_app(self) -> None:
             """Stop the daemon and close the window."""
+            if self._tray_controller is not None:
+                self._tray_controller.quit()
+                return
             _stop_daemon()
             if self._win:
                 _close_window_after_bridge(self._win)
 
         def keep_running(self) -> None:
             """Close the window but keep the daemon recording."""
+            if self._tray_controller is not None:
+                self._tray_controller.keep_running()
+                return
             if self._win:
                 _close_window_after_bridge(self._win)
+
+        def set_tray_labels(self, open_label: str, quit_label: str) -> None:
+            """Update native tray text with strings resolved by the web UI."""
+            if self._tray_controller is not None:
+                self._tray_controller.set_labels(open_label, quit_label)
 
         def open_url(self, url: str) -> None:
             """Open a URL in the system's default browser via xdg-open."""
@@ -1014,6 +1067,20 @@ def _run_webview(url: str) -> None:
         zoomable=False,
     )
     api._bind(win)
+
+    tray_controller = WindowTrayController(
+        win=win,
+        socket_path=APP_LOCK_FILE.with_name("vice-app.sock"),
+        icon_paths=(
+            actual_home_dir() / ".local/share/icons/hicolor/scalable/apps/vice.svg",
+            Path(__file__).resolve().parent.parent / "assets/vice.svg",
+        ),
+        shutdown_daemon=_stop_daemon_completely,
+        close_window=lambda: _close_window_after_bridge(win),
+        logger=log,
+    )
+    tray_controller.start()
+    api._bind_tray(tray_controller)
 
     # Pick the fastest available pywebview backend. QtWebEngine (Chromium) is
     # GPU-accelerated and sidesteps WebKit2GTK's software-compositing issues

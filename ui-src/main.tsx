@@ -13,7 +13,8 @@ import './styles/viewer.css';
 import './styles/settings.css';
 import './styles/editor.css';
 
-import {initLocale, subscribeLocale} from './lib/i18n';
+import {initLocale, subscribeLocale, t} from './lib/i18n';
+import {setNativeTrayLabels} from './lib/env';
 import {accentVars, resolveAccent} from './theme/viceTheme';
 import {StoreProvider, useStore} from './state/store';
 import {PlaybackProvider} from './state/playback';
@@ -25,6 +26,10 @@ import {Settings} from './screens/Settings';
 import {Editor} from './screens/Editor';
 import {About} from './screens/About';
 
+function syncNativeTrayLabels(): void {
+  setNativeTrayLabels(t('tray.openVice'), t('tray.quitVice'));
+}
+
 function App() {
   const {state} = useStore();
   const {accent, customAccent, ready, view} = state;
@@ -33,7 +38,13 @@ function App() {
   const {ramp, theme} = resolveAccent(accent, customAccent);
   const [, retranslate] = useState(0);
 
-  useEffect(() => subscribeLocale(() => retranslate(n => n + 1)), []);
+  useEffect(() => {
+    syncNativeTrayLabels();
+    return subscribeLocale(() => {
+      retranslate(n => n + 1);
+      syncNativeTrayLabels();
+    });
+  }, []);
 
   // The boot cover is in index.html so it paints before this bundle parses.
   // It goes once there is real data behind it, not merely once React mounted.

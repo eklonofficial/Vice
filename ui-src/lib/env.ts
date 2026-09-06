@@ -66,6 +66,7 @@ interface PyWebView {
   api: {
     keep_running: () => void;
     quit_app: () => void;
+    set_tray_labels?: (openLabel: string, quitLabel: string) => void;
     open_url?: (url: string) => void;
     log_debug?: (msg: string) => void;
   };
@@ -103,6 +104,27 @@ export function openExternal(url: string | undefined): void {
     console.debug('The native open_url bridge threw', err);
   }
   window.open(url, '_blank', 'noopener');
+}
+
+/** Keep the native tray actions in the same language as the web UI. */
+export function setNativeTrayLabels(openLabel: string, quitLabel: string): void {
+  if (!IS_NATIVE) return;
+
+  const apply = (): boolean => {
+    try {
+      const bridge = (window as unknown as {pywebview?: PyWebView}).pywebview;
+      if (!bridge?.api?.set_tray_labels) return false;
+      bridge.api.set_tray_labels(String(openLabel), String(quitLabel));
+      return true;
+    } catch (err) {
+      console.debug('The native tray label bridge threw', err);
+      return true;
+    }
+  };
+
+  if (apply()) return;
+  // pywebview documents that its JS API may arrive after the page itself.
+  window.addEventListener('pywebviewready', () => { apply(); }, {once: true});
 }
 
 /** Hide the window but leave the daemon recording. Native only. */
