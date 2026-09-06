@@ -105,11 +105,13 @@ class WindowTrayController:
         socket_path: Path,
         icon_paths: Iterable[Path],
         shutdown_daemon: Callable[[], None],
+        close_window: Callable[[], None],
         logger: Any,
     ) -> None:
         self._win = win
         self._icon_paths = tuple(icon_paths)
         self._shutdown_daemon = shutdown_daemon
+        self._close_window = close_window
         self._log = logger
         self._server = _ActivationServer(socket_path, self.show_window, logger)
         self._tray_available = False
@@ -310,7 +312,7 @@ class WindowTrayController:
         if self._tray_available:
             self.hide_window()
         else:
-            self._win.destroy()
+            self._close_window()
 
     def set_labels(self, open_label: str, quit_label: str) -> None:
         """Store translated action labels and update Qt actions on its thread."""
@@ -340,11 +342,10 @@ class WindowTrayController:
             self._shutdown_daemon()
         except Exception:
             self._log.exception("Could not fully stop Vice during quit")
-        finally:
-            if self._dispatcher is not None:
-                self._dispatcher.close_requested.emit()
-            else:
-                try:
-                    self._win.destroy()
-                except Exception:
-                    self._log.debug("win.destroy() failed during quit", exc_info=True)
+            self._quitting = False
+            return
+
+        if self._dispatcher is not None:
+            self._dispatcher.close_requested.emit()
+        else:
+            self._close_window()

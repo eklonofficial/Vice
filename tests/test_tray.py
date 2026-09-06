@@ -49,6 +49,7 @@ def _controller(win: _Window, socket_path: Path) -> WindowTrayController:
         socket_path=socket_path,
         icon_paths=(),
         shutdown_daemon=mock.Mock(),
+        close_window=win.destroy,
         logger=mock.Mock(),
     )
 
@@ -115,12 +116,37 @@ class LifecycleTests(unittest.TestCase):
                 socket_path=Path(tmp) / "vice-app.sock",
                 icon_paths=(),
                 shutdown_daemon=shutdown,
+                close_window=win.destroy,
                 logger=mock.Mock(),
             )
             controller._quitting = True
             controller._shutdown_worker()
             shutdown.assert_called_once_with()
             self.assertEqual(win.destroyed, 1)
+
+    def test_shutdown_failure_keeps_window_open_and_allows_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            win = _Window()
+            shutdown = mock.Mock(side_effect=RuntimeError("still shutting down"))
+            logger = mock.Mock()
+            controller = WindowTrayController(
+                win=win,
+                socket_path=Path(tmp) / "vice-app.sock",
+                icon_paths=(),
+                shutdown_daemon=shutdown,
+                close_window=win.destroy,
+                logger=logger,
+            )
+            controller._quitting = True
+
+            controller._shutdown_worker()
+
+            shutdown.assert_called_once_with()
+            self.assertEqual(win.destroyed, 0)
+            self.assertFalse(controller._quitting)
+            logger.exception.assert_called_once_with(
+                "Could not fully stop Vice during quit"
+            )
 
     def test_translated_labels_are_dispatched_without_recreating_tray(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -189,6 +215,17 @@ class ShutdownPolicyTests(unittest.TestCase):
         run.assert_not_called()
         stop.assert_called_once_with()
         wait.assert_called_once_with(timeout=0.25)
+
+    def test_shutdown_timeout_raises(self) -> None:
+        with mock.patch.object(
+            vice_app, "_systemd_unit_available", return_value=False
+        ), mock.patch.object(
+            vice_app, "_stop_daemon"
+        ), mock.patch.object(
+            vice_app, "_wait_for_daemon_exit", return_value=False
+        ):
+            with self.assertRaisesRegex(RuntimeError, "did not finish shutting down"):
+                vice_app._stop_daemon_completely(timeout=0.25)
 
 
 if __name__ == "__main__":

@@ -98,8 +98,8 @@ class RemuxGuardTests(unittest.IsolatedAsyncioTestCase):
             class _Proc:
                 returncode = 0
 
-                async def wait(self):
-                    return 0
+                async def communicate(self):
+                    return None, None
 
             async def _fake_exec(*cmd, **_kwargs):
                 # ffmpeg "succeeds" but emits a near-empty file, like the
@@ -130,8 +130,8 @@ class RemuxGuardTests(unittest.IsolatedAsyncioTestCase):
             class _Proc:
                 returncode = 0
 
-                async def wait(self):
-                    return 0
+                async def communicate(self):
+                    return None, None
 
             async def _fake_exec(*cmd, **_kwargs):
                 Path(cmd[-1]).write_bytes(b"y" * 9_800)

@@ -27,6 +27,28 @@ TEMP_FILE_GLOBS = ("*.trim.mp4", "*.wm.mp4", "*.fix.mp4", "*.trimming.mp4",
                    "*.annotating.png", "*.annotating.jpg", "*.annotating.jpeg")
 
 
+async def communicate_with_timeout(
+    proc: asyncio.subprocess.Process, timeout: float,
+) -> tuple[Optional[bytes], Optional[bytes]]:
+    """Collect a finite media command, reaping it on timeout or cancellation.
+
+    Keep draining its pipes during cleanup. Waiting only for process exit can
+    deadlock when buffered stdout or stderr has filled the pipe transport.
+    Recording processes have their own graceful finalization and must not use
+    this helper.
+    """
+    communication = asyncio.create_task(proc.communicate())
+    try:
+        return await asyncio.wait_for(asyncio.shield(communication), timeout)
+    finally:
+        if proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+        await communication
+
+
 async def probe_media(path: Path) -> Optional[dict]:
     """Probe *path* with ffprobe.
 
@@ -59,7 +81,7 @@ async def probe_media_detailed(path: Path) -> tuple[Optional[dict], str]:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+        stdout, stderr = await communicate_with_timeout(proc, timeout=15)
         data = json.loads(stdout)
     except FileNotFoundError:
         reason = "ffprobe not found, install ffmpeg to read clip metadata"

@@ -28,6 +28,7 @@ import re
 import shutil
 import socket
 import subprocess
+import tempfile
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -43,7 +44,7 @@ from .editor import (EditorProjectStore, ExportBusy, ExportManager, Source,
                      build_export_cmd, default_export_name, project_extent,
                      sanitize_export_name, text_file_contents,
                      validate_project)
-from .media import probe_media, probe_media_detailed
+from .media import communicate_with_timeout, probe_media, probe_media_detailed
 from .playlists import (IMAGE_PREFIX, PlaylistStore, build_tag_index,
                         image_slug)
 from .recorder import (IMAGE_EXTS, KEEP_ALL_STREAMS, _available_encoders,
@@ -251,7 +252,8 @@ def _proxy_path(path: Path) -> Path:
         key = f"{path.stem}_{st.st_size}_{st.st_mtime_ns}"
     except OSError:
         key = path.stem
-    return PROXY_DIR / f"{key}.mp4"
+    # Invalidate previews made before the eight-bit playback fix (#172).
+    return PROXY_DIR / f"{key}_v2.mp4"
 
 
 def _purge_slug_proxies(slug: str) -> None:
@@ -390,7 +392,7 @@ async def _first_video_packet(path: Path) -> Optional[tuple[float, str]]:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+        out, _ = await communicate_with_timeout(proc, timeout=60)
     except (asyncio.TimeoutError, OSError) as exc:
         log.debug("Packet probe of %s failed: %s", path.name, exc)
         return None
@@ -419,7 +421,7 @@ async def _decode_complaint(path: Path) -> Optional[str]:
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        _, stderr = await communicate_with_timeout(proc, timeout=60)
     except (asyncio.TimeoutError, OSError) as exc:
         log.debug("Decode probe of %s failed: %s", path.name, exc)
         return None
@@ -458,6 +460,9 @@ async def _trim_result_problem(path: Path) -> str:
     return ""
 
 
+_PREVIEW_TIMEOUT = 300
+
+
 async def _make_preview_proxy(path: Path, vcodec: str) -> Optional[Path]:
     """Return an H.264 copy of *path* for in-app playback, transcoding once and
     caching it. Returns None when the source is already web-playable or the
@@ -474,9 +479,12 @@ async def _make_preview_proxy(path: Path, vcodec: str) -> Optional[Path]:
     # original file, which is what the trim endpoint actually cuts.
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-threads", "2", "-filter_threads", "1",
         "-i", str(path),
         "-map", "0:v:0?", "-map", "0:a?",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-threads:v", "2",
+        "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "160k",
         "-movflags", "+faststart",
         # The temp name ends in .tmp, so name the container explicitly.
@@ -489,18 +497,21 @@ async def _make_preview_proxy(path: Path, vcodec: str) -> Optional[Path]:
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
-        if proc.returncode != 0 or not tmp.exists():
+        _, stderr = await communicate_with_timeout(proc, timeout=_PREVIEW_TIMEOUT)
+        if proc.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
             log.warning("preview proxy for %s failed: %s", path.name,
                         (stderr or b"").decode(errors="replace")[:200])
-            tmp.unlink(missing_ok=True)
             return None
-    except (asyncio.TimeoutError, OSError) as exc:
-        log.warning("preview proxy for %s errored: %s", path.name, exc)
-        tmp.unlink(missing_ok=True)
+        tmp.replace(proxy)
+        return proxy
+    except asyncio.TimeoutError:
+        log.warning("preview proxy for %s timed out after %ss", path.name, _PREVIEW_TIMEOUT)
         return None
-    tmp.replace(proxy)
-    return proxy
+    except OSError as exc:
+        log.warning("preview proxy for %s errored: %s", path.name, exc)
+        return None
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -539,7 +550,7 @@ async def _remux_moov(path: Path) -> bool:
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        await asyncio.wait_for(proc.wait(), timeout=60)
+        await communicate_with_timeout(proc, timeout=60)
         if proc.returncode == 0 and tmp.exists():
             remuxed = await probe_media(tmp)
             orig_size = path.stat().st_size
@@ -560,10 +571,11 @@ async def _remux_moov(path: Path) -> bool:
             )
     except Exception as exc:
         log.warning("Remux of %s failed: %s", path.name, exc)
-    try:
-        tmp.unlink(missing_ok=True)
-    except Exception as exc:
-        log.debug("Could not remove the remux temp file %s: %s", tmp.name, exc)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError as exc:
+            log.debug("Could not remove the remux temp file %s: %s", tmp.name, exc)
     return False
 
 
@@ -614,12 +626,18 @@ async def _make_thumb(path: Path, duration: float = 0.0) -> Path:
     """
     THUMB_DIR.mkdir(parents=True, exist_ok=True)
     thumb = _thumb_path(path)
-    if thumb.exists():
+    if thumb.exists() and thumb.stat().st_size > 0:
         return thumb
     if duration and duration > 0:
         seek_ts = min(duration / 2.0, 0.75)
     else:
         seek_ts = 0.0
+    # Publish only complete images. Concurrent requests get separate temporary
+    # files, so cancellation cannot delete another request's finished thumbnail.
+    with tempfile.NamedTemporaryFile(
+        prefix=f".{thumb.stem}.", suffix=".jpg", dir=THUMB_DIR, delete=False,
+    ) as handle:
+        tmp = Path(handle.name)
     try:
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-hide_banner", "-loglevel", "error",
@@ -628,13 +646,17 @@ async def _make_thumb(path: Path, duration: float = 0.0) -> Path:
             "-frames:v", "1",
             "-vf", "scale=640:-2",
             "-q:v", "4",
-            str(thumb),
+            "-y", str(tmp),
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        await asyncio.wait_for(proc.wait(), timeout=20)
+        await communicate_with_timeout(proc, timeout=20)
+        if proc.returncode == 0 and tmp.stat().st_size > 0:
+            tmp.replace(thumb)
     except Exception as exc:
         log.debug("Thumbnail generation failed for %s: %s", path.name, exc)
+    finally:
+        tmp.unlink(missing_ok=True)
     return thumb
 
 
@@ -725,9 +747,11 @@ class ShareServer:
         self.editor_project = EditorProjectStore()
         self._exports = ExportManager(self.broadcast)
 
-        # One lock per proxy path so two opens of the same H.265 clip don't
-        # transcode it twice.
-        self._proxy_locks: dict[str, asyncio.Lock] = {}
+        # One encoder across the library. Different clips used to spawn
+        # independent encoders, each allocating its own frame queues (#193).
+        self._proxy_lock = asyncio.Lock()
+        self._proxy_tasks: set[asyncio.Task] = set()
+        self._proxy_stopping = False
 
         self._tunnel_proc: Optional[asyncio.subprocess.Process] = None
         self._tunnel_url:  Optional[str] = None
@@ -889,6 +913,12 @@ class ShareServer:
             await self._start_tunnel(public_port)
 
     async def stop(self) -> None:
+        self._proxy_stopping = True
+        tasks = list(self._proxy_tasks)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await self._exports.stop()
         for ws in list(self._ws_clients):
             try:
                 await ws.close()
@@ -1217,11 +1247,18 @@ class ShareServer:
     async def _serve_preview_proxy(self, slug: str, path: Path):
         """Return a FileResponse for the clip's H.264 preview proxy, or None to
         fall back to serving the original."""
-        proxy_key = str(_proxy_path(path))
-        lock = self._proxy_locks.setdefault(proxy_key, asyncio.Lock())
-        async with lock:
-            meta = await self._get_meta(slug, path)
-            proxy = await _make_preview_proxy(path, meta.get("vcodec", ""))
+        if self._proxy_stopping:
+            raise web.HTTPServiceUnavailable()
+        task = asyncio.current_task()
+        self._proxy_tasks.add(task)
+        try:
+            proxy = _proxy_path(path)
+            if not proxy.exists() or proxy.stat().st_size == 0:
+                async with self._proxy_lock:
+                    meta = await self._get_meta(slug, path)
+                    proxy = await _make_preview_proxy(path, meta.get("vcodec", ""))
+        finally:
+            self._proxy_tasks.discard(task)
         if proxy is None or not proxy.exists():
             return None
         return web.FileResponse(
@@ -1240,7 +1277,7 @@ class ShareServer:
             raise web.HTTPNotFound()
         meta = await self._get_meta(slug, path)
         t = await _make_thumb(path, duration=meta.get("duration", 0))
-        if not t.exists():
+        if not t.exists() or t.stat().st_size == 0:
             raise web.HTTPNotFound()
         return web.FileResponse(t, headers={"Content-Type": "image/jpeg"})
 
@@ -1259,7 +1296,8 @@ class ShareServer:
 
         sem = asyncio.Semaphore(3)
         async def _ensure(slug: str, path: Path) -> None:
-            if _thumb_path(path).exists():
+            thumb = _thumb_path(path)
+            if thumb.exists() and thumb.stat().st_size > 0:
                 return
             async with sem:
                 await _make_thumb(path, duration=metas[slug].get("duration", 0))
@@ -1336,7 +1374,7 @@ class ShareServer:
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+                _, stderr = await communicate_with_timeout(proc, timeout=timeout)
                 return proc.returncode == 0, (stderr or b"").decode()[:300]
             except asyncio.TimeoutError:
                 return False, "ffmpeg timed out"
@@ -1676,7 +1714,7 @@ class ShareServer:
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
             )
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+            _, stderr = await communicate_with_timeout(proc, timeout=60)
         except asyncio.TimeoutError:
             out.unlink(missing_ok=True)
             return web.json_response({"ok": False, "error": "ffmpeg timed out reading that frame"})
