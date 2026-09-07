@@ -12,10 +12,10 @@ from vice.editor import ExportBusy, ExportManager
 
 
 class FiniteMediaLifecycleTests(unittest.IsolatedAsyncioTestCase):
-    async def _interrupt(self, operation, *, cancel):
+    async def _interrupt(self, operation, *, cancel, filename="clip.mp4"):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "clip.mp4"
+            source = root / filename
             source.write_bytes(b"original recording")
             spawned = asyncio.Event()
             child = None
@@ -70,6 +70,16 @@ class FiniteMediaLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_remux_cancel_reaps_child_and_keeps_original(self):
         await self._interrupt(share._remux_moov, cancel=True)
+
+    # .mkv, so the "already small enough" shortcut never applies and the
+    # clip actually goes through the encoder.
+    async def test_discord_copy_timeout_reaps_child_and_keeps_original(self):
+        await self._interrupt(lambda src: share._make_discord_copy(src, 10),
+                              cancel=False, filename="clip.mkv")
+
+    async def test_discord_copy_cancel_reaps_child_and_keeps_original(self):
+        await self._interrupt(lambda src: share._make_discord_copy(src, 10),
+                              cancel=True, filename="clip.mkv")
 
     @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is not installed")
     async def test_real_thumbnail_replaces_empty_cache_and_is_reused(self):
@@ -257,6 +267,33 @@ class ExportLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.tmp.exists())
         self.assertEqual(self.broadcast.call_args.args[0]["type"], "export_done")
         self.cleanup.assert_called_once_with()
+
+    async def test_an_oversized_export_is_not_committed(self):
+        """A bitrate target is not a size guarantee, so a Discord export used
+        to be published at whatever size the encoder happened to hit."""
+        self.manager.start("job", [sys.executable, "-c",
+                           "import pathlib,sys; pathlib.Path(sys.argv[1])"
+                           ".write_bytes(b'x' * (21 * 1024 * 1024))",
+                           str(self.tmp)], 10, self.tmp, self.final,
+                           cleanup=self.cleanup, max_bytes=20 * 1024 * 1024)
+        await asyncio.wait_for(asyncio.gather(self.manager._task), 10)
+        self.assertFalse(self.final.exists(), "an oversized export was published")
+        self.assertFalse(self.tmp.exists())
+        event = self.broadcast.call_args.args[0]
+        self.assertEqual(event["type"], "export_error")
+        self.assertFalse(event["canceled"])
+        self.assertIn("21.0 MB", event["error"])
+        self.cleanup.assert_called_once_with()
+
+    async def test_an_export_within_its_size_limit_is_committed(self):
+        self.manager.start("job", [sys.executable, "-c",
+                           "import pathlib,sys; pathlib.Path(sys.argv[1])"
+                           ".write_bytes(b'small')",
+                           str(self.tmp)], 10, self.tmp, self.final,
+                           cleanup=self.cleanup, max_bytes=20 * 1024 * 1024)
+        await asyncio.wait_for(asyncio.gather(self.manager._task), 10)
+        self.assertEqual(self.final.read_bytes(), b"small")
+        self.assertEqual(self.broadcast.call_args.args[0]["type"], "export_done")
 
     async def test_server_shutdown_reaps_export_before_closing_websockets(self):
         server = share.ShareServer.__new__(share.ShareServer)

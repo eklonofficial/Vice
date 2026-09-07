@@ -24,7 +24,7 @@ export interface ClipActions {
   onDelete?: (clip: Clip) => void;
   onReveal?: (clip: Clip) => void;
   onCopyFile?: (clip: Clip) => void;
-  onCopyLink?: (clip: Clip) => void;
+  onShare?: (clip: Clip) => void;
   onRename?: (clip: Clip, name: string) => Promise<void>;
   onContextMenu?: (clip: Clip, at: {x: number; y: number}) => void;
   /** Set by the context menu to open this card's rename field. */
@@ -208,11 +208,8 @@ export function ClipCard({
                 <ClipboardGlyph />
               </IconButton>
             ) : null}
-            {actions.onCopyLink ? (
-              <IconButton
-                label={clip.share_url ? t('card.copyShareLink') : t('card.noShareLink')}
-                disabled={!clip.share_url}
-                onClick={() => actions.onCopyLink?.(clip)}>
+            {actions.onShare ? (
+              <IconButton label={t('card.share')} onClick={() => actions.onShare?.(clip)}>
                 <LinkGlyph />
               </IconButton>
             ) : null}
@@ -234,7 +231,7 @@ export function ClipCard({
 }
 
 const hasActions = (a: ClipActions) =>
-  Boolean(a.onTrim || a.onCopyFile || a.onCopyLink || a.onReveal || a.onDelete);
+  Boolean(a.onTrim || a.onCopyFile || a.onShare || a.onReveal || a.onDelete);
 
 function IconButton({
   label,

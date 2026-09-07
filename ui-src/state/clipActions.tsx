@@ -58,7 +58,7 @@ export function useRenameClip(): (clip: Clip, name: string) => Promise<Clip | nu
 
 export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
   const {state, notify, refreshPlaylists} = useStore();
-  const {openViewer, openTrim} = usePlayback();
+  const {openViewer, openTrim, openShare} = usePlayback();
   const {playlists} = state;
 
   const [menu, setMenu] = useState<{clip: Clip; at: {x: number; y: number}} | null>(null);
@@ -109,7 +109,7 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
     () => ({
       onOpen: clip => openViewer(clip.slug),
       onTrim: clip => openTrim(clip.slug),
-      onCopyLink: copyLink,
+      onShare: clip => openShare(clip.slug),
       onCopyFile: copyFile,
       onReveal: reveal,
       onDelete: setConfirmDelete,
@@ -118,7 +118,7 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
       renamingSlug: renaming,
       onRenameDone: () => setRenaming(null),
     }),
-    [openViewer, openTrim, copyLink, copyFile, reveal, rename, renaming],
+    [openViewer, openTrim, openShare, copyFile, reveal, rename, renaming],
   );
 
   const menuClip = menu?.clip;

@@ -4,11 +4,16 @@ import unittest
 from pathlib import Path
 
 from vice.editor import (
+    DISCORD_AUDIO_KBPS,
+    DISCORD_MAX_MB,
+    DISCORD_MIN_VIDEO_KBPS,
+    DiscordTooLarge,
     EditorProjectStore,
     Source,
     build_export_cmd,
     canvas_for,
     default_export_name,
+    discord_bitrates,
     parse_progress,
     project_extent,
     sanitize_export_name,
@@ -340,6 +345,43 @@ class GraphBuilderTests(unittest.TestCase):
         # The second overlay consumes the first one's output, so the
         # top-listed track wins.
         self.assertIn(overlays[0].split("[")[-1].rstrip("]"), overlays[1])
+
+    def test_discord_optimized_caps_bitrate_to_fit_20mb(self) -> None:
+        # Duration alone drives the bitrate budget, so build raw (unvalidated)
+        # projects rather than routing through the 30s-capped SRC fixture.
+        def raw_build(dur: float) -> list[str]:
+            return build_export_cmd(proj([clip("i1", "V1", "Clip_A", 0, dur)]), SRC,
+                                    Path("/out/.x.export.mp4"), fonts=Path("/f"),
+                                    text_dir=Path("/tx"), discord_optimized=True)
+        short = raw_build(10)
+        long = raw_build(200)
+        self.assertNotIn("-crf", short)
+        self.assertIn("-b:v", short)
+        self.assertIn("-maxrate", short)
+        short_kbps = int(short[short.index("-b:v") + 1].rstrip("k"))
+        long_kbps = int(long[long.index("-b:v") + 1].rstrip("k"))
+        self.assertGreater(short_kbps, long_kbps)
+        self.assertGreaterEqual(long_kbps, DISCORD_MIN_VIDEO_KBPS)
+        # The point of the budget is the cap, not just a smaller number.
+        self.assertLess(long_kbps * 200 / 8192, DISCORD_MAX_MB)
+
+    def test_discord_optimized_refuses_a_clip_the_budget_cannot_fit(self) -> None:
+        """30 minutes at the video floor plus audio budgets 62 MB. It used to
+        clamp to the floor and hand back a file three times over the cap."""
+        with self.assertRaises(DiscordTooLarge):
+            build_export_cmd(proj([clip("i1", "V1", "Clip_A", 0, 1800)]), SRC,
+                             Path("/out/.x.export.mp4"), fonts=Path("/f"),
+                             text_dir=Path("/tx"), discord_optimized=True)
+
+    def test_extra_audio_tracks_eat_into_the_video_budget(self) -> None:
+        video_one, audio = discord_bitrates(10, 1)
+        video_two, _ = discord_bitrates(10, 2)
+        self.assertEqual(audio, DISCORD_AUDIO_KBPS)
+        self.assertEqual(video_one - video_two, DISCORD_AUDIO_KBPS)
+        # A duration one track still fits, where a second one does not.
+        discord_bitrates(450, 1)
+        with self.assertRaises(DiscordTooLarge):
+            discord_bitrates(450, 2)
 
     def test_empty_upper_track_emits_no_overlay(self) -> None:
         g = self.graph(self.build([clip("i1", "V1", "Clip_A", 0, 10)]))

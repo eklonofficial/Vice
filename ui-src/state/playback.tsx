@@ -13,6 +13,7 @@ import {api} from '../lib/api';
 import {copyShareLink} from '../lib/share';
 import {clipTitle, type Clip, type Highlight} from '../lib/types';
 import {Modal} from '../components/Modal';
+import {ShareModal} from '../components/ShareModal';
 import {TrimModal} from '../components/TrimModal';
 import {Viewer} from '../components/Viewer';
 import {useRenameClip} from './clipActions';
@@ -22,6 +23,7 @@ import {t} from '../lib/i18n';
 interface Playback {
   openViewer: (slug: string) => void;
   openTrim: (slug: string) => void;
+  openShare: (slug: string) => void;
 }
 
 const PlaybackContext = createContext<Playback | null>(null);
@@ -40,9 +42,11 @@ export function PlaybackProvider({children}: {children: ReactNode}) {
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [confirmDelete, setConfirmDelete] = useState<Clip | null>(null);
   const [manualCopy, setManualCopy] = useState<string | null>(null);
+  const [shareSlug, setShareSlug] = useState<string | null>(null);
 
   const viewerClip = clips.find(c => c.slug === viewerSlug) ?? null;
   const trimClip = clips.find(c => c.slug === trimSlug) ?? null;
+  const shareClip = clips.find(c => c.slug === shareSlug) ?? null;
 
   const openViewer = useCallback((slug: string) => {
     // Card previews keep decoding behind the scrim otherwise, and they are
@@ -83,7 +87,8 @@ export function PlaybackProvider({children}: {children: ReactNode}) {
     const gone = (slug: string) => slug !== renamingFrom.current && !clips.some(c => c.slug === slug);
     if (viewerSlug && gone(viewerSlug)) setViewerSlug(null);
     if (trimSlug && gone(trimSlug)) setTrimSlug(null);
-  }, [clips, viewerSlug, trimSlug]);
+    if (shareSlug && gone(shareSlug)) setShareSlug(null);
+  }, [clips, viewerSlug, trimSlug, shareSlug]);
 
   const renameClip = useRenameClip();
   const rename = useCallback(
@@ -94,6 +99,7 @@ export function PlaybackProvider({children}: {children: ReactNode}) {
           if (!updated?.slug) return;
           setViewerSlug(current => (current === clip.slug ? updated.slug : current));
           setTrimSlug(current => (current === clip.slug ? updated.slug : current));
+          setShareSlug(current => (current === clip.slug ? updated.slug : current));
         })
         .finally(() => {
           renamingFrom.current = null;
@@ -130,12 +136,17 @@ export function PlaybackProvider({children}: {children: ReactNode}) {
     [fail],
   );
 
-  const share = useCallback(
+  const share = useCallback((clip: Clip) => setShareSlug(clip.slug), []);
+
+  const copyLink = useCallback(
     (clip: Clip) => void copyShareLink(clip, notify, setManualCopy),
     [notify],
   );
 
-  const value = useMemo<Playback>(() => ({openViewer, openTrim}), [openViewer, openTrim]);
+  const value = useMemo<Playback>(
+    () => ({openViewer, openTrim, openShare: setShareSlug}),
+    [openViewer, openTrim],
+  );
 
   return (
     <PlaybackContext.Provider value={value}>
@@ -157,6 +168,8 @@ export function PlaybackProvider({children}: {children: ReactNode}) {
         onDelete={setConfirmDelete}
         notify={say}
       />
+
+      <ShareModal clip={shareClip} onClose={() => setShareSlug(null)} onCopyLink={copyLink} />
 
       <TrimModal
         clip={trimClip}

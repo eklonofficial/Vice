@@ -883,7 +883,7 @@ function PlayerBar({
       </div>
 
       <div className="player-extra">
-        <button type="button" className="player-btn" onClick={onShare} aria-label={t('viewer.copyShareLink')}>
+        <button type="button" className="player-btn" onClick={onShare} aria-label={t('viewer.share')}>
           <ShareGlyph />
         </button>
         <button type="button" className="player-btn" onClick={onClose} aria-label={t('viewer.closePlayer')}>

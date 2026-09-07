@@ -477,9 +477,41 @@ class _VideoChain:
         return self.cur
 
 
+# Discord's plain (non-Nitro) upload cap. The margin covers container
+# overhead and single-pass ABR variance so the file lands under it in one
+# encode rather than needing a slower two-pass run.
+DISCORD_MAX_MB = 20
+DISCORD_MAX_BYTES = DISCORD_MAX_MB * 1024 * 1024
+DISCORD_SIZE_MARGIN = 0.92
+DISCORD_AUDIO_KBPS = 128
+DISCORD_MIN_VIDEO_KBPS = 150
+
+
+class DiscordTooLarge(Exception):
+    """No bitrate fits this clip under the cap at a watchable quality."""
+
+
+def discord_bitrates(duration: float, audio_streams: int = 1) -> tuple[int, int]:
+    """(video kbps, per-track audio kbps) that fit DISCORD_MAX_MB.
+
+    Raises DiscordTooLarge when audio plus the video floor already overruns
+    the cap. Clamping to the floor and encoding anyway produced files far
+    over it: 1800s with one audio track budgets 62 MB at the floor.
+    """
+    audio_kbps = DISCORD_AUDIO_KBPS * max(audio_streams, 1)
+    budget_kbps = DISCORD_MAX_MB * 8192 * DISCORD_SIZE_MARGIN / max(duration, 1)
+    video_kbps = round(budget_kbps - audio_kbps)
+    if video_kbps < DISCORD_MIN_VIDEO_KBPS:
+        raise DiscordTooLarge(
+            f"{duration:.0f}s with {max(audio_streams, 1)} audio track(s) "
+            f"cannot fit {DISCORD_MAX_MB} MB. Trim it shorter first.")
+    return video_kbps, DISCORD_AUDIO_KBPS
+
+
 def build_export_cmd(project: dict, sources: dict[str, Source], out_path: Path,
                      *, accent: str = "#0099ff", fonts: Optional[Path] = None,
-                     text_dir: Optional[Path] = None) -> list[str]:
+                     text_dir: Optional[Path] = None,
+                     discord_optimized: bool = False) -> list[str]:
     """Build the full ffmpeg argv for a validated project. Pure: callers
     write out the text files (text_file_contents) before running it."""
     fonts = fonts or font_dir()
@@ -567,6 +599,18 @@ def build_export_cmd(project: dict, sources: dict[str, Source], out_path: Path,
                      + f"amix=inputs={len(alabels)}:duration=longest:normalize=0,"
                      f"atrim=0:{_n(extent)},asetpts=PTS-STARTPTS[aout]")
 
+    if discord_optimized:
+        # One mixed track out, whatever the sources had.
+        video_kbps, audio_kbps = discord_bitrates(extent, 1)
+        video_args = ["-c:v", "libx264", "-preset", "medium",
+                     "-b:v", f"{video_kbps}k",
+                     "-maxrate", f"{round(video_kbps * 1.45)}k",
+                     "-bufsize", f"{video_kbps * 2}k"]
+        audio_args = ["-c:a", "aac", "-b:a", f"{audio_kbps}k"]
+    else:
+        video_args = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
+        audio_args = ["-c:a", "aac", "-b:a", "192k"]
+
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostats",
            "-progress", "pipe:1"]
     for cid in input_order:
@@ -574,9 +618,9 @@ def build_export_cmd(project: dict, sources: dict[str, Source], out_path: Path,
     cmd += [
         "-filter_complex", ";".join(lines),
         "-map", f"[{vout}]", "-map", "[aout]",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        *video_args,
         "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "192k",
+        *audio_args,
         "-movflags", "+faststart",
         "-t", _n(extent),
         "-f", "mp4",
@@ -696,7 +740,8 @@ class ExportManager:
     def start(self, job_id: str, cmd: list[str], total: float,
               tmp_path: Path, final_path: Path,
               on_done: Optional[Callable[[Path], Awaitable[Optional[dict]]]] = None,
-              cleanup: Optional[Callable[[], None]] = None) -> None:
+              cleanup: Optional[Callable[[], None]] = None,
+              max_bytes: Optional[int] = None) -> None:
         if self.busy or self._stopping:
             raise ExportBusy()
         self._job_id = job_id
@@ -705,10 +750,12 @@ class ExportManager:
         self._committed = False
         self._proc = None
         self._task = asyncio.create_task(
-            self._run(job_id, cmd, total, tmp_path, final_path, on_done, cleanup))
+            self._run(job_id, cmd, total, tmp_path, final_path, on_done, cleanup,
+                      max_bytes))
 
     async def _run(self, job_id: str, cmd: list[str], total: float,
-                   tmp: Path, final: Path, on_done, cleanup) -> None:
+                   tmp: Path, final: Path, on_done, cleanup,
+                   max_bytes: Optional[int] = None) -> None:
         self._started = True
         proc = None
         spawn_task = None
@@ -765,6 +812,18 @@ class ExportManager:
                 await self._broadcast({
                     "type": "export_error", "job_id": job_id,
                     "error": err or f"ffmpeg exited with {proc.returncode}",
+                    "canceled": False,
+                })
+                return
+
+            # A bitrate target is a request, not a guarantee: check what the
+            # encoder actually produced before it becomes the export.
+            size = tmp.stat().st_size if max_bytes is not None else 0
+            if max_bytes is not None and size > max_bytes:
+                await self._broadcast({
+                    "type": "export_error", "job_id": job_id,
+                    "error": f"the export came out at {size / 1048576:.1f} MB, "
+                             f"over the {max_bytes // 1048576} MB limit",
                     "canceled": False,
                 })
                 return
