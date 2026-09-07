@@ -92,6 +92,16 @@ class RecordingConfig:
     # `display`. The capture backend cannot switch targets mid-run, so moving
     # to another monitor restarts the recorder and its replay buffer.
     follow_mouse_display: bool = False
+    # Capture just the focused game window instead of the whole display.
+    # Requires the gpu-screen-recorder backend; falls back to full-display
+    # capture if the focused window's size can't be detected.
+    window_capture: bool = False
+    # Header pill selection: "active_game" | "desktop" | "window". Drives
+    # window_capture ("active_game" sets it, anything else clears it); kept
+    # as its own field purely so the pill can show which of the three was
+    # picked. "window" is a stub for future work (pin to a chosen window
+    # rather than a detected game) and has no backend behind it yet.
+    capture_mode: str = "desktop"
     # None = auto-detect from display. E.g. "1920x1080".
     resolution: Optional[str] = None
     # "auto" | "h264_nvenc" | "hevc_nvenc" | "av1_nvenc" | "h264_vaapi" | "hevc_vaapi" | "av1_vaapi" | "libx264" | "libx265" | "copy"
@@ -510,8 +520,14 @@ def load() -> Config:
         hotkeys_raw.get("disable_while_focused")
     )
 
+    recording_raw = dict(merged.get("recording", {}))
+    if "capture_mode" not in (raw.get("recording") or {}) and recording_raw.get("window_capture"):
+        # Predates the capture_mode field; keep the pill showing what
+        # window_capture already had on for this install.
+        recording_raw["capture_mode"] = "active_game"
+
     cfg = Config(
-        recording=RecordingConfig(**_known_keys(RecordingConfig, merged.get("recording", {}))),
+        recording=RecordingConfig(**_known_keys(RecordingConfig, recording_raw)),
         hotkeys=HotkeyConfig(**_known_keys(HotkeyConfig, hotkeys_raw)),
         output=OutputConfig(**_known_keys(OutputConfig, output)),
         sharing=SharingConfig(**_known_keys(SharingConfig, merged.get("sharing", {}))),

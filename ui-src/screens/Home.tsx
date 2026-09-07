@@ -9,6 +9,7 @@ import {formatDuration} from '../lib/format';
 import {t, tNode} from '../lib/i18n';
 import {ClipCard} from '../components/ClipCard';
 import {Tile, ActionTile} from '../components/Tile';
+import {CaptureModeTile, type CaptureMode} from '../components/CaptureModeTile';
 import {Modal} from '../components/Modal';
 import {IconClips, IconPlaylist, IconSettings} from '../components/Icons';
 
@@ -44,6 +45,10 @@ export function Home() {
   const captureAudio = config?.recording?.capture_audio !== false;
   const captureMic = Boolean(config?.recording?.capture_microphone);
   const tunnelOn = Boolean(config?.sharing?.cloudflare_tunnel);
+  const captureMode: CaptureMode = config?.recording?.window_capture ? 'active_game' : 'desktop';
+  // Window pinning is GSR-only; status.backend is what's actually running,
+  // not just configured (backend can be "auto").
+  const captureModeSupported = status.backend === 'gpu-screen-recorder';
 
   const recent = useMemo(() => clips.slice(0, ROW_LIMIT), [clips]);
   const mostViewed = useMemo(
@@ -102,6 +107,21 @@ export function Home() {
       t('home.errMic'),
     );
 
+  const setCaptureMode = (mode: CaptureMode) =>
+    toggle(
+      'captureMode',
+      {recording: {window_capture: mode === 'active_game', capture_mode: mode}},
+      () =>
+        notify({
+          kind: 'info',
+          title: mode === 'active_game' ? t('home.gameCaptureOn') : t('home.gameCaptureOff'),
+          detail: mode === 'active_game' ? t('home.gameCaptureOnDetail') : undefined,
+          tone: 'accent',
+          holdMs: 3000,
+        }),
+      t('home.errGameCapture'),
+    );
+
   const copyTunnel = async () => {
     if (!tunnelUrl) {
       notify({kind: 'error', title: t('home.enablePublicLinkFirst'), tone: 'error', holdMs: 4000});
@@ -127,7 +147,7 @@ export function Home() {
       </header>
 
       <section className="tiles" aria-label={t('home.quickSettings')}>
-        <div className="tile-row tile-row-2">
+        <div className="tile-row tile-row-3">
           <Tile
             label={t('home.microphone')}
             detail={captureMic ? t('home.on') : t('home.off')}
@@ -159,6 +179,12 @@ export function Home() {
                 t('home.errDesktopAudio'),
               )
             }
+          />
+          <CaptureModeTile
+            mode={captureMode}
+            supported={captureModeSupported}
+            busy={busy === 'captureMode'}
+            onSelect={mode => void setCaptureMode(mode)}
           />
         </div>
 

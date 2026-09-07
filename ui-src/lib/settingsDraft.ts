@@ -24,6 +24,7 @@ export interface Draft {
   replayStorage: string;
   display: string;
   followMouse: boolean;
+  windowCapture: boolean;
   hardwareDecode: boolean;
 
   captureAudio: boolean;
@@ -118,6 +119,7 @@ export function draftFromConfig(config: Config): Draft {
     replayStorage: str(r.gsr_replay_storage, 'auto'),
     display: str(r.display, ''),
     followMouse: Boolean(r.follow_mouse_display),
+    windowCapture: Boolean(r.window_capture),
     hardwareDecode: Boolean(ui.hardware_video_decode),
 
     captureAudio: r.capture_audio !== false,
@@ -201,6 +203,8 @@ export function patchFromDraft(draft: Draft): Record<string, Record<string, unkn
       fps: Number(draft.fps),
       display: draft.display || null,
       follow_mouse_display: draft.followMouse,
+      window_capture: draft.windowCapture,
+      capture_mode: draft.windowCapture ? 'active_game' : 'desktop',
       resolution: resolution === false ? null : resolution,
       container: draft.container,
       encoder: draft.encoder,
