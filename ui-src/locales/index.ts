@@ -1,4 +1,5 @@
 import en from './en.json';
+import pt_BR from './pt-BR.json';
 
 /**
  * Every locale, imported statically.
@@ -15,6 +16,7 @@ import en from './en.json';
  */
 export const LOCALES = {
   en,
+  'pt-BR': pt_BR,
 } as const;
 
 export type LocaleName = keyof typeof LOCALES;
@@ -22,4 +24,5 @@ export type LocaleName = keyof typeof LOCALES;
 /** What the picker in Settings shows, in the language itself. */
 export const LOCALE_LABELS: Record<LocaleName, string> = {
   en: 'English',
+  'pt-BR': 'Português Brasileiro',
 };
