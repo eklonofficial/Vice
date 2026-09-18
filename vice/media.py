@@ -16,6 +16,9 @@ from typing import Optional
 
 log = logging.getLogger("vice.media")
 
+# How long cleanup waits for a killed media command to be reaped.
+_REAP_TIMEOUT = 5.0
+
 # Suffix patterns for temp files written during in-place edits
 # (trim / watermark / remux). Leftovers mean a previous run was
 # interrupted mid-edit; they are safe to delete at daemon startup.
@@ -46,7 +49,15 @@ async def communicate_with_timeout(
                 proc.kill()
             except ProcessLookupError:
                 pass
-        await communication
+        # Bounded: when the loop itself is shutting down (asyncio.run's
+        # teardown cancelling this task), Python 3.12 can close the
+        # subprocess transport before the exit is reported, and an unbounded
+        # wait then never returns, hanging the daemon's exit.
+        try:
+            await asyncio.wait_for(asyncio.shield(communication), _REAP_TIMEOUT)
+        except asyncio.TimeoutError:
+            communication.cancel()
+            log.debug("Gave up waiting for pid %s to be reaped", proc.pid)
 
 
 async def probe_media(path: Path) -> Optional[dict]:
