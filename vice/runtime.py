@@ -62,7 +62,7 @@ def daemon_is_running(socket_file: Path, pid_file: Path) -> bool:
         return True
     if pid > 0:
         if IS_WINDOWS:
-            if pid_is_alive(pid):
+            if _is_python_process(pid):
                 return True
         else:
             try:
@@ -195,16 +195,40 @@ def _read_ipc_endpoint(socket_file: Path) -> tuple[int, str]:
     """(port, token) from a Windows IPC endpoint file.
 
     Raises FileNotFoundError when there is no file and ConnectionRefusedError
-    when it is unreadable, the same errors a stale Unix socket gives, so every
-    caller's existing handling applies unchanged.
+    when it is unreadable or belongs to a daemon that has died, the same
+    errors a stale Unix socket gives, so every caller's existing handling
+    applies unchanged.
+
+    The dead-owner check matters because Windows does not refuse a loopback
+    connection to a closed port straight away: it retries for about two
+    seconds. Probing a crashed daemon's port with a short timeout therefore
+    timed out instead of being refused, which read as "a daemon might be
+    busy", and every start after a crash refused to run.
     """
     try:
         info = json.loads(socket_file.read_text(encoding="utf-8"))
-        return int(info["port"]), str(info["token"])
+        port, token = int(info["port"]), str(info["token"])
+        owner = int(info.get("pid") or 0)
     except FileNotFoundError:
         raise
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         raise ConnectionRefusedError(f"Unreadable IPC endpoint {socket_file}: {exc}") from exc
+    if owner and not _is_python_process(owner):
+        raise ConnectionRefusedError(f"IPC endpoint {socket_file} belongs to pid {owner}, which has exited")
+    return port, token
+
+
+def _is_python_process(pid: int) -> bool:
+    """Whether pid is alive and a Python interpreter. Windows hands out pids
+    again quickly, and an unrelated program on a crashed daemon's old pid must
+    not keep Vice from starting."""
+    import psutil
+    try:
+        return psutil.Process(pid).name().lower().startswith("python")
+    except psutil.NoSuchProcess:
+        return False
+    except psutil.Error:
+        return True  # cannot tell, so err towards "running", as everywhere else
 
 
 async def start_ipc_server(handler, socket_file: Path):

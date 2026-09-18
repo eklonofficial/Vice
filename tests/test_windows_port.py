@@ -418,6 +418,26 @@ class WindowsIpcTests(unittest.IsolatedAsyncioTestCase):
                 server.close()
                 await server.wait_closed()
 
+    async def test_a_crashed_daemons_endpoint_is_seen_as_dead_quickly(self) -> None:
+        # Windows takes ~2 s to refuse a loopback connection to a closed port,
+        # so a short probe timed out and a crash left Vice unable to start.
+        import socket as _socket
+        from vice import runtime
+        with _socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            dead_port = s.getsockname()[1]
+        dead = subprocess.Popen([sys.executable, "-c", ""])
+        dead.wait()
+        with tempfile.TemporaryDirectory() as tmp:
+            sock, pid = Path(tmp) / "vice.sock", Path(tmp) / "vice.pid"
+            sock.write_text(json.dumps({"port": dead_port, "token": "x", "pid": dead.pid}))
+            pid.write_text(str(dead.pid))
+            started = time.perf_counter()
+            self.assertFalse(runtime.daemon_is_running(sock, pid))
+            with self.assertRaises(ConnectionRefusedError):
+                await runtime.open_ipc_connection(sock)
+            self.assertLess(time.perf_counter() - started, 1.0)
+
     async def test_an_unreadable_endpoint_looks_like_a_dead_socket(self) -> None:
         from vice import runtime
         with tempfile.TemporaryDirectory() as tmp:
