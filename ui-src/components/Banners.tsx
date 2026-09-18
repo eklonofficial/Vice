@@ -39,7 +39,11 @@ export function Banners() {
       {status.codec_fallback && showing('codec-gpu') ? (
         <Banner tone="warning" onDismiss={dismiss('codec-gpu')}>
           <strong>{t('banners.codecFallback')}</strong>
-          <span>{t('banners.codecFallbackHelp')}</span>
+          <span>
+            {status.platform === 'windows'
+              ? t('banners.codecFallbackHelpWindows')
+              : t('banners.codecFallbackHelp')}
+          </span>
         </Banner>
       ) : null}
 

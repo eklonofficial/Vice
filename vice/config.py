@@ -152,6 +152,11 @@ class RecordingConfig:
     # mixes every source. Players, Discord, and share embeds play track 1, so
     # this keeps shared clips complete while the separates stay editable.
     audio_tracks_mix_first: bool = False
+    # OBS Studio's WebSocket server, for recording.backend = "obs" (Windows).
+    # OBS 28+ has it built in: Tools -> WebSocket Server Settings.
+    obs_host: str = "127.0.0.1"
+    obs_port: int = 4455
+    obs_password: str = ""
 
 
 @dataclass

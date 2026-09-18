@@ -11,6 +11,7 @@
 
 import {readFileSync, readdirSync} from 'node:fs';
 import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
 
 const LOCALES_DIR = new URL('../ui-src/locales/', import.meta.url);
 const UI_SRC = new URL('../ui-src/', import.meta.url);
@@ -102,7 +103,7 @@ function walk(dir) {
 }
 
 const suspects = [];
-for (const file of walk(new URL('.', UI_SRC).pathname)) {
+for (const file of walk(fileURLToPath(new URL('.', UI_SRC)))) {
   const src = readFileSync(file, 'utf8');
   const seen = new Set();
   const add = (text, {oneWordOk = false} = {}) => {

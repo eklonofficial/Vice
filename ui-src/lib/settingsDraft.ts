@@ -58,6 +58,9 @@ export interface Draft {
   discordCustomGames: string;
 
   gsrArgs: string;
+  obsHost: string;
+  obsPort: number;
+  obsPassword: string;
   checkForUpdates: boolean;
 }
 
@@ -164,6 +167,9 @@ export function draftFromConfig(config: Config): Draft {
       .join('\n'),
 
     gsrArgs: str(r.gsr_args, ''),
+    obsHost: str(r.obs_host, '127.0.0.1'),
+    obsPort: num(r.obs_port, 4455),
+    obsPassword: str(r.obs_password, ''),
     checkForUpdates: u.check_on_start !== false,
   };
 }
@@ -218,6 +224,9 @@ export function patchFromDraft(draft: Draft): Record<string, Record<string, unkn
       audio_tracks: [...draft.audioTracks],
       audio_tracks_mix_first: draft.mixFirstTrack,
       gsr_args: draft.gsrArgs.trim(),
+      obs_host: draft.obsHost.trim() || '127.0.0.1',
+      obs_port: Number(draft.obsPort) || 4455,
+      obs_password: draft.obsPassword,
     },
     hotkeys: {
       clip: draft.clipKey,

@@ -169,7 +169,7 @@ export function TextField({
   label: string;
   mono?: boolean;
   wide?: boolean;
-  type?: 'text' | 'number';
+  type?: 'text' | 'number' | 'password';
   min?: number;
   max?: number;
 }) {

@@ -1092,6 +1092,9 @@ class ViceDaemon:
             "cpu_fallback":   bool(getattr(self.recorder, "cpu_fallback", False)),
             "codec_fallback": bool(getattr(self.recorder, "codec_fallback", False)),
             "backend":          self.recorder.name,
+            # The settings screen offers different backends and encoders per
+            # platform, so it needs to know which one it is talking to.
+            "platform":         "windows" if IS_WINDOWS else "linux",
             "clips":            self._clips_in_library(),
             "session_active":   self._session_active,
             "clip_key":         self.cfg.hotkeys.clip,
