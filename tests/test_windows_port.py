@@ -109,8 +109,14 @@ class HookStateTests(unittest.TestCase):
         self.events: list[tuple[str, int]] = []
         self.listener = hotkey_win.HotkeyListener()
         self.listener._running = True
+        self.mods: list = []
         loop = mock.Mock()
-        loop.call_soon_threadsafe = lambda fn, name, state: self.events.append((name, state))
+
+        def _record(fn, name, state, mods):
+            self.events.append((name, state))
+            self.mods.append(mods)
+
+        loop.call_soon_threadsafe = _record
         self.listener._loop = loop
 
     def down(self, vk: int, at: float) -> None:
@@ -127,12 +133,21 @@ class HookStateTests(unittest.TestCase):
         self.down(0x78, 300.0)         # back at the desktop, F9 pressed again
         self.assertEqual([s for _, s in self.events], [hotkey_win.KEY_DOWN, hotkey_win.KEY_DOWN])
 
-    def test_combos_use_the_modifiers_windows_says_are_down(self) -> None:
+    def test_combos_use_the_modifiers_windows_says_are_down_at_the_press(self) -> None:
         self.listener._held_mods = {"KEY_LEFTMETA"}  # stuck from a lost key-up
         with mock.patch.object(hotkey_win, "_modifiers_down", return_value=set()):
-            self.assertEqual(self.listener._combo_for("KEY_F9"), "KEY_F9")
+            self.down(0x78, 10.0)
         with mock.patch.object(hotkey_win, "_modifiers_down", return_value={"KEY_LEFTALT"}):
-            self.assertEqual(self.listener._combo_for("KEY_F9"), "KEY_LEFTALT+KEY_F9")
+            self.down(0x77, 20.0)  # F8
+        # Sampled in the hook itself, so a quick Ctrl+F9 released before the
+        # event loop gets to it still counts as Ctrl+F9.
+        self.assertEqual(self.mods, [set(), {"KEY_LEFTALT"}])
+        self.listener._held_mods = self.mods[0]
+        self.assertEqual(self.listener._combo_for("KEY_F9"), "KEY_F9")
+
+    def test_modifier_keys_carry_no_sample(self) -> None:
+        self.down(0xA2, 10.0)  # Ctrl itself
+        self.assertEqual(self.mods, [None])
 
 
 @unittest.skipUnless(IS_WINDOWS, "WASAPI capture thread")

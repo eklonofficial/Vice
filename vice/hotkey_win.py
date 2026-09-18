@@ -29,6 +29,7 @@ import time
 from ctypes import wintypes
 from typing import Optional
 
+from .config import MODIFIER_KEYS
 from .hotkey_dispatch import KEY_DOWN, KEY_HOLD, KEY_UP, HotkeyDispatcher
 
 log = logging.getLogger("vice.hotkey")
@@ -281,19 +282,19 @@ class HotkeyListener(HotkeyDispatcher):
             state = KEY_UP
         else:
             return
-        self._loop.call_soon_threadsafe(self._dispatch, name, state)
+        # Which modifiers are held is read from Windows here, inside the hook,
+        # at the instant of the press, rather than trusted from the hook's
+        # own bookkeeping: releasing Win after Win+L, or Alt over an elevated
+        # window, never reaches the hook, and a modifier stuck "down" turned
+        # F9 into Win+F9 until it was pressed again. It has to be sampled now:
+        # read later on the event loop, a quick Ctrl+F9 was already released.
+        mods = _modifiers_down() if state == KEY_DOWN and name not in MODIFIER_KEYS else None
+        self._loop.call_soon_threadsafe(self._dispatch, name, state, mods)
 
-    def _dispatch(self, name: str, state: int) -> None:
+    def _dispatch(self, name: str, state: int, mods: Optional[set[str]] = None) -> None:
+        if mods is not None:
+            self._held_mods = mods
         asyncio.ensure_future(self._key_event(name, state))
-
-    def _combo_for(self, key_name: str) -> str:
-        # Held modifiers are re-read from Windows at each press rather than
-        # trusted from the hook's own bookkeeping: releasing Win after Win+L,
-        # or Alt over an elevated window, never reaches the hook, and a
-        # modifier stuck "down" turned F9 into Win+F9 until it was pressed
-        # again.
-        self._held_mods = _modifiers_down()
-        return super()._combo_for(key_name)
 
 
 # Canonical modifier -> its left and right virtual keys.
