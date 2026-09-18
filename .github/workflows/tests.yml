@@ -28,3 +28,44 @@ jobs:
 
       - name: Run tests
         run: python -m unittest discover -s tests
+
+  windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    env:
+      # Several shared tests read repo files without naming an encoding.
+      PYTHONUTF8: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          choco install ffmpeg --no-progress -y
+
+      # Only modules whose subject is shared or Windows code. The rest test
+      # Linux mechanics (evdev, Unix sockets, process groups, /proc, systemd)
+      # and either cannot run here or, worse, would reach real Windows code
+      # paths with Linux-shaped mocks.
+      - name: Run tests
+        shell: pwsh
+        run: |
+          $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + $env:Path
+          $failed = 0
+          foreach ($module in 'test_windows_port.py', 'test_playlists.py', 'test_updates.py',
+                              'test_media.py', 'test_install_script.py', 'test_ui_static.py') {
+            python -m unittest discover -s tests -p $module
+            if ($LASTEXITCODE -ne 0) { $failed = 1 }
+          }
+          exit $failed

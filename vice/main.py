@@ -1858,7 +1858,9 @@ def doctor() -> None:
     click.echo("")
 
     click.echo("Environment")
-    for key, value in runtime_env_snapshot().items():
+    env = ({key: os.environ.get(key, "") for key in ("APPDATA", "LOCALAPPDATA", "TEMP")}
+           if IS_WINDOWS else runtime_env_snapshot())
+    for key, value in env.items():
         click.echo(f"  {key}={value or '(unset)'}")
     click.echo("")
 

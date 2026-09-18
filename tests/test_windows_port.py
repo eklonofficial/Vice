@@ -595,6 +595,40 @@ class OBSRecorderTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Could not reach OBS", str(ctx.exception))
 
 
+# ── installer ────────────────────────────────────────────────────────────────
+
+class InstallScriptTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.raw = (Path(__file__).resolve().parents[1] / "install.ps1").read_bytes()
+        cls.script = cls.raw.decode("ascii")
+
+    def test_is_plain_ascii(self) -> None:
+        # Windows PowerShell 5.1 reads a script with no BOM in the ANSI code
+        # page; one non-ASCII character can stop it parsing.
+        self.assertTrue(all(b in (9, 10, 13) or 32 <= b < 127 for b in self.raw))
+
+    def test_installs_what_vice_needs_through_winget(self) -> None:
+        for package in ("Gyan.FFmpeg", "Python.Python.3.12", "Cloudflare.cloudflared"):
+            self.assertIn(package, self.script)
+        self.assertIn("ddagrab", self.script)
+
+    def test_native_programs_never_abort_the_script_through_stderr(self) -> None:
+        # With ErrorActionPreference Stop, 5.1 turns native stderr into a
+        # terminating error; "Vice is not running." once aborted -Uninstall.
+        import re
+        direct = re.findall(r"^\s*& \$(VenvPython|python|ViceExe) ", self.script, re.M)
+        self.assertEqual(direct, [])
+        # And --flags go through as an array: "--" is PowerShell's own
+        # end-of-parameters marker when passed loose to a function.
+        self.assertNotRegex(self.script, r"Invoke-Native \S+ --")
+
+    def test_the_vice_command_runs_the_installed_package(self) -> None:
+        # python -m would put the current directory first on sys.path.
+        self.assertIn("Scripts\\vice.exe", self.script)
+        self.assertIn("-Uninstall", self.script)
+
+
 # ── live capture ─────────────────────────────────────────────────────────────
 
 @unittest.skipUnless(IS_WINDOWS and LIVE and FFMPEG, "records the screen; set VICE_LIVE_TESTS=1")

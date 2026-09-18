@@ -384,20 +384,23 @@ export function Settings() {
             />
           </Row>
 
-          <Row
-            label={t('settings.replayStorage')}
-            help={t('settings.replayStorageHelp')}>
-            <Select
+          {/* gpu-screen-recorder's RAM/disk choice; the Windows ring is always on disk. */}
+          {!isWindows && (
+            <Row
               label={t('settings.replayStorage')}
-              value={draft.replayStorage}
-              onChange={replayStorage => update({replayStorage})}
-              options={[
-                ['auto', t('settings.optAutoRecommended')],
-                ['ram', t('settings.replayRam')],
-                ['disk', t('settings.replayDisk')],
-              ]}
-            />
-          </Row>
+              help={t('settings.replayStorageHelp')}>
+              <Select
+                label={t('settings.replayStorage')}
+                value={draft.replayStorage}
+                onChange={replayStorage => update({replayStorage})}
+                options={[
+                  ['auto', t('settings.optAutoRecommended')],
+                  ['ram', t('settings.replayRam')],
+                  ['disk', t('settings.replayDisk')],
+                ]}
+              />
+            </Row>
+          )}
 
           <Row label={t('settings.clipDuration')} help={t('settings.clipDurationHelp')}>
             <Slider
@@ -498,29 +501,35 @@ export function Settings() {
             />
           </Row>
 
-          <Row
-            label={t('settings.colourDepth')}
-            help={t('settings.colourDepthHelp')}>
-            <Select
+          {/* The Windows backend records 8-bit only for now, and the decode
+              toggle only changes QtWebEngine flags, which WebView2 ignores. */}
+          {!isWindows && (
+            <Row
               label={t('settings.colourDepth')}
-              value={draft.colorDepth}
-              onChange={colorDepth => update({colorDepth})}
-              options={[
-                ['8', t('settings.colour8')],
-                ['10', t('settings.colour10')],
-              ]}
-            />
-          </Row>
+              help={t('settings.colourDepthHelp')}>
+              <Select
+                label={t('settings.colourDepth')}
+                value={draft.colorDepth}
+                onChange={colorDepth => update({colorDepth})}
+                options={[
+                  ['8', t('settings.colour8')],
+                  ['10', t('settings.colour10')],
+                ]}
+              />
+            </Row>
+          )}
 
-          <Row
-            label={t('settings.hardwareDecode')}
-            help={t('settings.hardwareDecodeHelp')}>
-            <Toggle
+          {!isWindows && (
+            <Row
               label={t('settings.hardwareDecode')}
-              checked={draft.hardwareDecode}
-              onChange={hardwareDecode => update({hardwareDecode})}
-            />
-          </Row>
+              help={t('settings.hardwareDecodeHelp')}>
+              <Toggle
+                label={t('settings.hardwareDecode')}
+                checked={draft.hardwareDecode}
+                onChange={hardwareDecode => update({hardwareDecode})}
+              />
+            </Row>
+          )}
 
           <Row label={t('settings.backend')} help={t('settings.backendHelp')}>
             <Select

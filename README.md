@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <b>Instant-replay game clipping for Linux.</b><br/>
+  <b>Instant-replay game clipping for Linux and Windows.</b><br/>
   Press one key to save the last 20 seconds of gameplay. No scenes, no setup, no upload.
 </p>
 
@@ -67,6 +67,19 @@ Both paths install everything Vice needs, including the `gpu-screen-recorder` ca
 | Git clone | `cd Vice && git pull && ./install.sh` | `vice uninstall && rm -rf Vice` |
 
 > Don't mix the AUR package and `./install.sh` on the same machine. Uninstall one before switching.
+
+**Windows 10 / 11:**
+
+```powershell
+git clone https://github.com/eklonofficial/Vice; cd Vice
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+
+The installer uses `winget` to fetch anything missing (Python 3.10+, ffmpeg 6.0+, and optionally `cloudflared`), puts Vice in its own environment under `%LOCALAPPDATA%\Vice`, adds a Start Menu shortcut and a `vice` command, and asks whether to record from login. No administrator rights needed. Open **Vice** from the Start Menu and press **F9** in a game.
+
+| | Update | Uninstall |
+|---|---|---|
+| Windows | `git pull` then run `install.ps1` again | `powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall` |
 
 **Bazzite / Fedora Atomic:** not supported yet. rpm-ostree systems can't use `install.sh`, and the installer exits early on them rather than breaking your system. A Flatpak will fix this; follow [#97](https://github.com/eklonofficial/Vice/issues/97).
 
@@ -139,6 +152,21 @@ OBS has a replay buffer. So why use Vice?
 `gpu-screen-recorder` is the default backend everywhere. `wf-recorder` (Wayland) and `ffmpeg x11grab` (X11) exist as explicit opt-ins via `recording.backend` for unusual setups; they are never auto-selected.
 
 Game detection (filename tagging and Discord presence) works on X11, Hyprland, and sway. On other compositors clips simply save untagged.
+
+### Windows
+
+| | |
+|---|---|
+| Windows 10 (1903+) / 11 | ✅ |
+| NVIDIA | ✅ NVENC (needs a driver new enough for your ffmpeg build) |
+| Intel | ✅ Quick Sync |
+| AMD | ✅ AMF |
+| Anything else | ✅ libx264 software fallback |
+| Hybrid laptops (iGPU + dGPU) | ✅ every monitor, on whichever encoder opens |
+
+Vice captures with ffmpeg's `ddagrab` (the Desktop Duplication API) and records desktop audio and your microphone through WASAPI. Every encoder is tested with a real three-frame encode before use, so a GPU encoder that ffmpeg lists but the driver refuses is skipped instead of failing the recording. Hotkeys come from a low-level keyboard hook that never swallows the key, window detection and Discord presence work out of the box, and nothing is injected into games, so anti-cheat has nothing to object to.
+
+Desktop Duplication sees what Windows composites. Borderless and windowed games, and fullscreen games using Windows' flip model (almost all DX11/DX12/Vulkan titles), record fine. A few true exclusive-fullscreen or older DX9 games show up black; for those, switch **Settings → Recording → Recording backend** to **OBS Studio replay buffer**. Vice then drives OBS's replay buffer over its built-in WebSocket server (OBS 28+, Tools → WebSocket Server Settings) and files OBS's clips in the Vice library like any other.
 
 ## CLI
 
@@ -276,6 +304,18 @@ vice-app --debug
 # reproduce the crash, then Ctrl+C if the window didn't exit
 ```
 The log lands at `~/.local/share/vice/vice-debug.log`; attach it to a GitHub issue. Don't pipe the command through `tee`: Chromium's stderr can back up through the pipe and freeze the Qt event loop.
+
+### Windows
+
+**Windows asks whether Python can use the network.** That is the share server offering clips to your LAN. Allow private networks to use LAN share links; the Cloudflare tunnel links work either way.
+
+**Clips are black.** The game is running in true exclusive fullscreen, which Desktop Duplication cannot see. Switch the game to borderless, or use the OBS backend (see Compatibility).
+
+**`vice doctor` says ddagrab: NO.** The ffmpeg on PATH is older than 6.0. Run `winget install Gyan.FFmpeg`, open a new terminal, and restart Vice.
+
+**NVENC is listed but Vice records with another encoder.** Current ffmpeg builds need a recent NVIDIA driver (610 or newer for ffmpeg 9). Vice logs the reason in `%LOCALAPPDATA%\Vice\vice.log` (look for "unusable here") and falls back to Quick Sync, AMF or x264. Updating the NVIDIA driver brings NVENC back without changing any setting.
+
+**Where are the logs?** `%LOCALAPPDATA%\Vice\vice.log` (daemon) and `vice-app.log` (window). Settings live in `%APPDATA%\Vice\config.toml`.
 
 **Anything else.** Run `vice doctor` for full diagnostics, or open an issue with the output.
 
