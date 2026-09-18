@@ -38,7 +38,7 @@ from typing import Callable, List, Optional
 from .config import Config
 from .media import get_duration as _get_duration
 from .media import probe_media_detailed
-from .platform import IS_WINDOWS, new_group_kwargs, runtime_dir
+from .oscompat import IS_WINDOWS, new_group_kwargs, runtime_dir
 from .runtime import recover_wayland_display, resolve_path
 
 log = logging.getLogger("vice.recorder")

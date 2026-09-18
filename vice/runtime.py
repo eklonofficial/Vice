@@ -16,7 +16,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from .platform import IS_WINDOWS, home_dir
+from .oscompat import IS_WINDOWS, home_dir
 
 log = logging.getLogger("vice.runtime")
 RUNTIME_ENV_KEYS = (

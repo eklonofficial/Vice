@@ -37,7 +37,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 from . import __version__
-from .platform import (IS_WINDOWS, data_dir, detached_kwargs, hide_child_consoles,
+from .oscompat import (IS_WINDOWS, data_dir, detached_kwargs, hide_child_consoles,
                        open_path, runtime_dir, set_clipboard_text)
 from .runtime import (actual_home_dir, claim_daemon_lock, daemon_is_running,
                       normalize_runtime_environment, open_ipc_connection,

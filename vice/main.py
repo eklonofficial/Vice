@@ -44,7 +44,7 @@ from .config import (
     load as load_config,
     save as save_config,
 )
-from .platform import IS_WINDOWS, data_dir, hide_child_consoles, open_path, runtime_dir
+from .oscompat import IS_WINDOWS, data_dir, hide_child_consoles, open_path, runtime_dir
 
 if IS_WINDOWS:
     from .hotkey_win import HotkeyListener, can_access_hotkeys, list_available_keys

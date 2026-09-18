@@ -20,7 +20,7 @@ else:
 
 import tomli_w
 
-from .platform import config_dir, pictures_dir, videos_dir
+from .oscompat import config_dir, pictures_dir, videos_dir
 from .runtime import actual_home_dir, resolve_path
 
 CONFIG_DIR = config_dir()

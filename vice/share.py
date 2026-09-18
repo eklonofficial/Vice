@@ -51,7 +51,7 @@ from .recorder import (IMAGE_EXTS, KEEP_ALL_STREAMS, _available_encoders,
                        _is_nvidia, filename_tag, list_display_options,
                        list_gsr_audio_sources, next_image_path,
                        slugify_clip_name)
-from .platform import (IS_WINDOWS, cache_dir, data_dir, detached_kwargs,
+from .oscompat import (IS_WINDOWS, cache_dir, data_dir, detached_kwargs,
                        no_window_kwargs, pictures_dir, reveal_path, open_path,
                        videos_dir)
 from .runtime import actual_home_dir, request_shutdown, resolve_path

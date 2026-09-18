@@ -28,7 +28,7 @@ from typing import Optional
 
 from importlib.resources import files as _pkg_files
 
-from .platform import data_dir
+from .oscompat import data_dir
 from .runtime import actual_home_dir
 
 log = logging.getLogger("vice.playlists")

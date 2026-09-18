@@ -23,7 +23,7 @@ from unittest import mock
 
 from aiohttp import WSMsgType, web
 
-from vice import platform as plat
+from vice import oscompat as plat
 from vice import recorder_win as rw
 from vice.config import Config
 from vice.editor import _escape_filter_path
@@ -61,7 +61,8 @@ class PlatformPathTests(unittest.TestCase):
 
 try:
     from vice import hotkey_win
-except (ImportError, ValueError):  # ctypes.wintypes is Windows-only on some Pythons
+except (ImportError, ValueError, AttributeError):
+    # Off Windows: ctypes has no WINFUNCTYPE, and on some Pythons no wintypes.
     hotkey_win = None
 
 

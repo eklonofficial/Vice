@@ -16,7 +16,7 @@ import struct
 import uuid
 from pathlib import Path
 
-from .platform import IS_WINDOWS
+from .oscompat import IS_WINDOWS
 
 log = logging.getLogger(__name__)
 

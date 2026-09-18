@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Optional
 
 from .config import Config
-from .platform import runtime_dir
+from .oscompat import runtime_dir
 from .recorder import (
     KEEP_ALL_STREAMS,
     Recorder,

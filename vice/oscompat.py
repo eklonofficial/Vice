@@ -19,7 +19,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-log = logging.getLogger("vice.platform")
+log = logging.getLogger("vice.oscompat")
 
 IS_WINDOWS = sys.platform == "win32"
 

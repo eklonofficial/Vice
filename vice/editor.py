@@ -30,7 +30,7 @@ from typing import Awaitable, Callable, Optional
 from importlib.resources import files as _pkg_files
 
 from .recorder import slugify_clip_name
-from .platform import IS_WINDOWS, data_dir
+from .oscompat import IS_WINDOWS, data_dir
 from .runtime import actual_home_dir
 
 log = logging.getLogger("vice.editor")

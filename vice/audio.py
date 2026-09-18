@@ -29,7 +29,7 @@ import wave
 from pathlib import Path
 from typing import Optional
 
-from .platform import IS_WINDOWS, runtime_dir
+from .oscompat import IS_WINDOWS, runtime_dir
 
 log = logging.getLogger("vice.audio")
 

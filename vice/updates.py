@@ -18,7 +18,7 @@ from typing import Optional
 from urllib.request import Request, urlopen
 
 from . import __version__
-from .platform import data_dir
+from .oscompat import data_dir
 from .runtime import actual_home_dir
 
 log = logging.getLogger("vice.updates")
