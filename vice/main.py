@@ -213,6 +213,14 @@ class ViceDaemon:
         return ""
 
     async def run(self) -> None:
+        stop_event = asyncio.Event()
+        if IS_WINDOWS:
+            # Registered before anything else starts: the IPC server and the
+            # UI's Quit accept "stop" as soon as they are up, and recorder
+            # start-up (encoder probes) can take seconds after that. A stop
+            # arriving then used to be acknowledged and dropped.
+            loop = asyncio.get_running_loop()
+            set_shutdown_handler(lambda: loop.call_soon_threadsafe(stop_event.set))
         runtime_dir().mkdir(parents=True, exist_ok=True)
         out_dir = resolve_path(self.cfg.output.directory)
 
@@ -392,17 +400,16 @@ class ViceDaemon:
             self._update_task = asyncio.create_task(self._update_check_soon())
 
         loop = asyncio.get_running_loop()
-        stop_event = asyncio.Event()
         if IS_WINDOWS:
             # The Proactor loop has no add_signal_handler. Ctrl+C and
             # Ctrl+Break arrive as plain signals; "stop" over IPC and the UI's
-            # quit button come through the shutdown handler instead of a
-            # self-SIGTERM, which Windows would turn into TerminateProcess.
+            # quit button come through the shutdown handler (registered at
+            # the top of run()) instead of a self-SIGTERM, which Windows
+            # would turn into TerminateProcess.
             def _from_signal(*_args) -> None:
                 loop.call_soon_threadsafe(stop_event.set)
             signal.signal(signal.SIGINT, _from_signal)
             signal.signal(signal.SIGBREAK, _from_signal)
-            set_shutdown_handler(lambda: loop.call_soon_threadsafe(stop_event.set))
         else:
             loop.add_signal_handler(signal.SIGTERM, stop_event.set)
             loop.add_signal_handler(signal.SIGINT,  stop_event.set)
@@ -2132,21 +2139,29 @@ def _uninstall_windows(yes: bool) -> None:
         set_autostart(None)
         click.echo("  Removed start at login.")
 
-    if CONFIG_DIR.exists():
-        if yes or click.confirm(f"Remove config directory {CONFIG_DIR}?", default=False):
-            shutil.rmtree(CONFIG_DIR, ignore_errors=True)
-            click.echo(f"  Removed {CONFIG_DIR}.")
-
+    # Read where the clips are before the config that says so is removed.
     try:
         cfg = load_config() if CONFIG_PATH.exists() else Config()
         clips_dir = resolve_path(cfg.output.directory)
     except Exception:
         clips_dir = Path(Config().output.directory)
-    if clips_dir.exists():
-        n = len(list(clips_dir.glob("*.mp4")))
-        if n > 0 and (yes or click.confirm(f"Delete {n} saved clip(s) in {clips_dir}?", default=False)):
-            shutil.rmtree(clips_dir, ignore_errors=True)
-            click.echo(f"  Deleted {n} clip(s).")
+
+    if CONFIG_DIR.exists():
+        if yes or click.confirm(f"Remove config directory {CONFIG_DIR}?", default=False):
+            shutil.rmtree(CONFIG_DIR, ignore_errors=True)
+            click.echo(f"  Removed {CONFIG_DIR}.")
+
+    # Clips are only ever deleted on an explicit answer, never by --yes (the
+    # app's Uninstall button uses it, and promises the clips stay), and only
+    # the clip files themselves: the folder may hold anything else too.
+    clip_files = ([p for p in clips_dir.iterdir() if p.suffix.lower() in (".mp4", ".mkv")]
+                  if clips_dir.is_dir() else [])
+    if clip_files and not yes and click.confirm(
+        f"Delete {len(clip_files)} saved clip(s) in {clips_dir}?", default=False
+    ):
+        for clip_file in clip_files:
+            clip_file.unlink(missing_ok=True)
+        click.echo(f"  Deleted {len(clip_files)} clip(s).")
 
     click.echo(
         "\nTo remove the program itself, shortcuts and its data folder, run:\n"

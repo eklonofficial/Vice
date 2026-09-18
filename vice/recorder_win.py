@@ -40,7 +40,6 @@ import shutil
 import time
 from collections import deque
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -78,9 +77,19 @@ SEGMENT_SECONDS = 2
 
 # ── ffmpeg ───────────────────────────────────────────────────────────────────
 
-@lru_cache(maxsize=1)
+_capabilities: Optional[dict] = None
+
+
 def ffmpeg_capabilities() -> dict:
-    """{"version", "ddagrab", "encoders"} for the ffmpeg on PATH, cached."""
+    """{"version", "ddagrab", "encoders"} for the ffmpeg on PATH.
+
+    Cached once an ffmpeg has been found. Not finding one is not cached, so
+    installing ffmpeg while Vice runs is picked up at the next restart of
+    the recorder instead of the next restart of Vice.
+    """
+    global _capabilities
+    if _capabilities is not None:
+        return _capabilities
     info = {"version": "", "ddagrab": False, "encoders": []}
     if not _has("ffmpeg"):
         return info
@@ -97,6 +106,8 @@ def ffmpeg_capabilities() -> dict:
         if len(parts) >= 2 and parts[0].startswith("V") and wanted.match(parts[1]):
             names.append(parts[1])
     info["encoders"] = names
+    if info["version"]:
+        _capabilities = info
     return info
 
 
@@ -171,7 +182,16 @@ class EncoderPlan:
 
 
 def _codec_family(rc) -> str:
-    family = _gsr_codec_for_encoder(rc.encoder, "8") or "h264"
+    """h264, hevc or av1 for the configured encoder.
+
+    Read from the name first: gpu-screen-recorder's mapping predates QSV and
+    AMF, so hevc_qsv or av1_amf came back as None and silently became H.264.
+    """
+    encoder = str(rc.encoder or "")
+    prefix = encoder.split("_", 1)[0]
+    if prefix in _SOFTWARE and "_" in encoder:
+        return prefix
+    family = _gsr_codec_for_encoder(encoder, "8") or "h264"
     return family if family in _SOFTWARE else "h264"
 
 
@@ -207,7 +227,6 @@ def encoder_plans(rc, out: dict, vendors: list[str], available: list[str]) -> li
         if _VENDOR_OF_SUFFIX.get(suffix) == adapter_vendor:
             add(zero_copy(suffix))
         add(downloaded(chosen))
-        family = chosen.split("_")[0] if not chosen.startswith("lib") else family
 
     for suffix, vendor in _VENDOR_OF_SUFFIX.items():
         if vendor == adapter_vendor:
@@ -247,6 +266,10 @@ def encoder_args(plan: EncoderPlan, rc, fps: int) -> list[str]:
     return ["-c:v", name, "-preset", "veryfast", "-crf", q, *gop]
 
 
+# Only encoders that worked are remembered. A probe can fail because the
+# capture could not start (lock screen, a UAC prompt, a display changing
+# mode) rather than because of the encoder, and caching that failure left the
+# watchdog unable to ever start recording again in that process.
 _probe_cache: dict[tuple, bool] = {}
 
 
@@ -284,7 +307,8 @@ async def _probe_plan(plan: EncoderPlan, out: dict) -> bool:
         log.info("Encoder %s works on %s", plan.label, out["device"])
     else:
         log.info("Encoder %s is unusable here: %s", plan.label, detail or "no reason given")
-    _probe_cache[key] = ok
+    if ok:
+        _probe_cache[key] = True
     return ok
 
 
@@ -494,18 +518,23 @@ class DDAGrabRecorder(Recorder):
 
     async def _choose_plan(self, out: dict) -> EncoderPlan:
         from .win32 import gpu_vendors
-        caps = ffmpeg_capabilities()
+        caps = await asyncio.to_thread(ffmpeg_capabilities)
         if not caps["version"]:
             raise RuntimeError("ffmpeg is not installed or not on PATH. Install it with: "
                                "winget install Gyan.FFmpeg")
         if not caps["ddagrab"]:
             raise RuntimeError(f"ffmpeg {caps['version']} has no ddagrab filter. "
                                "Vice needs ffmpeg 6.0 or newer.")
-        plans = encoder_plans(self.cfg.recording, out, gpu_vendors(), caps["encoders"])
+        vendors = await asyncio.to_thread(gpu_vendors)
+        plans = encoder_plans(self.cfg.recording, out, vendors, caps["encoders"])
         for i, plan in enumerate(plans):
             if await _probe_plan(plan, out):
-                self.cpu_fallback = not plan.hardware and any(p.hardware for p in plans)
                 wanted = self.cfg.recording.encoder
+                # Only a fallback when hardware was wanted; libx264 chosen on
+                # purpose must not raise the "GPU encoder would not open" banner.
+                wanted_hardware = wanted == "auto" or not str(wanted).startswith("lib")
+                self.cpu_fallback = (not plan.hardware and wanted_hardware
+                                     and any(p.hardware for p in plans))
                 self.codec_fallback = (wanted not in ("auto", plan.encoder)
                                        and plan.hardware and i > 0)
                 return plan
@@ -529,7 +558,9 @@ class DDAGrabRecorder(Recorder):
         rc = self.cfg.recording
         if _color_depth(rc) == "10":
             log.info("10-bit recording is not available on Windows yet; recording 8-bit")
-        out = resolve_output(rc, self.display_override)
+        # DXGI enumeration and opening audio devices both block, the latter
+        # for up to seconds; neither may stall the daemon's event loop.
+        out = await asyncio.to_thread(resolve_output, rc, self.display_override)
         if out is None:
             self._running = False
             raise RuntimeError("No display found to capture.")
@@ -546,7 +577,7 @@ class DDAGrabRecorder(Recorder):
         tracks = audio_tracks(rc)
         epoch = time.time()
         try:
-            self._connections = self._open_audio(tracks, epoch)
+            self._connections = await asyncio.to_thread(self._open_audio, tracks, epoch)
         except Exception as exc:
             self._running = False
             self._close_audio()
@@ -701,7 +732,7 @@ class DDAGrabRecorder(Recorder):
             log.warning("Session already active")
             return None
         rc = self.cfg.recording
-        out = self._output or resolve_output(rc, self.display_override)
+        out = self._output or await asyncio.to_thread(resolve_output, rc, self.display_override)
         if out is None:
             log.error("No display found to record the session from")
             return None
@@ -716,7 +747,7 @@ class DDAGrabRecorder(Recorder):
         tracks = audio_tracks(rc, split_for_volume=False)
         epoch = time.time()
         try:
-            conns = self._open_audio(tracks, epoch)
+            conns = await asyncio.to_thread(self._open_audio, tracks, epoch)
         except Exception as exc:
             log.error("Cannot open audio for the session: %s", exc)
             return None

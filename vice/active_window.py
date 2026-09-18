@@ -280,13 +280,8 @@ def _candidate_windows_win32() -> list[ActiveWindow]:
 def _pointer_display_win32() -> Optional[str]:
     """The DXGI device name (DISPLAY1 and so on) of the monitor under the pointer,
     which is the id the Windows capture backend takes."""
-    from .win32 import cursor_pos, dxgi_outputs
-    point = cursor_pos()
-    if point is None:
-        return None
-    rects = [{"name": o["device"], "x": o["x"], "y": o["y"], "w": o["width"], "h": o["height"]}
-             for o in dxgi_outputs()]
-    return _monitor_at(point, rects)
+    from .win32 import monitor_device_at_cursor
+    return monitor_device_at_cursor()
 
 
 # ─── pointer monitor ────────────────────────────────────────────────────────

@@ -101,6 +101,71 @@ class WindowsKeyMappingTests(unittest.TestCase):
         self.assertEqual(missing, [], "keys the UI can bind but Windows never reports")
 
 
+@unittest.skipUnless(IS_WINDOWS and hotkey_win is not None, "Windows hook")
+class HookStateTests(unittest.TestCase):
+    """Key-ups on the lock screen or a UAC prompt never reach the hook."""
+
+    def setUp(self) -> None:
+        self.events: list[tuple[str, int]] = []
+        self.listener = hotkey_win.HotkeyListener()
+        self.listener._running = True
+        loop = mock.Mock()
+        loop.call_soon_threadsafe = lambda fn, name, state: self.events.append((name, state))
+        self.listener._loop = loop
+
+    def down(self, vk: int, at: float) -> None:
+        with mock.patch("vice.hotkey_win.time.monotonic", return_value=at):
+            self.listener._on_raw(hotkey_win.WM_KEYDOWN, vk, 0, 0)
+
+    def test_auto_repeat_is_a_hold(self) -> None:
+        self.down(0x78, 10.0)
+        self.down(0x78, 10.5)
+        self.assertEqual([s for _, s in self.events], [hotkey_win.KEY_DOWN, hotkey_win.KEY_HOLD])
+
+    def test_a_press_after_a_lost_key_up_fires_again(self) -> None:
+        self.down(0x78, 10.0)          # F9 down, then Win+L: its key-up is lost
+        self.down(0x78, 300.0)         # back at the desktop, F9 pressed again
+        self.assertEqual([s for _, s in self.events], [hotkey_win.KEY_DOWN, hotkey_win.KEY_DOWN])
+
+    def test_combos_use_the_modifiers_windows_says_are_down(self) -> None:
+        self.listener._held_mods = {"KEY_LEFTMETA"}  # stuck from a lost key-up
+        with mock.patch.object(hotkey_win, "_modifiers_down", return_value=set()):
+            self.assertEqual(self.listener._combo_for("KEY_F9"), "KEY_F9")
+        with mock.patch.object(hotkey_win, "_modifiers_down", return_value={"KEY_LEFTALT"}):
+            self.assertEqual(self.listener._combo_for("KEY_F9"), "KEY_LEFTALT+KEY_F9")
+
+
+@unittest.skipUnless(IS_WINDOWS, "WASAPI capture thread")
+class AudioSourceDeathTests(unittest.TestCase):
+    def test_a_device_that_disappears_closes_its_connections(self) -> None:
+        # Left open, ffmpeg waited forever on a silent input and the recorder
+        # still looked healthy to the watchdog.
+        from vice import win_audio
+
+        class _Gone:
+            name = "headset"
+
+            def recorder(self, **_kw):
+                return self
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def record(self, numframes):
+                raise RuntimeError("device invalidated")
+
+        with mock.patch.object(win_audio, "_open_device", return_value=(_Gone(), False)):
+            src = win_audio.AudioSource("default_input")
+            conn = src.connect()
+            src.start()
+            src._thread.join(5)
+        self.assertTrue(conn._closed.is_set())
+        self.assertTrue(src.error)
+
+
 @unittest.skipUnless(IS_WINDOWS and LIVE, "injects real key presses; set VICE_LIVE_TESTS=1")
 class WindowsHookLiveTests(unittest.IsolatedAsyncioTestCase):
     async def test_single_combo_and_double_tap(self) -> None:
@@ -263,10 +328,65 @@ class EncoderPlanTests(unittest.TestCase):
         self.assertEqual(plans[0], ("hevc_nvenc", False))
         self.assertIn(("hevc_qsv", True), plans)
 
+    def test_qsv_and_amf_choices_keep_their_codec(self) -> None:
+        # _gsr_codec_for_encoder predates QSV/AMF; hevc_qsv used to probe as
+        # h264_qsv first, win, and silently record H.264.
+        for chosen in ("hevc_qsv", "av1_qsv"):
+            plans = self.plans(OUT_INTEL, ["intel"], encoder=chosen)
+            self.assertEqual(plans[0], (chosen, True))
+            self.assertFalse([p for p in plans if p[0] == "h264_qsv"])
+        amd = dict(OUT_INTEL, vendor="amd")
+        self.assertEqual(self.plans(amd, ["amd"], encoder="hevc_amf")[0], ("hevc_amf", True))
+
     def test_hevc_setting_asks_for_hevc_from_every_vendor(self) -> None:
         plans = self.plans(OUT_INTEL, ["intel"], encoder="libx265")
         self.assertEqual(plans[0], ("libx265", False))
         self.assertIn(("hevc_qsv", True), plans)
+
+
+class PlanChoiceTests(unittest.IsolatedAsyncioTestCase):
+    async def choose(self, encoder: str, works: set[str]):
+        cfg = Config()
+        cfg.recording.encoder = encoder
+        rec = rw.DDAGrabRecorder(cfg)
+        caps = {"version": "9", "ddagrab": True, "encoders": ALL_ENCODERS}
+
+        async def probe(plan, out):
+            return plan.encoder in works
+
+        import types
+        fake_win32 = types.SimpleNamespace(gpu_vendors=lambda: ["intel", "nvidia"])
+        with mock.patch.object(rw, "ffmpeg_capabilities", return_value=caps), \
+             mock.patch.dict(sys.modules, {"vice.win32": fake_win32}), \
+             mock.patch.object(rw, "_probe_plan", side_effect=probe):
+            plan = await rec._choose_plan(OUT_INTEL)
+        return rec, plan
+
+    async def test_a_chosen_software_encoder_is_not_a_cpu_fallback(self) -> None:
+        rec, plan = await self.choose("libx264", {"libx264", "h264_qsv"})
+        self.assertEqual(plan.encoder, "libx264")
+        self.assertFalse(rec.cpu_fallback)
+
+    async def test_software_after_every_gpu_refused_is_a_cpu_fallback(self) -> None:
+        rec, plan = await self.choose("auto", {"libx264"})
+        self.assertEqual(plan.encoder, "libx264")
+        self.assertTrue(rec.cpu_fallback)
+
+    async def test_a_failed_probe_is_tried_again_later(self) -> None:
+        # A probe run while the screen is locked fails because of the capture,
+        # not the encoder; caching that left recording dead until a restart.
+        plan = rw.EncoderPlan("h264_qsv", True)
+
+        class _Proc:
+            returncode = 1
+
+            async def communicate(self):
+                return b"", b"[ddagrab] Failed to acquire output"
+
+        rw._probe_cache.clear()
+        with mock.patch("asyncio.create_subprocess_exec", mock.AsyncMock(return_value=_Proc())):
+            self.assertFalse(await rw._probe_plan(plan, OUT_INTEL))
+        self.assertNotIn((plan, 0, 0), rw._probe_cache)
 
 
 class CaptureCommandTests(unittest.TestCase):
@@ -675,6 +795,13 @@ class InstallScriptTests(unittest.TestCase):
         # And --flags go through as an array: "--" is PowerShell's own
         # end-of-parameters marker when passed loose to a function.
         self.assertNotRegex(self.script, r"Invoke-Native \S+ --")
+
+    def test_path_entries_stay_an_array_with_a_single_entry(self) -> None:
+        # With one user PATH entry the pipeline yields a string, and string +
+        # string glued the new folder onto it with no separator.
+        import re
+        self.assertRegex(self.script, r"\$parts = @\(\$user\.Split\(';'\)")
+        self.assertIsNone(re.search(r"\$parts = \$user\.Split", self.script))
 
     def test_the_vice_command_runs_the_installed_package(self) -> None:
         # python -m would put the current directory first on sys.path.

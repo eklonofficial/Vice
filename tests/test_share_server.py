@@ -1048,6 +1048,11 @@ class AutoPlaylistToggleTests(unittest.IsolatedAsyncioTestCase):
         # memory and leak into the assertions.
         server.playlists.path = Path(tmp) / "playlists.json"
         server.playlists.load()
+        # add_clip also starts probing and thumbnailing the clip in the
+        # background. Nothing here needs it, and on Python 3.12 cancelling a
+        # task that is waiting on a live ffprobe/ffmpeg at teardown hangs the
+        # whole run when ffmpeg is installed.
+        server._broadcast_clip = mock.AsyncMock()
         return server
 
     async def test_auto_playlist_created_when_enabled(self) -> None:

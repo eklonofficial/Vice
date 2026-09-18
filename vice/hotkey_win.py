@@ -25,6 +25,7 @@ import asyncio
 import ctypes
 import logging
 import threading
+import time
 from ctypes import wintypes
 from typing import Optional
 
@@ -132,6 +133,10 @@ HC_ACTION = 0
 # could do that, so the hook is quietly reinstalled this often.
 REHOOK_INTERVAL_MS = 5 * 60 * 1000
 
+# Longest gap between a key's auto-repeat events (Windows' slowest keyboard
+# repeat delay is one second), plus margin.
+REPEAT_GAP = 1.2
+
 
 class KBDLLHOOKSTRUCT(ctypes.Structure):
     _fields_ = [
@@ -178,7 +183,7 @@ class HotkeyListener(HotkeyDispatcher):
         self._hook_ok = False
         # Keys currently down, so the hook's auto-repeat keydowns are
         # reported as holds instead of fresh presses.
-        self._down: set[str] = set()
+        self._down: dict[str, float] = {}
 
     async def start(self) -> None:
         self._running = True
@@ -262,10 +267,17 @@ class HotkeyListener(HotkeyDispatcher):
         if not name:
             return
         if message in (WM_KEYDOWN, WM_SYSKEYDOWN):
-            state = KEY_HOLD if name in self._down else KEY_DOWN
-            self._down.add(name)
+            now = time.monotonic()
+            last = self._down.get(name)
+            # Auto-repeat follows the previous event within a second at most
+            # (the slowest keyboard repeat delay). Anything later is a new
+            # press whose key-up was never seen: key-ups on the lock screen or
+            # a UAC prompt do not reach the hook, and without this F9 held at
+            # Win+L read as a repeat, forever, and never fired again.
+            state = KEY_HOLD if last is not None and now - last < REPEAT_GAP else KEY_DOWN
+            self._down[name] = now
         elif message in (WM_KEYUP, WM_SYSKEYUP):
-            self._down.discard(name)
+            self._down.pop(name, None)
             state = KEY_UP
         else:
             return
@@ -273,6 +285,29 @@ class HotkeyListener(HotkeyDispatcher):
 
     def _dispatch(self, name: str, state: int) -> None:
         asyncio.ensure_future(self._key_event(name, state))
+
+    def _combo_for(self, key_name: str) -> str:
+        # Held modifiers are re-read from Windows at each press rather than
+        # trusted from the hook's own bookkeeping: releasing Win after Win+L,
+        # or Alt over an elevated window, never reaches the hook, and a
+        # modifier stuck "down" turned F9 into Win+F9 until it was pressed
+        # again.
+        self._held_mods = _modifiers_down()
+        return super()._combo_for(key_name)
+
+
+# Canonical modifier -> its left and right virtual keys.
+_MODIFIER_VKS = {
+    "KEY_LEFTCTRL": (0xA2, 0xA3),
+    "KEY_LEFTALT": (0xA4, 0xA5),
+    "KEY_LEFTSHIFT": (0xA0, 0xA1),
+    "KEY_LEFTMETA": (0x5B, 0x5C),
+}
+
+
+def _modifiers_down() -> set[str]:
+    get = ctypes.windll.user32.GetAsyncKeyState
+    return {name for name, vks in _MODIFIER_VKS.items() if any(get(vk) & 0x8000 for vk in vks)}
 
 
 def can_access_hotkeys() -> bool:

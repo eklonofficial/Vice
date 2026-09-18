@@ -233,8 +233,24 @@ def message_box(title: str, text: str) -> None:
 SW_RESTORE = 9
 
 
+def _find_own_window(title: str):
+    """The top-level window with this exact title that belongs to a Python
+    process. FindWindowW alone matched any window called "Vice", such as an
+    Explorer window open on the Videos\\Vice clips folder."""
+    import psutil
+    for win in visible_windows(256):
+        if win["title"] != title:
+            continue
+        try:
+            if psutil.Process(win["pid"]).name().lower().startswith("python"):
+                return win["hwnd"]
+        except psutil.Error:
+            continue
+    return None
+
+
 def raise_window(title: str) -> bool:
-    hwnd = user32.FindWindowW(None, title)
+    hwnd = _find_own_window(title)
     if not hwnd:
         return False
     if user32.IsIconic(hwnd):
@@ -312,6 +328,40 @@ def enable_dpi_awareness() -> None:
         log.debug("Could not enable DPI awareness: %s", exc)
 
 
+class _MONITORINFOEXW(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("rcMonitor", wintypes.RECT),
+        ("rcWork", wintypes.RECT),
+        ("dwFlags", wintypes.DWORD),
+        ("szDevice", wintypes.WCHAR * 32),
+    ]
+
+
+user32.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.POINTER(_MONITORINFOEXW)]
+user32.GetMonitorInfoW.restype = wintypes.BOOL
+_MONITOR_DEFAULTTONULL = 0
+
+
+def monitor_device_at_cursor() -> Optional[str]:
+    """The device name (\\\\.\\DISPLAY1) of the monitor under the pointer.
+
+    Cheap enough to call every couple of seconds, unlike a DXGI walk, and it
+    names monitors the same way DXGI does.
+    """
+    point = cursor_pos()
+    if point is None:
+        return None
+    hmon = user32.MonitorFromPoint(wintypes.POINT(*point), _MONITOR_DEFAULTTONULL)
+    if not hmon:
+        return None
+    info = _MONITORINFOEXW()
+    info.cbSize = ctypes.sizeof(info)
+    if not user32.GetMonitorInfoW(hmon, ctypes.byref(info)):
+        return None
+    return info.szDevice or None
+
+
 def cursor_pos() -> Optional[tuple[int, int]]:
     enable_dpi_awareness()
     point = wintypes.POINT()
@@ -387,7 +437,18 @@ def _release(obj: ctypes.c_void_p) -> None:
 VENDOR_NAMES = {0x10DE: "nvidia", 0x8086: "intel", 0x1002: "amd", 0x1022: "amd"}
 
 
+def _dxgi_walk() -> tuple[list[str], list[dict]]:
+    """(vendor of every hardware adapter, desktop-attached outputs)."""
+    vendors: list[str] = []
+    outputs = _dxgi_outputs(vendors)
+    return vendors, outputs
+
+
 def dxgi_outputs() -> list[dict]:
+    return _dxgi_walk()[1]
+
+
+def _dxgi_outputs(vendors: list[str]) -> list[dict]:
     """Every desktop-attached output, as ddagrab would address it.
 
     Each entry: adapter (index), output (index within the adapter), vendor
@@ -426,6 +487,7 @@ def dxgi_outputs() -> list[dict]:
                 if desc.Flags & _DXGI_ADAPTER_FLAG_SOFTWARE:
                     a += 1
                     continue
+                vendors.append(VENDOR_NAMES.get(desc.VendorId, "other"))
                 o = 0
                 while True:
                     output = ctypes.c_void_p()
@@ -465,11 +527,16 @@ def dxgi_outputs() -> list[dict]:
 
 
 def gpu_vendors() -> list[str]:
-    """Vendors of every hardware adapter, in DXGI order, for encoder choice."""
+    """Vendors of every hardware adapter, in DXGI order, for encoder choice.
+
+    Every adapter, not only those driving a monitor: on a laptop using only
+    its built-in panel the NVIDIA GPU has no output at all, and NVENC on it
+    is still the best encoder there is.
+    """
     seen: list[str] = []
-    for out in dxgi_outputs():
-        if out["vendor"] not in seen:
-            seen.append(out["vendor"])
+    for vendor in _dxgi_walk()[0]:
+        if vendor not in seen:
+            seen.append(vendor)
     return seen
 
 

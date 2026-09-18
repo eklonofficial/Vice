@@ -327,6 +327,15 @@ class AudioSource:
     def _run(self) -> None:
         with _ComThread():
             self._capture()
+        if not self._stop.is_set():
+            # Capture ended on its own: the device went away (a headset
+            # unplugged, an output disabled). Closing the connections is what
+            # tells anyone the source died; left open, ffmpeg just waited on
+            # a silent input, stopped writing, and still looked healthy.
+            with self._lock:
+                conns, self._connections = self._connections, []
+            for conn in conns:
+                conn.close()
 
     def _capture(self) -> None:
         try:

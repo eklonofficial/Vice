@@ -129,7 +129,10 @@ function Remove-FromUserPath([string]$Dir) {
 function Add-ToUserPath([string]$Dir) {
     $user = [Environment]::GetEnvironmentVariable('Path', 'User')
     $parts = @()
-    if ($user) { $parts = $user.Split(';') | Where-Object { $_ } }
+    # @() matters: with a single entry the pipeline yields a plain string, and
+    # string + string glued the new folder onto it with no separator, which
+    # broke the whole user PATH on a fresh Windows install.
+    if ($user) { $parts = @($user.Split(';') | Where-Object { $_ }) }
     if ($parts | Where-Object { $_.TrimEnd('\') -eq $Dir.TrimEnd('\') }) { return }
     [Environment]::SetEnvironmentVariable('Path', (($parts + $Dir) -join ';'), 'User')
     $env:Path = "$env:Path;$Dir"
@@ -143,12 +146,22 @@ if ($Uninstall) {
         Invoke-Native $VenvPython @('-m', 'vice.main', 'stop') | Out-Null
         Invoke-Native $VenvPython @('-m', 'vice.main', 'autostart', '--disable') | Out-Null
     }
+    # The window and anything else still running from the venv hold its files
+    # open, and Windows will not delete an open file.
+    $venvFull = [IO.Path]::GetFullPath($VenvDir)
+    Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($venvFull, [StringComparison]::OrdinalIgnoreCase) } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     if (Test-Path $Shortcut) { Remove-Item $Shortcut -Force; Info "Removed $Shortcut" }
     Remove-FromUserPath $BinDir
-    # The daemon can take a moment to let go of its files.
-    Start-Sleep -Seconds 2
     foreach ($dir in @($VenvDir, $BinDir)) {
-        if (Test-Path $dir) { Remove-Item $dir -Recurse -Force; Info "Removed $dir" }
+        # The daemon can take a few seconds to let go of its files after it
+        # has been asked to stop, so retry instead of aborting half-way.
+        for ($try = 0; (Test-Path $dir) -and $try -lt 10; $try++) {
+            Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+            if (Test-Path $dir) { Start-Sleep -Seconds 1 }
+        }
+        if (Test-Path $dir) { Warn "Could not remove $dir; delete it once Vice has exited." }
+        else { Info "Removed $dir" }
     }
     if ((Test-Path $InstallDir) -and (Confirm-Step "Also remove logs, playlists and other data in $InstallDir?" $false)) {
         Remove-Item $InstallDir -Recurse -Force
