@@ -30,9 +30,11 @@ const work = mkdtempSync(join(tmpdir(), 'vice-accent-parity-'));
 try {
   // The config lives in the repo rather than in the temp dir: a config outside
   // the project cannot resolve vite itself. Only the build output is temporary.
+  // vite's own entry run with this node, not `npx`: on Windows npx is a .cmd
+  // shim, which execFileSync refuses to start without a shell.
   execFileSync(
-    'npx',
-    ['vite', 'build', '--config', join(here, 'accent-parity', 'vite.config.mjs'), '--logLevel', 'error'],
+    process.execPath,
+    [join(repo, 'node_modules', 'vite', 'bin', 'vite.js'), 'build', '--config', join(here, 'accent-parity', 'vite.config.mjs'), '--logLevel', 'error'],
     {cwd: repo, stdio: ['ignore', 'ignore', 'inherit'], env: {...process.env, VICE_PARITY_OUT: work}},
   );
 
@@ -41,7 +43,8 @@ try {
 
   // What the generator actually wrote, parsed rather than imported so this
   // reads the shipped file exactly as the Python tests do.
-  const accents = readFileSync(join(repo, 'ui-src', 'theme', 'accents.ts'), 'utf8');
+  // CRLF when git checked it out with autocrlf (Windows); the patterns want LF.
+  const accents = readFileSync(join(repo, 'ui-src', 'theme', 'accents.ts'), 'utf8').replace(/\r\n/g, '\n');
   const shipped = {};
   for (const m of accents.matchAll(/^ {2}(\w+): \{\n([\s\S]*?)\n {2}\},$/gm)) {
     shipped[m[1]] = Object.fromEntries(
