@@ -22,7 +22,6 @@ without a terminal (e.g. from the app launcher).
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import json
 import logging
 import os
@@ -38,20 +37,23 @@ from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 from . import __version__
+from .platform import (IS_WINDOWS, data_dir, detached_kwargs, hide_child_consoles,
+                       open_path, runtime_dir, set_clipboard_text)
 from .runtime import (actual_home_dir, claim_daemon_lock, daemon_is_running,
-                      normalize_runtime_environment, systemd_unit_loaded)
+                      normalize_runtime_environment, open_ipc_connection,
+                      systemd_unit_loaded, try_lock_file)
 
-SOCKET_FILE = Path("/tmp/vice/vice.sock")
-PID_FILE    = Path("/tmp/vice/vice.pid")
-APP_LOCK_FILE = Path("/tmp/vice/vice-app.pid")
+SOCKET_FILE = runtime_dir() / "vice.sock"
+PID_FILE    = runtime_dir() / "vice.pid"
+APP_LOCK_FILE = runtime_dir() / "vice-app.pid"
 WINDOW_TITLE = "Vice"
-LOG_FILE = actual_home_dir() / ".local" / "share" / "vice" / "vice-app.log"
-DEBUG_LOG_FILE = actual_home_dir() / ".local" / "share" / "vice" / "vice-debug.log"
-DAEMON_LOG_FILE = actual_home_dir() / ".local" / "share" / "vice" / "vice.log"
-DAEMON_STDERR_LOG_FILE = actual_home_dir() / ".local" / "share" / "vice" / "vice-daemon-stderr.log"
+LOG_FILE = data_dir() / "vice-app.log"
+DEBUG_LOG_FILE = data_dir() / "vice-debug.log"
+DAEMON_LOG_FILE = data_dir() / "vice.log"
+DAEMON_STDERR_LOG_FILE = data_dir() / "vice-daemon-stderr.log"
 # vice-app's own stderr (Qt/Chromium messages), captured by the compositor
 # watcher so launcher-context failures are diagnosable. Truncated per launch.
-APP_STDERR_LOG_FILE = actual_home_dir() / ".local" / "share" / "vice" / "vice-app-stderr.log"
+APP_STDERR_LOG_FILE = data_dir() / "vice-app-stderr.log"
 
 DEBUG_MODE = False  # toggled by main() when --debug is on the command line.
 
@@ -67,12 +69,12 @@ def _setup_logging(debug: bool = False) -> None:
     """
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     handlers: list[logging.Handler] = [
-        logging.FileHandler(LOG_FILE),
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
     ]
-    if sys.stdout.isatty() or debug:
+    if (sys.stdout is not None and sys.stdout.isatty()) or (debug and sys.stderr is not None):
         handlers.append(logging.StreamHandler(sys.stderr))
     if debug:
-        dbg = logging.FileHandler(DEBUG_LOG_FILE, mode="w")  # truncate each run
+        dbg = logging.FileHandler(DEBUG_LOG_FILE, mode="w", encoding="utf-8")  # truncate each run
         dbg.setLevel(logging.DEBUG)
         dbg.setFormatter(logging.Formatter(
             "%(asctime)s [%(threadName)s] %(levelname)s %(name)s "
@@ -132,7 +134,7 @@ def _daemon_status(timeout: float = 1.0) -> dict | None:
         writer = None
         try:
             reader, writer = await asyncio.wait_for(
-                asyncio.open_unix_connection(str(SOCKET_FILE)),
+                open_ipc_connection(SOCKET_FILE),
                 timeout=timeout,
             )
             writer.write(b"status\n")
@@ -213,21 +215,31 @@ def _start_daemon() -> None:
     if _start_daemon_via_systemd():
         return
 
-    cmd = _vice_cmd() + ["start", "--no-open-ui"]
+    if IS_WINDOWS:
+        # pythonw, so the daemon never owns a console window of its own.
+        from .win32 import pythonw_executable
+        cmd = [pythonw_executable(), "-m", "vice.main", "start", "--no-open-ui"]
+    else:
+        cmd = _vice_cmd() + ["start", "--no-open-ui"]
     log.info("Starting daemon: %s", " ".join(cmd))
     # Route the daemon's stdout/stderr to a file so import-time crashes (which
     # happen before the daemon's logging is initialised, leaving vice.log empty)
     # are still recoverable for the launch error dialog. Truncated each launch
     # so the file always reflects the most recent attempt.
     DAEMON_STDERR_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    stderr_fd = open(DAEMON_STDERR_LOG_FILE, "w")
+    stderr_fd = open(DAEMON_STDERR_LOG_FILE, "w", encoding="utf-8")
+    env = os.environ.copy()
+    if IS_WINDOWS:
+        # Its output goes to a file, which would otherwise be written in the
+        # ANSI code page and choke on the first non-Latin clip name.
+        env["PYTHONIOENCODING"] = "utf-8"
     try:
         subprocess.Popen(
             cmd,
-            env=os.environ.copy(),
+            env=env,
             stdout=stderr_fd,
             stderr=stderr_fd,
-            start_new_session=True,   # detach from our process group
+            **detached_kwargs(),   # detach from our process group
         )
     except Exception as exc:
         log.error("Failed to start daemon: %s", exc)
@@ -243,7 +255,7 @@ def _stop_daemon() -> None:
     try:
         async def _send():
             reader, writer = await asyncio.wait_for(
-                asyncio.open_unix_connection(str(SOCKET_FILE)), timeout=2.0,
+                open_ipc_connection(SOCKET_FILE), timeout=2.0,
             )
             try:
                 writer.write(b"stop\n")
@@ -524,10 +536,9 @@ def _claim_app_lock() -> bool:
         log.warning("Could not open the single-window lock %s: %s", APP_LOCK_FILE, exc)
         return True
     try:
-        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        handle.close()
-        return False
+        if not try_lock_file(handle):
+            handle.close()
+            return False
     except Exception as exc:
         log.warning("Could not take the single-window lock: %s", exc)
         handle.close()
@@ -545,6 +556,9 @@ def _claim_app_lock() -> bool:
 
 def _raise_existing_window() -> bool:
     """Bring the window that already exists to the front."""
+    if IS_WINDOWS:
+        from .win32 import raise_window
+        return raise_window(WINDOW_TITLE)
     if not shutil.which("wmctrl"):
         log.info("wmctrl is not installed, so the existing Vice window cannot be raised")
         return False
@@ -566,6 +580,7 @@ def main() -> None:
     debug = "--debug" in sys.argv[1:]
     DEBUG_MODE = debug
 
+    hide_child_consoles()
     normalize_runtime_environment()
     _setup_logging(debug=debug)
     signal.signal(signal.SIGTERM, _handle_app_terminate)
@@ -620,25 +635,24 @@ def main() -> None:
         log.info("Window closed")
     except ImportError:
         log.warning("pywebview not installed, falling back to browser")
-        subprocess.Popen(
-            ["xdg-open", server_url],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        open_path(server_url)
     except Exception as exc:
         log.error("pywebview crashed: %s", exc, exc_info=True)
         # Fall back to browser so the user isn't left with nothing
         log.warning("Falling back to browser")
-        subprocess.Popen(
-            ["xdg-open", server_url],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        open_path(server_url)
 
 
 def _show_error(message: str) -> None:
     """Show a visible error: a GTK dialog if possible, otherwise print."""
     log.error("UI error: %s", message)
+    if IS_WINDOWS:
+        try:
+            from .win32 import message_box
+            message_box("Vice Error", message)
+        except Exception as exc:
+            log.debug("Could not show the error dialog: %s", exc)
+        return
     try:
         import gi
         gi.require_version("Gtk", "3.0")
@@ -658,7 +672,8 @@ def _show_error(message: str) -> None:
 # ── pywebview window ──────────────────────────────────────────────────────────
 
 def _is_nvidia() -> bool:
-    return Path("/proc/driver/nvidia/version").exists()
+    # Only feeds the Qt/Chromium workarounds, none of which apply on Windows.
+    return not IS_WINDOWS and Path("/proc/driver/nvidia/version").exists()
 
 
 # Driver series from which Chromium's Vulkan path is dependable. Below this,
@@ -755,7 +770,7 @@ def _prepare_webview_environment() -> None:
     os.environ.setdefault("QT_LOGGING_TO_CONSOLE", "1")
 
     # Leftover from v1.2.2, which pinned software compositing here.
-    (actual_home_dir() / ".local" / "share" / "vice" / "webview-state.json").unlink(missing_ok=True)
+    (data_dir() / "webview-state.json").unlink(missing_ok=True)
 
     if _is_nvidia() and os.environ.get("WAYLAND_DISPLAY"):
         platform = os.environ.get("VICE_WEBVIEW_PLATFORM", "xcb")
@@ -909,7 +924,10 @@ def _close_window_after_bridge(win) -> None:
 
 
 def _run_webview(url: str) -> None:
-    _prepare_webview_environment()
+    if not IS_WINDOWS:
+        # Every flag in here is for QtWebEngine and WebKitGTK on Linux.
+        # Windows uses WebView2, which needs none of them.
+        _prepare_webview_environment()
     import webview  # type: ignore[import]
 
     class _API:
@@ -934,6 +952,9 @@ def _run_webview(url: str) -> None:
 
         def open_url(self, url: str) -> None:
             """Open a URL in the system's default browser via xdg-open."""
+            if IS_WINDOWS:
+                open_path(url)
+                return
             import subprocess as _sp
             try:
                 _sp.Popen(
@@ -965,6 +986,8 @@ def _run_webview(url: str) -> None:
             payload = (text or "").encode("utf-8")
             preview = (text or "")[:80].replace("\n", "\\n")
             log.debug("copy_to_clipboard: len=%d preview=%r", len(text or ""), preview)
+            if IS_WINDOWS:
+                return set_clipboard_text(text or "")
             attempts = (["wl-copy"],
                         ["xclip", "-selection", "clipboard"],
                         ["xsel", "--clipboard", "--input"])
@@ -1026,6 +1049,17 @@ def _run_webview(url: str) -> None:
         os.environ.setdefault("WEBKIT_DISABLE_SANDBOX", "1")
         os.environ.setdefault("WEBKIT_DISABLE_DMABUF_RENDERER", "1")
         os.environ.setdefault("GDK_BACKEND", "x11")
+
+    if IS_WINDOWS:
+        # WebView2 (Edge Chromium) ships with Windows 11 and every current
+        # Windows 10. pywebview falls back on its own if it is missing.
+        try:
+            webview.start(gui="edgechromium", debug=False, private_mode=False)
+        except Exception:
+            log.exception("WebView2 failed, letting pywebview choose a backend")
+            webview.start(debug=False, private_mode=False)
+        log.info("Window closed")
+        return
 
     try:
         import PyQt6.QtWebEngineWidgets  # noqa: F401, probe

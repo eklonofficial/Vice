@@ -20,9 +20,10 @@ else:
 
 import tomli_w
 
+from .platform import config_dir, pictures_dir, videos_dir
 from .runtime import actual_home_dir, resolve_path
 
-CONFIG_DIR = actual_home_dir() / ".config" / "vice"
+CONFIG_DIR = config_dir()
 CONFIG_PATH = CONFIG_DIR / "config.toml"
 CLIP_DURATION_MIN = 5
 CLIP_DURATION_MAX = 1800
@@ -179,10 +180,10 @@ class HotkeyConfig:
 
 @dataclass
 class OutputConfig:
-    directory: str = str(actual_home_dir() / "Videos" / "Vice")
+    directory: str = str(videos_dir() / "Vice")
     # Screenshots live apart from clips, because a picture viewer indexing a
     # folder of 4 GB videos is nobody's idea of a good time.
-    image_directory: str = str(actual_home_dir() / "Pictures" / "Vice")
+    image_directory: str = str(pictures_dir() / "Vice")
     filename_format: str = "vice_%Y%m%d_%H%M%S.mp4"
     # Append the detected game to clip filenames (Vice_Clip_4_Overwatch-2.mp4).
     # Uses the same curated games list as Discord Rich Presence; clips save

@@ -51,7 +51,10 @@ from .recorder import (IMAGE_EXTS, KEEP_ALL_STREAMS, _available_encoders,
                        _is_nvidia, filename_tag, list_display_options,
                        list_gsr_audio_sources, next_image_path,
                        slugify_clip_name)
-from .runtime import actual_home_dir, resolve_path
+from .platform import (IS_WINDOWS, cache_dir, data_dir, detached_kwargs,
+                       no_window_kwargs, pictures_dir, reveal_path, open_path,
+                       videos_dir)
+from .runtime import actual_home_dir, request_shutdown, resolve_path
 
 log = logging.getLogger("vice.share")
 UI_VERSION_TOKEN = "__VICE_VERSION__"
@@ -156,12 +159,12 @@ def _resolve_ui_asset(kind: str, name: str) -> Path | None:
     return None
 
 # Thumbnails go in the cache dir, separate from the clip files.
-THUMB_DIR      = actual_home_dir() / ".cache" / "vice" / "thumbs"
+THUMB_DIR      = cache_dir() / "thumbs"
 # H.264 preview copies of clips the native WebEngine can't decode (H.265).
-PROXY_DIR      = actual_home_dir() / ".cache" / "vice" / "proxies"
+PROXY_DIR      = cache_dir() / "proxies"
 # Scratch space for editor export jobs (drawtext sidecar files).
-EXPORT_WORK_DIR = actual_home_dir() / ".cache" / "vice" / "exports"
-HIGHLIGHTS_DIR = actual_home_dir() / ".local" / "share" / "vice" / "highlights"
+EXPORT_WORK_DIR = cache_dir() / "exports"
+HIGHLIGHTS_DIR = data_dir() / "highlights"
 
 
 def _load_highlights(slug: str) -> list:
@@ -169,7 +172,7 @@ def _load_highlights(slug: str) -> list:
     if not f.exists():
         return []
     try:
-        return json.loads(f.read_text())
+        return json.loads(f.read_text(encoding="utf-8"))
     except Exception as exc:
         log.warning("Highlights file %s is unreadable: %s", f.name, exc)
         return []
@@ -183,14 +186,14 @@ def _save_highlights(slug: str, highlights: list) -> None:
 # In-app view counts per slug. Like playlist membership, the counters are
 # migrated on rename and dropped on delete so a reused clip number never
 # inherits another clip's history.
-VIEWS_PATH = actual_home_dir() / ".local" / "share" / "vice" / "views.json"
+VIEWS_PATH = data_dir() / "views.json"
 
 
 def _load_views() -> dict[str, int]:
     if not VIEWS_PATH.exists():
         return {}
     try:
-        return {str(k): int(v) for k, v in json.loads(VIEWS_PATH.read_text()).items()}
+        return {str(k): int(v) for k, v in json.loads(VIEWS_PATH.read_text(encoding="utf-8")).items()}
     except Exception as exc:
         log.warning("Views file %s is unreadable: %s", VIEWS_PATH, exc)
         return {}
@@ -208,14 +211,14 @@ def _save_views(views: dict[str, int]) -> None:
 # Small bag of UI state that must outlive the web view. The native window's
 # localStorage does not reliably survive restarts on every QtWebEngine build,
 # which made the first-run tutorial reappear every launch.
-APP_STATE_PATH = actual_home_dir() / ".local" / "share" / "vice" / "ui_state.json"
+APP_STATE_PATH = data_dir() / "ui_state.json"
 
 
 def _load_app_state() -> dict:
     if not APP_STATE_PATH.exists():
         return {}
     try:
-        data = json.loads(APP_STATE_PATH.read_text())
+        data = json.loads(APP_STATE_PATH.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except Exception as exc:
         log.warning("UI state file %s is unreadable: %s", APP_STATE_PATH, exc)
@@ -284,6 +287,8 @@ async def copy_image_to_clipboard(path: Path) -> tuple[bool, str]:
     mime = _IMAGE_MIME.get(path.suffix.lower())
     if not mime:
         return False, f"{path.suffix} is not an image format Vice can copy."
+    if IS_WINDOWS:
+        return await _copy_image_to_clipboard_windows(path, mime)
     if shutil.which("wl-copy"):
         cmd = ["wl-copy", "--type", mime]
     elif shutil.which("xclip"):
@@ -308,6 +313,31 @@ async def copy_image_to_clipboard(path: Path) -> tuple[bool, str]:
     return True, ""
 
 
+async def _copy_image_to_clipboard_windows(path: Path, mime: str) -> tuple[bool, str]:
+    """Windows wants a DIB on the clipboard, which ffmpeg can make from any
+    image as a BMP whose 14-byte file header is dropped. PNGs are offered as
+    themselves too, for the apps that prefer them."""
+    from .win32 import set_clipboard_image
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path),
+            "-frames:v", "1", "-pix_fmt", "bgr24", "-f", "image2pipe", "-c:v", "bmp", "-",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            **no_window_kwargs(),
+        )
+        bmp, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
+    except (OSError, asyncio.TimeoutError) as exc:
+        log.warning("Converting %s for the clipboard failed: %s", path.name, exc)
+        return False, "Could not convert the image for the clipboard."
+    dib = bmp[14:] if proc.returncode == 0 and bmp[:2] == b"BM" else None
+    png = await asyncio.to_thread(path.read_bytes) if mime == "image/png" else None
+    if not dib and not png:
+        return False, "Could not convert the image for the clipboard."
+    if await asyncio.to_thread(set_clipboard_image, png, dib):
+        return True, ""
+    return False, "Could not reach the clipboard."
+
+
 # Encoders to try when a trim has to re-encode, best first, per source codec.
 # Software is last on every row, so a machine with no usable hardware encoder
 # behaves exactly the way it always has.
@@ -318,6 +348,14 @@ _TRIM_ENCODERS = {
 }
 _TRIM_ENCODERS_DEFAULT = ("h264_nvenc", "h264_vaapi", "libx264")
 _VAAPI_RENDER_NODE = "/dev/dri/renderD128"
+
+# Windows has no VA-API; Intel and AMD encode through QSV and AMF instead.
+_TRIM_ENCODERS_WINDOWS = {
+    "hevc": ("hevc_nvenc", "hevc_qsv", "hevc_amf", "libx265", "libx264"),
+    "h265": ("hevc_nvenc", "hevc_qsv", "hevc_amf", "libx265", "libx264"),
+    "av1":  ("av1_nvenc", "av1_qsv", "av1_amf", "libsvtav1", "libx264"),
+}
+_TRIM_ENCODERS_WINDOWS_DEFAULT = ("h264_nvenc", "h264_qsv", "h264_amf", "libx264")
 
 _trim_encoder_cache: dict[str, list[str]] = {}
 
@@ -332,12 +370,25 @@ def _trim_encoder_candidates(vcodec: str) -> list[str]:
     """
     key = (vcodec or "").lower()
     if key not in _trim_encoder_cache:
-        names = _TRIM_ENCODERS.get(key, _TRIM_ENCODERS_DEFAULT)
+        if IS_WINDOWS:
+            names = _TRIM_ENCODERS_WINDOWS.get(key, _TRIM_ENCODERS_WINDOWS_DEFAULT)
+        else:
+            names = _TRIM_ENCODERS.get(key, _TRIM_ENCODERS_DEFAULT)
         installed = _available_encoders()
         # An empty probe is no opinion, so try the whole list rather than none.
         picked = [n for n in names if n in installed] if installed else list(names)
         if not _is_nvidia():
             picked = [n for n in picked if not n.endswith("_nvenc")]
+        if IS_WINDOWS:
+            # ffmpeg is built with every vendor's encoder; only the GPUs that
+            # are actually present are worth a try.
+            from .win32 import gpu_vendors
+            vendors = set(gpu_vendors())
+            if vendors:
+                if "intel" not in vendors:
+                    picked = [n for n in picked if not n.endswith("_qsv")]
+                if "amd" not in vendors:
+                    picked = [n for n in picked if not n.endswith("_amf")]
         _trim_encoder_cache[key] = picked or ["libx264"]
     return _trim_encoder_cache[key]
 
@@ -367,6 +418,12 @@ def _trim_encoder_args(encoder: str) -> tuple[list[str], list[str]]:
         return (["-vaapi_device", _VAAPI_RENDER_NODE],
                 ["-vf", "format=nv12,hwupload", "-c:v", encoder, "-qp", "22",
                  "-c:a", "copy"])
+    if encoder.endswith("_qsv"):
+        return [], ["-c:v", encoder, "-global_quality", "22", "-preset", "veryfast",
+                    "-c:a", "copy"]
+    if encoder.endswith("_amf"):
+        return [], ["-c:v", encoder, "-rc", "cqp", "-qp_i", "22", "-qp_p", "22",
+                    "-quality", "balanced", "-c:a", "copy"]
     if encoder == "libsvtav1":
         return [], ["-c:v", encoder, "-crf", "30", "-preset", "8", "-c:a", "copy"]
     crf = "23" if encoder == "libx265" else "20"
@@ -1050,7 +1107,7 @@ class ShareServer:
     def _image_dir(self) -> Path:
         return resolve_path(
             getattr(self.cfg.output, "image_directory", "")
-            or str(actual_home_dir() / "Pictures" / "Vice")
+            or str(pictures_dir() / "Vice")
         )
 
     def next_image_path(self, tag: Optional[str] = None) -> Path:
@@ -1486,6 +1543,9 @@ class ShareServer:
         if not path or not path.exists():
             raise web.HTTPNotFound()
         # Open the clip's parent directory in the system file manager
+        if IS_WINDOWS:
+            await asyncio.to_thread(reveal_path, path)
+            return web.json_response({"ok": True})
         asyncio.create_task(asyncio.create_subprocess_exec(
             "xdg-open", str(path.parent),
             stdout=asyncio.subprocess.DEVNULL,
@@ -1515,6 +1575,12 @@ class ShareServer:
         path = self._clips.get(slug)
         if not path or not path.exists():
             raise web.HTTPNotFound()
+
+        if IS_WINDOWS:
+            from .win32 import set_clipboard_files
+            if await asyncio.to_thread(set_clipboard_files, [str(path.resolve())]):
+                return web.json_response({"ok": True})
+            return web.json_response({"ok": False, "error": "Could not reach the clipboard."})
 
         uri = path.resolve().as_uri()
         # Chromium and Electron read pasted files from text/uri-list. Both
@@ -1634,6 +1700,9 @@ class ShareServer:
 
     async def _api_image_reveal(self, req: web.Request) -> web.Response:
         _, path = self._image_or_404(req)
+        if IS_WINDOWS:
+            await asyncio.to_thread(reveal_path, path)
+            return web.json_response({"ok": True})
         asyncio.create_task(asyncio.create_subprocess_exec(
             "xdg-open", str(path.parent),
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL))
@@ -1641,6 +1710,9 @@ class ShareServer:
 
     async def _api_image_open(self, req: web.Request) -> web.Response:
         _, path = self._image_or_404(req)
+        if IS_WINDOWS:
+            await asyncio.to_thread(open_path, path)
+            return web.json_response({"ok": True})
         asyncio.create_task(asyncio.create_subprocess_exec(
             "xdg-open", str(path),
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL))
@@ -1745,6 +1817,9 @@ class ShareServer:
         # Playback escape hatch for WebEngine builds that cannot decode the
         # clip (PyPI wheels ship without H.264 support): hand the file to the
         # system default video player.
+        if IS_WINDOWS:
+            await asyncio.to_thread(open_path, path)
+            return web.json_response({"ok": True})
         asyncio.create_task(asyncio.create_subprocess_exec(
             "xdg-open", str(path),
             stdout=asyncio.subprocess.DEVNULL,
@@ -1944,7 +2019,7 @@ class ShareServer:
         out_dir = resolve_path(self.cfg.output.directory)
         location = body.get("location", "library")
         if location == "videos":
-            dest = actual_home_dir() / "Videos"
+            dest = videos_dir()
         elif location == "custom":
             custom = str(body.get("path", "")).strip()
             if not custom:
@@ -1978,7 +2053,7 @@ class ShareServer:
         work = EXPORT_WORK_DIR / job_id
         work.mkdir(parents=True, exist_ok=True)
         for path, text in text_file_contents(project, work).items():
-            path.write_text(text)
+            path.write_text(text, encoding="utf-8")
 
         tmp = dest / f".{final.stem}.export.mp4"
         cmd = build_export_cmd(project, sources, tmp,
@@ -2034,13 +2109,23 @@ class ShareServer:
         # waiting for the uninstall to finish.
         exe = sys.executable.replace("'", r"\'")
         cmd = f"sleep 2 && '{exe}' -m vice.main uninstall --yes"
+        if IS_WINDOWS:
+            # No bash, and `timeout` refuses to run without a console, so the
+            # delay happens inside Python itself.
+            argv = [sys.executable, "-c",
+                    "import sys, time; time.sleep(2); from vice.main import cli; "
+                    "sys.argv = ['vice', 'uninstall', '--yes']; cli()"]
+            popen_kwargs = detached_kwargs()
+        else:
+            argv = ["bash", "-c", cmd]
+            popen_kwargs = {"start_new_session": True}
         try:
             _sp.Popen(
-                ["bash", "-c", cmd],
-                start_new_session=True,
+                argv,
                 stdin=_sp.DEVNULL,
                 stdout=_sp.DEVNULL,
                 stderr=_sp.DEVNULL,
+                **popen_kwargs,
             )
         except Exception as exc:
             log.error("Failed to launch uninstall subprocess: %s", exc)
@@ -2048,7 +2133,10 @@ class ShareServer:
         # Stop the daemon after giving the HTTP response time to reach the client.
         async def _exit() -> None:
             await asyncio.sleep(0.4)
-            os.kill(os.getpid(), _sig.SIGTERM)
+            if IS_WINDOWS:
+                request_shutdown()
+            else:
+                os.kill(os.getpid(), _sig.SIGTERM)
 
         asyncio.create_task(_exit())
         return web.json_response({"ok": True})
@@ -2267,7 +2355,10 @@ class ShareServer:
         """Stop the daemon (browser-mode quit, native window uses pywebview API)."""
         import os, signal as _sig
         response = web.json_response({"ok": True})
-        asyncio.get_event_loop().call_later(0.2, lambda: os.kill(os.getpid(), _sig.SIGTERM))
+        if IS_WINDOWS:
+            asyncio.get_event_loop().call_later(0.2, request_shutdown)
+        else:
+            asyncio.get_event_loop().call_later(0.2, lambda: os.kill(os.getpid(), _sig.SIGTERM))
         return response
 
     # ── WebSocket ─────────────────────────────────────────────────────────────

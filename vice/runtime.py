@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
+import hmac
+import json
 import logging
-import fcntl
 import os
-import pwd
 import re
+import secrets
 import shutil
 import socket
 import stat
 import subprocess
 import time
 from pathlib import Path
+
+from .platform import IS_WINDOWS, home_dir
 
 log = logging.getLogger("vice.runtime")
 RUNTIME_ENV_KEYS = (
@@ -26,6 +30,27 @@ RUNTIME_ENV_KEYS = (
 )
 
 
+def pid_is_alive(pid: int) -> bool:
+    """Whether a process with this pid exists, erring towards yes.
+
+    Never os.kill(pid, 0) on Windows: there any signal that is not a console
+    event is TerminateProcess, so the "probe" would kill the process it was
+    asking about.
+    """
+    if pid <= 0:
+        return False
+    if IS_WINDOWS:
+        import psutil
+        return psutil.pid_exists(pid)
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
 def daemon_is_running(socket_file: Path, pid_file: Path) -> bool:
     """Conservatively detect an owner, including a busy or stopping daemon."""
     try:
@@ -36,16 +61,34 @@ def daemon_is_running(socket_file: Path, pid_file: Path) -> bool:
         log.warning("Cannot inspect daemon PID file %s: %s", pid_file, exc)
         return True
     if pid > 0:
+        if IS_WINDOWS:
+            if pid_is_alive(pid):
+                return True
+        else:
+            try:
+                os.kill(pid, 0)
+                return True
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                return True
+
+    # A status timeout says nothing about ownership. A listening socket can
+    # accept connections while its daemon is busy finalizing a clip.
+    if IS_WINDOWS:
         try:
-            os.kill(pid, 0)
-            return True
-        except ProcessLookupError:
-            pass
-        except PermissionError:
+            port = _read_ipc_endpoint(socket_file)[0]
+        except (FileNotFoundError, ConnectionRefusedError):
+            return False
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                return True
+        except ConnectionRefusedError:
+            return False
+        except OSError as exc:
+            log.debug("Cannot rule out a daemon on port %s: %s", port, exc)
             return True
 
-    # A status timeout says nothing about ownership. A listening Unix socket
-    # can accept connections while its daemon is busy finalizing a clip.
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
         probe.settimeout(0.2)
         try:
@@ -65,24 +108,128 @@ def claim_daemon_lock(socket_file: Path, timeout: float = 0.0):
     deadline = time.monotonic() + timeout
     try:
         while True:
-            try:
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if try_lock_file(handle):
                 return handle
-            except BlockingIOError as exc:
-                if time.monotonic() >= deadline:
-                    raise RuntimeError("Vice is already starting or running.") from exc
-                time.sleep(0.05)
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Vice is already starting or running.")
+            time.sleep(0.05)
     except BaseException:
         handle.close()
         raise
 
 
+def try_lock_file(handle) -> bool:
+    """Take an exclusive, non-blocking lock on an open file.
+
+    The kernel drops it when the process dies on both platforms, so a crash
+    can never leave it held.
+    """
+    if IS_WINDOWS:
+        import msvcrt
+        try:
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+    import fcntl
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except BlockingIOError:
+        return False
+
+
 def actual_home_dir() -> Path:
     """Return the current user's real home directory without trusting $HOME."""
+    return home_dir()
+
+
+# ── Daemon IPC transport ─────────────────────────────────────────────────────
+#
+# The daemon speaks a line protocol ("status", "clip", "stop" ...). On Linux it
+# runs over a Unix socket, as it always has. asyncio has no Unix sockets on
+# Windows, so there it runs over TCP on 127.0.0.1 and the "socket file" holds
+# the port and a random token instead. The token is the first line of every
+# connection: loopback is open to every local user, but the file lives in this
+# user's own temp directory.
+
+_shutdown_handler = None
+
+
+def set_shutdown_handler(handler) -> None:
+    """Register how this process stops itself (Windows only, see below)."""
+    global _shutdown_handler
+    _shutdown_handler = handler
+
+
+def request_shutdown() -> None:
+    """Ask the daemon to shut down cleanly from inside itself.
+
+    Linux does this with a SIGTERM to its own pid, which the loop turns into
+    a clean stop. On Windows that same call is TerminateProcess: no clean
+    stop, capture processes orphaned, the pid file and socket left behind.
+    There the daemon registers a handler that sets its stop event instead.
+    """
+    if _shutdown_handler is not None:
+        _shutdown_handler()
+        return
+    if IS_WINDOWS:
+        log.error("Shutdown requested before the daemon registered a handler")
+        return
+    import signal
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
+def _read_ipc_endpoint(socket_file: Path) -> tuple[int, str]:
+    """(port, token) from a Windows IPC endpoint file.
+
+    Raises FileNotFoundError when there is no file and ConnectionRefusedError
+    when it is unreadable, the same errors a stale Unix socket gives, so every
+    caller's existing handling applies unchanged.
+    """
     try:
-        return Path(pwd.getpwuid(os.getuid()).pw_dir)
-    except Exception:
-        return Path(os.path.expanduser("~"))
+        info = json.loads(socket_file.read_text(encoding="utf-8"))
+        return int(info["port"]), str(info["token"])
+    except FileNotFoundError:
+        raise
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise ConnectionRefusedError(f"Unreadable IPC endpoint {socket_file}: {exc}") from exc
+
+
+async def start_ipc_server(handler, socket_file: Path):
+    """Serve the daemon's IPC protocol. The caller closes the returned server."""
+    if not IS_WINDOWS:
+        return await asyncio.start_unix_server(handler, path=str(socket_file))
+
+    token = secrets.token_hex(16)
+
+    async def _authenticated(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            line = await asyncio.wait_for(reader.readline(), timeout=5.0)
+        except (asyncio.TimeoutError, OSError):
+            line = b""
+        if not hmac.compare_digest(line.strip(), token.encode()):
+            writer.close()
+            return
+        await handler(reader, writer)
+
+    server = await asyncio.start_server(_authenticated, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    tmp = socket_file.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"port": port, "token": token, "pid": os.getpid()}), encoding="utf-8")
+    os.replace(tmp, socket_file)
+    return server
+
+
+async def open_ipc_connection(socket_file: Path):
+    """Connect to the daemon; (reader, writer) like asyncio.open_unix_connection."""
+    if not IS_WINDOWS:
+        return await asyncio.open_unix_connection(str(socket_file))
+    port, token = _read_ipc_endpoint(socket_file)
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    writer.write(token.encode() + b"\n")
+    return reader, writer
 
 
 def _needs_shell_expansion(value: str | None) -> bool:
@@ -129,6 +276,8 @@ def load_user_systemd_env() -> None:
 
 
 def has_display() -> bool:
+    if IS_WINDOWS:
+        return True
     return bool(os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY"))
 
 
@@ -185,6 +334,8 @@ def _wayland_runtime_dir_candidates() -> list[Path]:
 
 def recover_wayland_display() -> bool:
     """Recover Wayland env vars from a socket when launchers omit them."""
+    if IS_WINDOWS:
+        return False
     if os.environ.get("WAYLAND_DISPLAY"):
         return True
 
@@ -215,6 +366,9 @@ def recover_wayland_display() -> bool:
 
 def normalize_runtime_environment() -> None:
     """Repair common broken service env vars before Vice touches config or capture."""
+    if IS_WINDOWS:
+        # No display server, systemd or XDG runtime directory to repair.
+        return
     real_home = str(actual_home_dir())
     runtime_dir = f"/run/user/{os.getuid()}"
     log.debug("Runtime env before normalization: %s", runtime_env_snapshot())
@@ -262,7 +416,7 @@ def systemd_unit_loaded(unit: str = "vice.service") -> bool:
     Everything here is a probe: any failure means "no systemd", and every
     caller treats that as "do nothing" rather than as an error.
     """
-    if not os.environ.get("XDG_RUNTIME_DIR"):
+    if IS_WINDOWS or not os.environ.get("XDG_RUNTIME_DIR"):
         return False
     if not shutil.which("systemctl"):
         return False

@@ -18,13 +18,14 @@ from typing import Optional
 from urllib.request import Request, urlopen
 
 from . import __version__
+from .platform import data_dir
 from .runtime import actual_home_dir
 
 log = logging.getLogger("vice.updates")
 
 RELEASES_URL = "https://api.github.com/repos/eklonofficial/Vice/releases/latest"
 RELEASE_PAGE = "https://github.com/eklonofficial/Vice/releases/latest"
-CACHE_PATH = actual_home_dir() / ".local" / "share" / "vice" / "update.json"
+CACHE_PATH = data_dir() / "update.json"
 
 # One check a day. The unauthenticated GitHub limit is 60/hour per IP, so
 # this is nowhere near it, and the ETag makes the repeat calls cheap.
@@ -130,7 +131,7 @@ class UpdateCache:
 
     def load(self) -> dict:
         try:
-            data = json.loads(self.path.read_text())
+            data = json.loads(self.path.read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else {}
         except Exception:
             return {}

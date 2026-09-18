@@ -1,7 +1,8 @@
 """Discord IPC client, raw protocol, no third-party deps.
 
 Discord exposes a Unix socket at $XDG_RUNTIME_DIR/discord-ipc-{0..9} (also
-/tmp/discord-ipc-N as a fallback). The wire protocol is length-prefixed JSON
+/tmp/discord-ipc-N as a fallback). On Windows it is a named pipe with the
+same discord-ipc-{0..9} names and the same framing. The wire protocol is length-prefixed JSON
 frames. We only need HANDSHAKE (op=0) and SET_ACTIVITY (cmd inside op=1).
 """
 
@@ -14,6 +15,8 @@ import os
 import struct
 import uuid
 from pathlib import Path
+
+from .platform import IS_WINDOWS
 
 log = logging.getLogger(__name__)
 
@@ -33,7 +36,25 @@ _DEFAULT_TIMEOUT = 2.0
 _MAX_FRAME_BYTES = 64 * 1024
 
 
+def _pipe_paths() -> list[Path]:
+    return [Path(rf"\\.\pipe\discord-ipc-{n}") for n in range(10)]
+
+
+async def _open_pipe_connection(path: Path):
+    """A named-pipe client as the same (reader, writer) pair a Unix socket
+    gives, so the protocol code above it does not know the difference. Only
+    the Proactor loop, Windows' default, can open pipes."""
+    loop = asyncio.get_running_loop()
+    reader = asyncio.StreamReader(limit=_MAX_FRAME_BYTES * 2, loop=loop)
+    protocol = asyncio.StreamReaderProtocol(reader, loop=loop)
+    transport, _ = await loop.create_pipe_connection(lambda: protocol, str(path))
+    writer = asyncio.StreamWriter(transport, protocol, reader, loop)
+    return reader, writer
+
+
 def _socket_paths() -> list[Path]:
+    if IS_WINDOWS:
+        return _pipe_paths()
     bases: list[Path] = []
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if runtime:
@@ -95,12 +116,15 @@ class DiscordRPC:
             return False
         for path in _socket_paths():
             try:
-                if not path.exists():
+                if IS_WINDOWS:
+                    # No exists() check: stat-ing a pipe opens it, which uses
+                    # up the instance Discord is waiting for a client on.
+                    opener = _open_pipe_connection(path)
+                elif not path.exists():
                     continue
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_unix_connection(str(path)),
-                    timeout=self.timeout,
-                )
+                else:
+                    opener = asyncio.open_unix_connection(str(path))
+                reader, writer = await asyncio.wait_for(opener, timeout=self.timeout)
                 self._reader, self._writer = reader, writer
                 await self._send(_OP_HANDSHAKE, {"v": 1, "client_id": self.client_id})
                 op, payload = await self._recv_response()
