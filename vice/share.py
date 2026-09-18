@@ -752,6 +752,19 @@ _EMBED_PAGE = """\
 """
 
 
+def _cloudflared_path() -> Optional[str]:
+    """cloudflared on PATH, or the copy install.ps1 puts in Vice's own bin
+    folder on Windows. That folder is on the user PATH too, but a daemon
+    started before PATH changed would not see it."""
+    found = shutil.which("cloudflared")
+    if not IS_WINDOWS:
+        return "cloudflared" if found else None
+    if found:
+        return found
+    bundled = data_dir() / "bin" / "cloudflared.exe"
+    return str(bundled) if bundled.is_file() else None
+
+
 # cloudflared prints its own infrastructure hostnames alongside the tunnel
 # address. api.trycloudflare.com winning the match meant every share link
 # pointed at Cloudflare's API, which answers "Method Not Allowed" (#143).
@@ -2384,7 +2397,8 @@ class ShareServer:
     # traffic. Failing loudly with an install hint is strictly better.
 
     async def _start_tunnel(self, port: int) -> None:
-        if not shutil.which("cloudflared"):
+        cloudflared = _cloudflared_path()
+        if not cloudflared:
             await self._tunnel_failed(
                 "cloudflared is not installed. Install it to get public share "
                 "links (https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/), "
@@ -2394,7 +2408,7 @@ class ShareServer:
         log.info("Starting Cloudflare Tunnel on port %d", port)
         try:
             self._tunnel_proc = await asyncio.create_subprocess_exec(
-                "cloudflared", "tunnel", "--url", f"http://localhost:{port}",
+                cloudflared, "tunnel", "--url", f"http://localhost:{port}",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )

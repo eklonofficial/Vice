@@ -171,6 +171,32 @@ class WallClockTests(unittest.TestCase):
             written += 480 + correction
         self.assertLess(abs(written - t * 48000), self.wa.DRIFT_TOLERANCE_FRAMES + 480)
 
+    @unittest.skipUnless(IS_WINDOWS and LIVE, "opens real audio devices; set VICE_LIVE_TESTS=1")
+    def test_capture_works_on_any_thread_whichever_imported_soundcard(self) -> None:
+        # soundcard only set COM up on the thread that imported it, so capture
+        # failed with 0x800401F0 once the Settings list had imported it first.
+        import threading
+        results: list[str] = []
+
+        def listing() -> None:
+            results.append(str(len(self.wa.list_audio_sources()["sources"])))
+
+        def capture() -> None:
+            src = self.wa.AudioSource("default_output")
+            try:
+                src.start()
+                results.append("ok")
+            except RuntimeError as exc:
+                results.append(str(exc))
+            finally:
+                src.stop()
+
+        for step in (listing, capture, listing, capture):
+            thread = threading.Thread(target=step)
+            thread.start()
+            thread.join(30)
+        self.assertEqual(results[1::2], ["ok", "ok"])
+
     @unittest.skipUnless(IS_WINDOWS, "needs numpy, installed with soundcard on Windows")
     def test_mono_and_single_channel_become_centred_stereo(self) -> None:
         import numpy as np
@@ -610,9 +636,15 @@ class InstallScriptTests(unittest.TestCase):
         self.assertTrue(all(b in (9, 10, 13) or 32 <= b < 127 for b in self.raw))
 
     def test_installs_what_vice_needs_through_winget(self) -> None:
-        for package in ("Gyan.FFmpeg", "Python.Python.3.12", "Cloudflare.cloudflared"):
+        for package in ("Gyan.FFmpeg", "Python.Python.3.12"):
             self.assertIn(package, self.script)
         self.assertIn("ddagrab", self.script)
+
+    def test_cloudflared_needs_no_administrator(self) -> None:
+        # winget's cloudflared is a machine-wide MSI that asks for admin rights;
+        # the standalone exe goes in Vice's own bin folder instead.
+        self.assertNotIn("Cloudflare.cloudflared", self.script)
+        self.assertIn("releases/latest/download/cloudflared-windows-", self.script)
 
     def test_native_programs_never_abort_the_script_through_stderr(self) -> None:
         # With ErrorActionPreference Stop, 5.1 turns native stderr into a

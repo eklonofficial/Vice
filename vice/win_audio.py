@@ -71,12 +71,44 @@ def _soundcard():
     return soundcard
 
 
+class _ComThread:
+    """COM initialised for the current thread, for as long as it is held.
+
+    soundcard only initialises COM on the thread that first imports it.
+    Every other thread gets CO_E_NOTINITIALIZED (0x800401F0), so capture
+    failed whenever the Settings audio list, running on a worker thread,
+    happened to import soundcard before the capture thread did.
+    """
+
+    _RPC_E_CHANGED_MODE = 0x80010106
+
+    def __enter__(self) -> "_ComThread":
+        import ctypes
+        # soundcard must be imported first: its import initialises COM on the
+        # importing thread and treats S_FALSE ("already initialised") as a
+        # fatal error, so initialising here first broke the import itself.
+        _soundcard()
+        self._ole32 = ctypes.WinDLL("ole32")
+        hr = self._ole32.CoInitializeEx(None, 0) & 0xFFFFFFFF  # COINIT_MULTITHREADED
+        # S_OK or S_FALSE must be balanced by CoUninitialize. A thread that is
+        # already in another apartment is initialised anyway and is left alone.
+        self._owned = hr in (0, 1)
+        if not self._owned and hr != self._RPC_E_CHANGED_MODE:
+            log.debug("CoInitializeEx returned 0x%08x", hr)
+        return self
+
+    def __exit__(self, *exc) -> None:
+        if self._owned:
+            self._ole32.CoUninitialize()
+
+
 def list_audio_devices() -> dict:
     """{"outputs": [...], "inputs": [...]}, each {"id", "name"}."""
-    sc = _soundcard()
-    outputs = [{"id": f"device:{s.id}{MONITOR_SUFFIX}", "name": s.name} for s in sc.all_speakers()]
-    inputs = [{"id": f"device:{m.id}", "name": m.name}
-              for m in sc.all_microphones(include_loopback=False)]
+    with _ComThread():
+        sc = _soundcard()
+        outputs = [{"id": f"device:{s.id}{MONITOR_SUFFIX}", "name": s.name} for s in sc.all_speakers()]
+        inputs = [{"id": f"device:{m.id}", "name": m.name}
+                  for m in sc.all_microphones(include_loopback=False)]
     return {"outputs": outputs, "inputs": inputs}
 
 
@@ -293,6 +325,10 @@ class AudioSource:
         return conn
 
     def _run(self) -> None:
+        with _ComThread():
+            self._capture()
+
+    def _capture(self) -> None:
         try:
             device, loopback = _open_device(self.source_id)
             recorder = device.recorder(samplerate=SAMPLE_RATE, channels=None, blocksize=BLOCK_FRAMES)

@@ -5,8 +5,8 @@
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall
 #
 # Run it as your normal user. Nothing here needs administrator rights:
-# winget installs ffmpeg and cloudflared per user, and everything Vice owns
-# lives under %LOCALAPPDATA%\Vice.
+# winget installs ffmpeg per user, cloudflared is a single downloaded exe,
+# and everything Vice owns lives under %LOCALAPPDATA%\Vice.
 #
 # This file is plain ASCII on purpose. Windows PowerShell 5.1 reads a script
 # without a byte order mark in the ANSI code page, and a stray non-ASCII
@@ -203,7 +203,22 @@ if ($NoCloudflared) {
     Info 'Skipping cloudflared as asked.'
 } elseif (-not (Test-Command 'cloudflared')) {
     if (Confirm-Step 'Install cloudflared for public share links? (Vice works without it)') {
-        Install-Winget 'Cloudflare.cloudflared' 'cloudflared'
+        # Not through winget: its cloudflared package is a machine-wide MSI
+        # that asks for administrator rights. Cloudflare also publishes the
+        # program as a single exe, which goes in Vice's own bin folder.
+        New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+        $arch = if ([Environment]::Is64BitOperatingSystem) { 'amd64' } else { '386' }
+        $url = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-$arch.exe"
+        $target = Join-Path $BinDir 'cloudflared.exe'
+        Info "Downloading cloudflared from $url"
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $url -OutFile $target -UseBasicParsing
+            Info "Installed cloudflared to $target"
+        } catch {
+            Remove-Item $target -Force -ErrorAction SilentlyContinue
+            Warn "Could not download cloudflared ($($_.Exception.Message)). Share links will work on your LAN only."
+        }
     } else {
         Warn 'Skipping cloudflared. Turn the public tunnel off in Settings, Sharing, or install it later.'
     }
