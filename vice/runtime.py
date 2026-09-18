@@ -118,6 +118,9 @@ def claim_daemon_lock(socket_file: Path, timeout: float = 0.0):
         raise
 
 
+_LOCK_OFFSET = 0x7FFF0000
+
+
 def try_lock_file(handle) -> bool:
     """Take an exclusive, non-blocking lock on an open file.
 
@@ -126,9 +129,16 @@ def try_lock_file(handle) -> bool:
     """
     if IS_WINDOWS:
         import msvcrt
+        # Windows byte-range locks are mandatory: a locked byte cannot even be
+        # read. Locking a byte far past anything written keeps the pid in the
+        # file readable; Windows allows locking beyond the end of a file.
         try:
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            position = handle.tell()
+            handle.seek(_LOCK_OFFSET)
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            finally:
+                handle.seek(position)
             return True
         except OSError:
             return False
