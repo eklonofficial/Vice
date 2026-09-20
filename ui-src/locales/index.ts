@@ -24,5 +24,5 @@ export type LocaleName = keyof typeof LOCALES;
 /** What the picker in Settings shows, in the language itself. */
 export const LOCALE_LABELS: Record<LocaleName, string> = {
   en: 'English',
-  fr: 'fr',
+  fr: 'Français',
 };
