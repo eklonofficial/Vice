@@ -20,6 +20,7 @@
   {"name": "Stardew Valley", "matches": ["StardewValley", "stardew valley"]},
   {"name": "Terraria", "matches": ["terraria", "Terraria.bin.x86_64"]},
   {"name": "Factorio", "matches": ["factorio"]},
+  {"name": "OpenFront", "matches": ["openfront", "openfront.io", "steam_app_3560670"]},
   {"name": "Rimworld", "matches": ["RimWorldLinux"]},
   {"name": "Risk of Rain 2", "matches": ["Risk of Rain 2.exe"]},
   {"name": "Deep Rock Galactic", "matches": ["FSD-Win64-Shipping.exe"]},
