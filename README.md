@@ -51,6 +51,22 @@ systemctl --user enable --now vice.service
 
 The package ships the service but does not enable it for you, so run that second line to have clipping start at login. `./install.sh` asks and does it for you.
 
+**NixOS (flake):**
+
+```nix
+{
+  inputs.vice.url = "github:eklonofficial/Vice";
+
+  outputs = { nixpkgs, vice, ... }: {
+    nixosConfigurations.yourhost = nixpkgs.lib.nixosSystem {
+      modules = [ vice.nixosModules.default { services.vice.enable = true; } ];
+    };
+  };
+}
+```
+
+The module installs the package, the `uaccess` udev rule for the hotkey listener, and the user daemon, which starts with your graphical session. Set `services.vice.autoStart = false;` to only record while the window is open. Without flakes, `nix/package.nix` and `nix/module.nix` are plain callPackage/NixOS files you can import directly.
+
 **Ubuntu / Debian / Mint / Fedora / openSUSE / other:**
 
 ```bash
