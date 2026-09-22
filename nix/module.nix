@@ -27,6 +27,9 @@ in
   config = lib.mkIf cfg.enable {
     environment.systemPackages = [ cfg.package ];
 
+    # Without the setcap wrapper gsr-kms-server goes through pkexec on every recorder restart.
+    programs.gpu-screen-recorder.enable = true;
+
     # TAG+="uaccess" on the event nodes, so the hotkey listener can read the
     # keyboard without the user being in the `input` group.
     services.udev.packages = [ cfg.package ];
