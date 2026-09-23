@@ -36,4 +36,4 @@ include = ["vice*"]
 version = {attr = "vice.__version__"}
 
 [tool.setuptools.package-data]
-vice = ["ui/*", "ui/fonts/*", "ui/styles/*", "ui/scripts/*", "data/*.json", "fonts/*"]
+vice = ["ui/*", "ui/fonts/*", "ui/styles/*", "ui/scripts/*", "data/*.json", "data/*.ico", "fonts/*"]

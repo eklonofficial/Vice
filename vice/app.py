@@ -1051,13 +1051,21 @@ def _run_webview(url: str) -> None:
         os.environ.setdefault("GDK_BACKEND", "x11")
 
     if IS_WINDOWS:
+        # Without its own AppUserModelID the window is grouped under
+        # pythonw.exe in the taskbar and takes Python's icon from there.
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Vice.App")
+        except (AttributeError, OSError):
+            pass
+        icon = str(Path(__file__).with_name("data") / "vice.ico")
         # WebView2 (Edge Chromium) ships with Windows 11 and every current
         # Windows 10. pywebview falls back on its own if it is missing.
         try:
-            webview.start(gui="edgechromium", debug=False, private_mode=False)
+            webview.start(gui="edgechromium", debug=False, private_mode=False, icon=icon)
         except Exception:
             log.exception("WebView2 failed, letting pywebview choose a backend")
-            webview.start(debug=False, private_mode=False)
+            webview.start(debug=False, private_mode=False, icon=icon)
         log.info("Window closed")
         return
 
