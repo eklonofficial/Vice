@@ -1822,15 +1822,16 @@ class ShareServerTunnelTests(unittest.IsolatedAsyncioTestCase):
             b"2026-06-12T00:00:01Z INF Requesting new quick Tunnel on trycloudflare.com...\n",
             b"2026-06-12T00:00:02Z INF |  https://brave-owl-clip.trycloudflare.com  |\n",
         ])
-        proc.returncode = None
+        proc.returncode = 0
         server._tunnel_proc = proc
 
         await server._read_cloudflare_url()
 
-        self.assertEqual(server._tunnel_url, "https://brave-owl-clip.trycloudflare.com")
-        server.broadcast.assert_awaited_once_with(
-            {"type": "tunnel_url", "url": "https://brave-owl-clip.trycloudflare.com"}
-        )
+        messages = [call.args[0] for call in server.broadcast.await_args_list]
+        self.assertEqual(messages[0], {
+            "type": "tunnel_url", "url": "https://brave-owl-clip.trycloudflare.com",
+        })
+        self.assertEqual(messages[1]["type"], "tunnel_error")
 
     async def test_cloudflare_api_host_is_not_the_tunnel_url(self) -> None:
         # cloudflared's own API endpoint is https://api.trycloudflare.com, and
@@ -1846,12 +1847,14 @@ class ShareServerTunnelTests(unittest.IsolatedAsyncioTestCase):
             b"error=\"POST https://api.trycloudflare.com/tunnel failed\"\n",
             b"2026-08-06T00:00:02Z INF |  https://brave-owl-clip.trycloudflare.com  |\n",
         ])
-        proc.returncode = None
+        proc.returncode = 0
         server._tunnel_proc = proc
 
         await server._read_cloudflare_url()
 
-        self.assertEqual(server._tunnel_url, "https://brave-owl-clip.trycloudflare.com")
+        messages = [call.args[0] for call in server.broadcast.await_args_list]
+        self.assertEqual(messages[0]["type"], "tunnel_url")
+        self.assertEqual(messages[0]["url"], "https://brave-owl-clip.trycloudflare.com")
 
     def test_quick_tunnel_url_picking(self) -> None:
         from vice.share import _quick_tunnel_url
@@ -1887,13 +1890,14 @@ class ShareServerTunnelTests(unittest.IsolatedAsyncioTestCase):
             b"https://developers.cloudflare.com/cloudflare-one/connections/connect-apps\n",
             b"INF another https://stale-other-name.trycloudflare.com mention\n",
         ])
-        proc.returncode = None
+        proc.returncode = 0
         server._tunnel_proc = proc
 
         await server._read_cloudflare_url()
 
-        self.assertEqual(server._tunnel_url, "https://brave-owl-clip.trycloudflare.com")
-        server.broadcast.assert_awaited_once()
+        messages = [call.args[0] for call in server.broadcast.await_args_list]
+        urls = [msg["url"] for msg in messages if msg["type"] == "tunnel_url"]
+        self.assertEqual(urls, ["https://brave-owl-clip.trycloudflare.com"])
 
     async def test_cloudflared_exit_without_url_reports_error(self) -> None:
         server = self._server()
@@ -1916,6 +1920,111 @@ class ShareServerTunnelTests(unittest.IsolatedAsyncioTestCase):
         msg = server.broadcast.await_args.args[0]
         self.assertEqual(msg["type"], "tunnel_error")
         self.assertIn("exited", msg["error"])
+
+    async def test_cloudflared_failure_includes_its_error_output(self) -> None:
+        server = self._server()
+        server.broadcast = mock.AsyncMock()
+        proc = mock.Mock()
+        proc.stdout = self._stdout_lines([
+            b"2026-09-22T00:00:00Z INF Requesting new quick Tunnel on trycloudflare.com...\n",
+            b"2026-09-22T00:00:01Z ERR Failed to request quick Tunnel: dial tcp: network is unreachable\n",
+        ])
+        proc.returncode = 1
+        server._tunnel_proc = proc
+
+        await server._read_cloudflare_url()
+
+        msg = server.broadcast.await_args.args[0]
+        self.assertEqual(msg["type"], "tunnel_error")
+        self.assertIn("network is unreachable", msg["error"])
+
+    async def test_cloudflared_retries_after_a_startup_failure(self) -> None:
+        server = self._server()
+        messages: list[dict] = []
+        url_ready = asyncio.Event()
+        links_ready = asyncio.Event()
+
+        server._public_bind_url = "http://192.168.1.20:8766"
+        server._clips = {"Clip with space": Path("/tmp/clip.mp4")}
+
+        async def broadcast(message: dict) -> None:
+            messages.append(message)
+            if message.get("type") == "tunnel_url":
+                url_ready.set()
+            if message.get("type") == "share_links_changed" and message.get("share_is_public"):
+                links_ready.set()
+
+        class _QueueStdout:
+            def __init__(self) -> None:
+                self.lines: asyncio.Queue[bytes | None] = asyncio.Queue()
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                line = await self.lines.get()
+                if line is None:
+                    raise StopAsyncIteration
+                return line
+
+        failed = mock.Mock()
+        failed.stdout = self._stdout_lines([
+            b"ERR Failed to request quick Tunnel: temporary network failure\n",
+        ])
+        failed.returncode = 1
+
+        connected = mock.Mock()
+        connected.stdout = _QueueStdout()
+        await connected.stdout.lines.put(
+            b"INF | https://retry-worked.trycloudflare.com |\n"
+        )
+        connected.returncode = None
+        connected.wait = mock.AsyncMock(return_value=-15)
+
+        server.broadcast = broadcast
+        with mock.patch("vice.share.shutil.which", return_value="/usr/bin/cloudflared"), \
+             mock.patch("vice.share._TUNNEL_RETRY_INITIAL", 0.01), \
+             mock.patch("vice.share._TUNNEL_RETRY_MAX", 0.02), \
+             mock.patch(
+                 "vice.share.asyncio.create_subprocess_exec",
+                 new=mock.AsyncMock(side_effect=[failed, connected]),
+             ) as spawn:
+            await server._start_tunnel(8766)
+            await asyncio.wait_for(url_ready.wait(), timeout=1)
+            await asyncio.wait_for(links_ready.wait(), timeout=1)
+            self.assertEqual(spawn.await_count, 2)
+            self.assertEqual(server._tunnel_url, "https://retry-worked.trycloudflare.com")
+            link_update = next(
+                m for m in messages
+                if m["type"] == "share_links_changed" and m["share_is_public"]
+            )
+            self.assertEqual(
+                link_update["links"],
+                {"Clip with space": "https://retry-worked.trycloudflare.com/c/Clip%20with%20space"},
+            )
+            self.assertTrue(link_update["share_is_public"])
+            task = server._tunnel_task
+            server._tunnel_stopping = True
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def test_tunnel_failure_refreshes_existing_links_to_lan(self) -> None:
+        server = self._server()
+        server._public_bind_url = "http://192.168.1.20:8766"
+        server._clips = {"clip": Path("/tmp/clip.mp4")}
+        server._tunnel_url = "https://stale-name.trycloudflare.com"
+        server.broadcast = mock.AsyncMock()
+
+        await server._tunnel_failed("cloudflared exited before the tunnel was ready")
+
+        messages = [call.args[0] for call in server.broadcast.await_args_list]
+        self.assertEqual(messages[0]["type"], "tunnel_error")
+        self.assertEqual(messages[1]["type"], "share_links_changed")
+        self.assertEqual(
+            messages[1]["links"],
+            {"clip": "http://192.168.1.20:8766/c/clip"},
+        )
+        self.assertFalse(messages[1]["share_is_public"])
 
 
 @unittest.skipUnless(ShareServer is not None and ClientSession is not None, "aiohttp is not installed")

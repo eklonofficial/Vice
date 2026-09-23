@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import math
+from fractions import Fraction
 from pathlib import Path
 from typing import Optional
 
@@ -113,6 +114,14 @@ async def probe_media_detailed(path: Path) -> tuple[Optional[dict], str]:
     duration = _parse_duration(data.get("format", {}).get("duration"))
     if duration <= 0:
         duration = _parse_duration(video.get("duration"))
+    if duration <= 0:
+        # Some gpu-screen-recorder and FFmpeg combinations write a complete
+        # MP4 with zero duration fields while retaining the video sample
+        # count and frame rate. That file is playable, but treating it as
+        # unreadable makes Vice discard a valid clip (#154). Estimate only
+        # when both values are present and the rate is sane. We keep the
+        # zero-duration result for files that do not provide enough evidence.
+        duration = _duration_from_video_samples(video)
     audio = [s for s in data.get("streams", []) if s.get("codec_type") == "audio"]
     audio_tracks = []
     for index, stream in enumerate(audio):
@@ -163,6 +172,27 @@ def _parse_duration(raw) -> float:
     except (TypeError, ValueError):
         return 0.0
     return value if math.isfinite(value) and value > 0 else 0.0
+
+
+def _duration_from_video_samples(stream: dict) -> float:
+    """Estimate duration from a video stream's sample count and frame rate."""
+    try:
+        frames = int(stream.get("nb_frames") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if frames <= 0:
+        return 0.0
+
+    for raw_rate in (stream.get("avg_frame_rate"), stream.get("r_frame_rate")):
+        try:
+            rate = float(Fraction(str(raw_rate)))
+        except (TypeError, ValueError, ZeroDivisionError):
+            continue
+        if math.isfinite(rate) and 0 < rate <= 1000:
+            estimate = frames / rate
+            if math.isfinite(estimate) and estimate > 0:
+                return estimate
+    return 0.0
 
 
 async def get_duration(path: Path) -> float:

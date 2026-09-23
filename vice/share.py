@@ -823,6 +823,21 @@ def _cloudflared_path() -> Optional[str]:
 # pointed at Cloudflare's API, which answers "Method Not Allowed" (#143).
 _TRYCLOUDFLARE_RE = re.compile(r"https://([a-zA-Z0-9-]+)\.trycloudflare\.com")
 _NOT_A_TUNNEL = {"api", "www", "dash", "developers", "blog"}
+_TUNNEL_RETRY_INITIAL = 5.0
+_TUNNEL_RETRY_MAX = 300.0
+
+
+def _cloudflared_failure_detail(lines: list[str]) -> str:
+    """Return a short actionable cloudflared diagnostic from its output."""
+    relevant = [
+        line.strip()
+        for line in lines
+        if any(marker in line.lower() for marker in ("err", "error", "failed", "unable"))
+    ]
+    if not relevant:
+        return ""
+    detail = " | ".join(relevant[-3:])
+    return " ".join(detail.split())[:600]
 
 
 def _quick_tunnel_url(line: str) -> Optional[str]:
@@ -877,6 +892,8 @@ class ShareServer:
         self._proxy_stopping = False
 
         self._tunnel_proc: Optional[asyncio.subprocess.Process] = None
+        self._tunnel_task: Optional[asyncio.Task] = None
+        self._tunnel_stopping = False
         self._tunnel_url:  Optional[str] = None
         self._local_base_url: Optional[str] = None
         self._public_bind_url: Optional[str] = None
@@ -1048,12 +1065,14 @@ class ShareServer:
                 await ws.close()
             except Exception as exc:
                 log.debug("A websocket client did not close cleanly: %s", exc)
-        if self._tunnel_proc:
-            try:
-                self._tunnel_proc.terminate()
-                await asyncio.wait_for(self._tunnel_proc.wait(), timeout=5)
-            except Exception as exc:
-                log.debug("cloudflared did not stop cleanly: %s", exc)
+        self._tunnel_stopping = True
+        tunnel_task = getattr(self, "_tunnel_task", None)
+        if tunnel_task:
+            tunnel_task.cancel()
+            await asyncio.gather(tunnel_task, return_exceptions=True)
+            self._tunnel_task = None
+        elif getattr(self, "_tunnel_proc", None):
+            await self._stop_tunnel_process(self._tunnel_proc)
         if self._local_runner:
             await self._local_runner.cleanup()
         if self._public_runner:
@@ -1092,6 +1111,21 @@ class ShareServer:
         """Whether share links work outside the local network. False means we
         fell back to a LAN address because there is no tunnel (#105)."""
         return bool(self.cfg.sharing.base_url or self._tunnel_url)
+
+    def _share_links_update(self) -> dict:
+        base = self.public_base_url() or self.local_base_url() or ""
+        return {
+            "type": "share_links_changed",
+            "links": {
+                slug: f"{base}/c/{quote(slug, safe='')}"
+                for slug in self._clips
+            },
+            "share_is_public": self.public_is_reachable(),
+        }
+
+    async def _broadcast_share_links(self) -> None:
+        if self._clips:
+            await self.broadcast(self._share_links_update())
 
     async def broadcast(self, msg: dict) -> None:
         if not self._ws_clients:
@@ -2490,40 +2524,96 @@ class ShareServer:
             )
             return
         log.info("Starting Cloudflare Tunnel on port %d", port)
-        try:
-            self._tunnel_proc = await asyncio.create_subprocess_exec(
-                cloudflared, "tunnel", "--url", f"http://localhost:{port}",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-        except OSError as exc:
-            await self._tunnel_failed(f"cloudflared failed to start: {exc}")
+        if self._tunnel_task and not self._tunnel_task.done():
             return
-        asyncio.create_task(self._read_cloudflare_url())
+        self._tunnel_stopping = False
+        self._tunnel_task = asyncio.create_task(self._run_tunnel(port, cloudflared))
+
+    async def _run_tunnel(self, port: int, cloudflared: str = "cloudflared") -> None:
+        delay = _TUNNEL_RETRY_INITIAL
+        while not self._tunnel_stopping:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    cloudflared, "tunnel", "--url", f"http://localhost:{port}",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+            except OSError as exc:
+                await self._tunnel_failed(f"cloudflared failed to start: {exc}")
+                connected = False
+            else:
+                self._tunnel_proc = proc
+                try:
+                    _, connected = await self._read_cloudflare_url(proc)
+                except asyncio.CancelledError:
+                    await self._stop_tunnel_process(proc)
+                    raise
+                finally:
+                    if self._tunnel_proc is proc:
+                        self._tunnel_proc = None
+
+            if self._tunnel_stopping:
+                return
+            if connected:
+                delay = _TUNNEL_RETRY_INITIAL
+            log.warning("Retrying Cloudflare Tunnel in %.0f seconds", delay)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, _TUNNEL_RETRY_MAX)
+
+    @staticmethod
+    async def _stop_tunnel_process(proc: asyncio.subprocess.Process) -> None:
+        if proc.returncode is not None:
+            return
+        try:
+            proc.terminate()
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except ProcessLookupError:
+            return
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                return
+            await proc.wait()
 
     async def _tunnel_failed(self, reason: str) -> None:
         log.error("Public share tunnel unavailable: %s", reason)
         self._tunnel_url = None
         await self.broadcast({"type": "tunnel_error", "error": reason})
+        await self._broadcast_share_links()
 
-    async def _read_cloudflare_url(self) -> None:
-        assert self._tunnel_proc and self._tunnel_proc.stdout
-        proc = self._tunnel_proc
+    async def _read_cloudflare_url(
+        self, proc: Optional[asyncio.subprocess.Process] = None,
+    ) -> tuple[str, bool]:
+        proc = proc or self._tunnel_proc
+        assert proc and proc.stdout
+        diagnostics: list[str] = []
+        connected = False
         async for raw in proc.stdout:
+            line = raw.decode(errors="replace").strip()
             # Keep draining stdout after the URL so process exit is still
             # detected.
-            if self._tunnel_url is not None:
-                continue
-            url = _quick_tunnel_url(raw.decode(errors="replace"))
+            url = _quick_tunnel_url(line) if self._tunnel_url is None else None
             if url:
                 self._tunnel_url = url
+                connected = True
                 log.info("Cloudflare Tunnel URL: %s", self._tunnel_url)
                 await self.broadcast({"type": "tunnel_url", "url": self._tunnel_url})
-        # stdout closed: cloudflared exited. If that happened before a URL
-        # was ever printed, surface it instead of leaving the UI waiting.
-        if self._tunnel_url is None and proc is self._tunnel_proc:
-            rc = proc.returncode if proc.returncode is not None else await proc.wait()
-            await self._tunnel_failed(
-                f"cloudflared exited (code {rc}) before providing a tunnel URL. "
-                "Check your network or run it manually to see the error."
-            )
+                await self._broadcast_share_links()
+            if not url and line and any(
+                marker in line.lower() for marker in ("err", "error", "failed", "unable")
+            ):
+                diagnostics.append(line[-600:])
+                diagnostics = diagnostics[-20:]
+
+        rc = proc.returncode if proc.returncode is not None else await proc.wait()
+        if connected:
+            reason = f"cloudflared exited (code {rc}) after providing a tunnel URL"
+        else:
+            reason = f"cloudflared exited (code {rc}) before providing a tunnel URL"
+        detail = _cloudflared_failure_detail(diagnostics)
+        if detail:
+            reason += f": {detail}"
+        if proc is self._tunnel_proc:
+            await self._tunnel_failed(reason)
+        return reason, connected

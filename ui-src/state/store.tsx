@@ -145,20 +145,6 @@ function withEvent(state: State, event: Omit<IslandEvent, 'id'>): State {
   return {...state, event: {...event, id: ++eventSeq}};
 }
 
-// Share links are built from the public address the daemon had when the
-// clip was listed. The library usually loads before cloudflared has a URL,
-// so those links point at the LAN fallback; move them onto the tunnel.
-function rebaseShareUrls(clips: Clip[], base: string | null): Clip[] {
-  if (!base) return clips;
-  const root = base.replace(/\/+$/, '');
-  return clips.map(c => {
-    const at = c.share_url ? c.share_url.lastIndexOf('/c/') : -1;
-    if (at < 0) return c;
-    const url = root + c.share_url.slice(at);
-    return url === c.share_url ? c : {...c, share_url: url};
-  });
-}
-
 function reduce(state: State, action: Action): State {
   switch (action.type) {
     case 'loaded':
@@ -167,9 +153,7 @@ function reduce(state: State, action: Action): State {
         ready: true,
         loadError: null,
         config: action.config,
-        clips: action.status.public_is_tunnel
-          ? rebaseShareUrls(action.clips, action.status.public_url)
-          : action.clips,
+        clips: action.clips,
         images: action.images,
         playlists: action.playlists,
         status: action.status,
@@ -217,7 +201,7 @@ function reduce(state: State, action: Action): State {
     }
 
     case 'setClips':
-      return {...state, clips: rebaseShareUrls(action.clips, state.tunnelUrl)};
+      return {...state, clips: action.clips};
 
     case 'setImages':
       return {...state, images: action.images};
@@ -358,7 +342,7 @@ function reduceWs(state: State, msg: WsMessage): State {
 
     case 'tunnel_url':
       return withEvent(
-        {...state, tunnelUrl: msg.url, clips: rebaseShareUrls(state.clips, msg.url)},
+        {...state, tunnelUrl: msg.url},
         {kind: 'info', title: t('events.publicLinkReady'), detail: msg.url, tone: 'accent', holdMs: 6000},
       );
 
@@ -373,6 +357,17 @@ function reduceWs(state: State, msg: WsMessage): State {
           holdMs: 9000,
         },
       );
+
+    case 'share_links_changed':
+      return {
+        ...state,
+        clips: state.clips.map(clip => {
+          const shareUrl = msg.links[clip.slug];
+          return shareUrl === undefined
+            ? clip
+            : {...clip, share_url: shareUrl, share_is_public: msg.share_is_public};
+        }),
+      };
 
     case 'session_start':
       return withEvent(

@@ -352,6 +352,9 @@ _ENCODER_FAILURE_MARKERS = (
     "nvenc",
     "vaapi",
     "no encoder",
+    "no video encoder",
+    "neither h264",
+    "neither hevc",
     "encoder not supported",
     "gpu encoding is not supported",
 )
@@ -439,11 +442,29 @@ def _gsr_audio_args(rc, *, split_for_volume: bool = True) -> list[str]:
                 tracks.append(mic)
         if getattr(rc, "audio_tracks_mix_first", False) and len(tracks) > 1:
             mix: list[str] = []
-            for track in tracks:
-                for part in track.split("|"):
-                    if part and part not in mix:
-                        mix.append(part)
-            tracks.insert(0, "|".join(mix))
+            parts = [part for track in tracks for part in track.split("|") if part]
+            # GSR rejects one track that contains both app: and app-inverse:
+            # sources. A monitor already contains application audio, so it is
+            # also the correct combined source and avoids recording it twice.
+            has_monitor = any(_classify_gsr_source(part) == "monitor" for part in parts)
+            has_app = any(part.startswith("app:") for part in parts)
+            has_inverse_app = any(part.startswith("app-inverse:") for part in parts)
+            for part in parts:
+                if has_monitor and _classify_gsr_source(part) == "app":
+                    continue
+                if part not in mix:
+                    mix.append(part)
+            if has_app and has_inverse_app and not has_monitor:
+                # GSR cannot express both application directions in one
+                # track. Keep the individual tracks, which still preserve
+                # the requested sources, instead of starting a bad command.
+                log.warning(
+                    "Cannot create a combined audio track from app and "
+                    "app-inverse sources without a desktop monitor; keeping "
+                    "the separate tracks"
+                )
+            elif mix:
+                tracks.insert(0, "|".join(mix))
         args: list[str] = []
         for track in tracks:
             args += ["-a", track]

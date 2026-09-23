@@ -380,7 +380,7 @@ Vice is better because these people sent patches:
 - [@jethrothelion](https://github.com/jethrothelion), for Chivalry 2 and Clone Drone in The Danger Zone
 - [@voltek-laruelle](https://github.com/voltek-laruelle), for the clip volume slider, and for GeoGuessr Steam Edition, Forza Horizon 4, Big Walk, Supermarket Simulator, and Sandustry
 - [@20plays](https://github.com/20plays), for preserving working Arch installations during installer dependency checks and selecting the distro Python for QtWebEngine
-- [@KITE-Force](https://github.com/KITE-Force), for game detection on KDE Plasma Wayland through kdotool
+- [@KITE-Force](https://github.com/KITE-Force), for game detection on KDE Plasma Wayland through kdotool, and for fixing scroll dismissal in clip context menus
 
 And to everyone who has opened an issue with a log attached: that is most of how the hard bugs get found.
 

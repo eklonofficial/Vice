@@ -639,6 +639,7 @@ class WebSocketCoverageTests(unittest.TestCase):
             "status",
             "tunnel_url",
             "tunnel_error",
+            "share_links_changed",
             "session_start",
             "session_stop",
             "session_highlight",

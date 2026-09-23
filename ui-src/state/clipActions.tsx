@@ -79,8 +79,11 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
   );
 
   const copyLink = useCallback(
-    (clip: Clip) => void copyShareLink(clip, notify, setManualCopy),
-    [notify],
+    (clip: Clip) => {
+      const currentClip = state.clips.find(candidate => candidate.slug === clip.slug) ?? clip;
+      void copyShareLink(currentClip, notify, setManualCopy);
+    },
+    [notify, state.clips],
   );
 
   const reveal = useCallback(

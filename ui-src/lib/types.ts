@@ -135,6 +135,7 @@ export type WsMessage =
   | ({type: 'status'} & Partial<Status>)
   | {type: 'tunnel_url'; url: string}
   | {type: 'tunnel_error'; error?: string}
+  | {type: 'share_links_changed'; links: Record<string, string>; share_is_public: boolean}
   | {type: 'session_start'}
   | {type: 'session_stop'}
   | {type: 'session_highlight'; time?: number}

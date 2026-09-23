@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import shutil
 import signal
@@ -1439,6 +1440,24 @@ class GSRStartFallbackTests(unittest.IsolatedAsyncioTestCase):
         # Nothing was forced, so there is no codec to avoid and no retry.
         self.assertEqual(attempts, [(False, None), (True, None)])
 
+    async def test_no_hardware_codec_error_reaches_cpu_fallback(self) -> None:
+        recorder = self._recorder(encoder="auto")
+        attempts: list = []
+
+        async def fail_gpu_then_start_cpu(cpu_encoder: bool, avoid_codec=None):
+            attempts.append((cpu_encoder, avoid_codec))
+            if cpu_encoder:
+                return None
+            return (
+                "gsr error: no video encoder was specified and neither h264, "
+                "hevc nor av1 are supported on your system"
+            )
+
+        await self._run(recorder, fail_gpu_then_start_cpu, frozenset({"h264_software", "vp9"}))
+
+        self.assertEqual(attempts, [(False, None), (True, None)])
+        self.assertTrue(recorder.cpu_fallback)
+
     async def test_a_healthy_start_tries_once(self) -> None:
         recorder = self._recorder()
         attempts: list = []
@@ -1760,12 +1779,48 @@ class RecorderAudioCommandTests(unittest.TestCase):
         self.assertEqual(
             audio_values,
             [
-                "default_output|app:Discord|default_input",
+                "default_output|default_input",
                 "default_output",
                 "app:Discord",
                 "default_input",
             ],
         )
+
+    def test_mix_first_does_not_put_app_and_inverse_app_in_one_gsr_track(self) -> None:
+        from vice.recorder import _gsr_audio_args
+
+        rc = RecordingConfig(
+            capture_audio=True,
+            audio_tracks=["default_output", "app:Discord", "app-inverse:Discord"],
+            audio_tracks_mix_first=True,
+        )
+
+        self.assertEqual(
+            _gsr_audio_args(rc),
+            [
+                "-a", "default_output",
+                "-a", "default_output",
+                "-a", "app:Discord",
+                "-a", "app-inverse:Discord",
+            ],
+        )
+
+    def test_mix_first_keeps_app_directions_separate_without_monitor(self) -> None:
+        from vice.recorder import _gsr_audio_args
+
+        rc = RecordingConfig(
+            capture_audio=True,
+            audio_tracks=["app:Discord", "app-inverse:Discord", "default_input"],
+            audio_tracks_mix_first=True,
+        )
+
+        with self.assertLogs("vice.recorder", level="WARNING") as logs:
+            args = _gsr_audio_args(rc)
+        self.assertEqual(
+            args,
+            ["-a", "app:Discord", "-a", "app-inverse:Discord", "-a", "default_input"],
+        )
+        self.assertIn("Cannot create a combined audio track", "\n".join(logs.output))
 
     def test_gsr_build_cmd_mix_first_skipped_for_single_track(self) -> None:
         recorder = GSRRecorder(
@@ -2733,6 +2788,9 @@ class VolumeBalanceTests(unittest.IsolatedAsyncioTestCase):
             "gsr error: Could not open video codec: Function not implemented"
         ))
         self.assertTrue(_looks_like_encoder_failure("failed to load libnvidia-encode.so"))
+        self.assertTrue(_looks_like_encoder_failure(
+            "gsr error: no video encoder was specified and neither h264, hevc nor av1 are supported"
+        ))
         # A bad monitor name is not worth retrying on the CPU.
         self.assertFalse(_looks_like_encoder_failure(
             "gsr error: monitor DP-9 not found"
@@ -3238,6 +3296,48 @@ class ProbeFailureReasonTests(unittest.IsolatedAsyncioTestCase):
         junk = self.dir / "junk2.mp4"
         junk.write_bytes(os.urandom(2048))
         self.assertIsNone(await media_mod.probe_media(junk))
+
+    def test_zero_duration_mp4_can_use_video_samples(self) -> None:
+        stream = {
+            "nb_frames": "3641",
+            "avg_frame_rate": "728200000/12136677",
+        }
+        self.assertAlmostEqual(
+            media_mod._duration_from_video_samples(stream),
+            60.6834,
+            places=3,
+        )
+        self.assertEqual(
+            media_mod._duration_from_video_samples({"nb_frames": "0", "avg_frame_rate": "60/1"}),
+            0.0,
+        )
+
+    async def test_probe_uses_samples_when_mp4_duration_fields_are_zero(self) -> None:
+        payload = {
+            "format": {"duration": "N/A"},
+            "streams": [{
+                "codec_type": "video",
+                "width": 1920,
+                "height": 1080,
+                "codec_name": "h264",
+                "duration": "0",
+                "nb_frames": "3641",
+                "avg_frame_rate": "728200000/12136677",
+            }],
+        }
+        process = mock.Mock(returncode=0)
+        process.communicate = mock.AsyncMock(
+            return_value=(json.dumps(payload).encode(), b"")
+        )
+        with mock.patch.object(
+            media_mod.asyncio,
+            "create_subprocess_exec",
+            new=mock.AsyncMock(return_value=process),
+        ):
+            meta, why = await media_mod.probe_media_detailed(self.dir / "gsr.mp4")
+        self.assertEqual(why, "")
+        self.assertIsNotNone(meta)
+        self.assertAlmostEqual(meta["duration"], 60.6834, places=3)
 
     async def test_failure_is_logged_at_warning_with_the_file_name(self) -> None:
         junk = self.dir / "broken.mp4"
