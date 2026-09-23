@@ -17,6 +17,7 @@ export interface Clip {
   width: number | null;
   height: number | null;
   vcodec: string | null;
+  audio_tracks?: Array<{index: number; title: string; language: string; channels: number}>;
   /** Set when ffprobe could not read the file. The clip is left on disk. */
   unreadable: boolean;
   unreadable_reason: string;
@@ -88,6 +89,8 @@ export interface Status {
   recorder_error: string | null;
   cpu_fallback: boolean;
   codec_fallback: boolean;
+  /** Where clips land. Absent when the drive could not be measured. */
+  disk?: {free: number; total: number} | null;
   update?: UpdateInfo | null;
 }
 

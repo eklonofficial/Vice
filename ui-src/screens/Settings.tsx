@@ -494,6 +494,9 @@ export function Settings() {
                       ['hevc_vaapi', t('settings.encoderHevcVaapi')],
                       ['av1_nvenc', t('settings.encoderAv1Nvenc')],
                       ['av1_vaapi', t('settings.encoderAv1Vaapi')],
+                      ['h264_vulkan', t('settings.encoderH264Vulkan')],
+                      ['hevc_vulkan', t('settings.encoderHevcVulkan')],
+                      ['av1_vulkan', t('settings.encoderAv1Vulkan')],
                       ['libx264', t('settings.encoderX264')],
                       ['libx265', t('settings.encoderX265')],
                     ]

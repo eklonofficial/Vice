@@ -59,7 +59,9 @@ export function ContextMenu({
 
   useEffect(() => {
     const dismiss = (e: Event) => {
-      if (e.type === 'pointerdown' && ref.current?.contains(e.target as Node)) return;
+      if ((e.type === 'pointerdown' || e.type === 'scroll') && e.target instanceof Node && ref.current?.contains(e.target)) {
+        return;
+      }
       onClose();
     };
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();

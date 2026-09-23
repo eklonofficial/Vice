@@ -113,7 +113,7 @@ export interface EditorEngine {
   addTrack: (type: 'video' | 'audio') => void;
   reset: () => void;
   select: (id: string | null) => void;
-  inspectorChange: (field: string, value: string | number) => void;
+  inspectorChange: (field: string, value: string | number | boolean) => void;
   end: () => number;
 }
 
@@ -136,6 +136,7 @@ export function createEditorEngine(deps: EditorDeps): EditorEngine {
   let mounted = false;
   let box: EditorContainers | null = null;
   let preparingNow = false;
+  let audioWaiting = false;
   let stageEmpty = true;
 
   let raf: number | null = null;
@@ -214,7 +215,7 @@ export function createEditorEngine(deps: EditorDeps): EditorEngine {
       pps,
       selected: it,
       canSplit,
-      canDetach: Boolean(it && it.kind === 'clip' && !it.muted),
+      canDetach: Boolean(it && it.kind === 'clip' && !it.muted && clipOf(it)?.audio_tracks?.length),
       canDuplicate: Boolean(it),
       canDelete: Boolean(it),
       canUndo: undoStack.length > 0,
@@ -459,24 +460,26 @@ export function createEditorEngine(deps: EditorDeps): EditorEngine {
   function detachAudio() {
     const it = selItem();
     if (!it || it.kind !== 'clip' || it.muted) return;
-    if (!clipOf(it)) return;
+    const streams = clipOf(it)?.audio_tracks;
+    if (!streams?.length) return;
     begin();
-    let a = project!.tracks.find(t => t.type === 'audio');
-    if (!a) {
-      a = {id: uid(), type: 'audio', label: 'A1'};
-      project!.tracks.push(a);
-    }
     it.muted = true;
-    const audio = insert({
-      id: uid(),
-      kind: 'audio',
-      trackId: a.id,
-      clipId: it.clipId,
-      start: it.start,
-      dur: it.dur,
-      offset: it.offset || 0,
-    });
-    sel = audio.id;
+    let first: EdItem | null = null;
+    for (const stream of streams) {
+      // Keep detached streams aligned even when an existing lane is occupied.
+      let lane = project!.tracks.find(t => t.type === 'audio' && !project!.items.some(
+        other => other.trackId === t.id && other.start < it.start + it.dur &&
+          other.start + other.dur > it.start));
+      if (!lane) {
+        lane = {id: uid(), type: 'audio', label: `A${project!.tracks.filter(t => t.type === 'audio').length + 1}`};
+        project!.tracks.push(lane);
+      }
+      const audio = insert({id: uid(), kind: 'audio', trackId: lane.id,
+        clipId: it.clipId, start: it.start, dur: it.dur, offset: it.offset || 0,
+        audioStream: stream.index, volume: 1, muted: stream.index !== 0});
+      first ??= audio;
+    }
+    sel = first!.id;
     commit();
   }
 
@@ -830,7 +833,7 @@ export function createEditorEngine(deps: EditorDeps): EditorEngine {
     });
 
     const desired = (it.offset || 0) + (t - it.start);
-    if (playing) {
+    if (playing && !audioWaiting) {
       cur._warmUntil = 0;
       cur.muted = Boolean(it.muted);
       if (cur.paused) void cur.play().catch(() => {});
@@ -916,38 +919,52 @@ export function createEditorEngine(deps: EditorDeps): EditorEngine {
       sourceDur(prev) - 0.05,
     );
     seekVideo(el, pd, playTol());
-    if (playing && el.paused) void el.play().catch(() => {});
-    else if (!playing && !el.paused) el.pause();
+    if (playing && !audioWaiting && el.paused) void el.play().catch(() => {});
+    else if ((!playing || audioWaiting) && !el.paused) el.pause();
   }
 
   // ── audio items ─────────────────────────────────────────────────
   function syncAudio(t: number) {
-    const audioTracks = project!.tracks.filter(tr => tr.type === 'audio').map(tr => tr.id);
     const active = new Set<string>();
+    const audible: HTMLAudioElement[] = [];
     project!.items.forEach(it => {
-      if (it.kind !== 'audio' || !audioTracks.includes(it.trackId)) return;
+      if (it.kind !== 'audio' || it.muted || (it.volume ?? 1) === 0) return;
       if (t < it.start || t >= it.start + it.dur || missing.has(it.clipId!)) return;
-      active.add(it.id);
-      let a = audioPool[it.id];
       const clip = clipOf(it);
       if (!clip) return;
+      active.add(it.id);
+      let a = audioPool[it.id];
       if (!a) {
         a = new Audio();
         a.preload = 'auto';
+        a.addEventListener('loadeddata', () => {
+          if (mounted && !playing) renderPreviewFrame(false);
+        });
+        a.addEventListener('error', () => {
+          if (!a.getAttribute('src') || !mounted) return;
+          setPlaying(false);
+          deps.notify(translate('editor.audioPreviewFailed'), 'error');
+        });
         audioPool[it.id] = a;
       }
-      const url = playbackUrl(clip);
-      if (!a.src || !a.src.endsWith(url.slice(-40))) a.src = url;
-      const desired = (it.offset || 0) + (t - it.start);
-      seekVideo(a, desired, playTol());
-      if (playing && a.paused) void a.play().catch(() => {});
-      else if (!playing && !a.paused) a.pause();
+      const revision = new URL(clip.video_url, window.location.href).search;
+      const url = `/api/clips/${encodeURIComponent(clip.slug)}/audio/${it.audioStream ?? 0}${revision}`;
+      if (a.getAttribute('src') !== url) a.src = url;
+      a.volume = Math.max(0, Math.min(1, it.volume ?? 1));
+      seekVideo(a, (it.offset || 0) + (t - it.start), playTol());
+      audible.push(a);
+    });
+    audioWaiting = audible.some(a => a.readyState < 2 && !a.error);
+    audible.forEach(a => {
+      if (playing && !audioWaiting && a.paused) void a.play().catch(() => {});
+      else if ((!playing || audioWaiting) && !a.paused) a.pause();
     });
     Object.keys(audioPool).forEach(id => {
       if (!active.has(id)) {
         audioPool[id].pause();
         if (!item(id)) {
-          audioPool[id].src = '';
+          audioPool[id].removeAttribute('src');
+          audioPool[id].load();
           delete audioPool[id];
         }
       }
@@ -1065,9 +1082,18 @@ export function createEditorEngine(deps: EditorDeps): EditorEngine {
     el.addEventListener('pointerup', up);
   }
 
-  function inspectorChange(field: string, value: string | number) {
+  function inspectorChange(field: string, value: string | number | boolean) {
     const it = selItem();
-    if (!it || it.kind !== 'text') return;
+    if (!it) return;
+    if (it.kind === 'audio' && ['audioStream', 'volume', 'muted'].includes(field)) {
+      begin();
+      if (field === 'muted') it.muted = Boolean(value);
+      else if (field === 'audioStream') it.audioStream = Number(value);
+      else it.volume = Math.max(0, Math.min(1, Number(value)));
+      commit();
+      return;
+    }
+    if (it.kind !== 'text') return;
     begin();
     (it as unknown as Record<string, unknown>)[field] =
       field === 'size' ? parseInt(String(value), 10) : value;
@@ -1122,6 +1148,14 @@ export function createEditorEngine(deps: EditorDeps): EditorEngine {
       emit();
       return;
     }
+    if (audioWaiting) {
+      lastTick = now;
+      renderPreviewFrame(false);
+      if (audioWaiting) {
+        raf = requestAnimationFrame(tick);
+        return;
+      }
+    }
     const total = end();
     const dt = Math.min(0.25, (now - lastTick) / 1000);
     lastTick = now;
@@ -1157,6 +1191,7 @@ export function createEditorEngine(deps: EditorDeps): EditorEngine {
     initStage();
     syncPool();
     const t = playhead;
+    syncAudio(t);
     const vts = videoTracks();
     // Tracks are listed top first, so the first active one is what the viewer
     // is actually looking at. The clock has to follow that, not a lower track
@@ -1170,12 +1205,11 @@ export function createEditorEngine(deps: EditorDeps): EditorEngine {
     master = m;
     states.forEach(st => syncOutgoing(st, t));
     applyTransitionStyles(states, t);
-    syncAudio(t);
     renderTexts(t);
 
     const anyVideo = states.some(st => st);
     const nextEmpty = !anyVideo;
-    const nextPreparing = states.some(st => {
+    const nextPreparing = audioWaiting || states.some(st => {
       if (!st) return false;
       const c = clipOf(st.it);
       return Boolean(c && clipNeedsProxy(c) && st.cur.readyState < 2);
@@ -1242,6 +1276,8 @@ export function createEditorEngine(deps: EditorDeps): EditorEngine {
     const name = c ? clipTitle(c) : it.clipId || '';
 
     if (it.kind === 'audio') {
+      const stream = c?.audio_tracks?.find(track => track.index === (it.audioStream ?? 0));
+      const title = stream?.title || translate('editor.recordedTrack', {number: (it.audioStream ?? 0) + 1});
       const bars = waveBars(waveSeed(it.clipId || ''), Math.max(16, Math.round(it.dur * 3)));
       const rects = bars
         .map(
@@ -1249,9 +1285,9 @@ export function createEditorEngine(deps: EditorDeps): EditorEngine {
             `<rect x="${i * 3}" y="${(10 - b * 8).toFixed(2)}" width="2" height="${(b * 16).toFixed(2)}" rx="1" fill="currentColor"/>`,
         )
         .join('');
-      return `<div class="ed-item ed-item-audio${selCls}${miss}" ${base}>
+      return `<div class="ed-item ed-item-audio${selCls}${miss}" data-muted="${Boolean(it.muted)}" ${base}>
       <svg class="ed-wave" viewBox="0 0 ${bars.length * 3} 20" preserveAspectRatio="none">${rects}</svg>
-      <span class="ed-item-name">${escHtml(name)}</span>
+      <span class="ed-item-name">${escHtml(name)} · ${escHtml(title)}</span>
       <div class="ed-handle l" data-handle="l"><div class="ed-handle-bar"></div></div>
       <div class="ed-handle r" data-handle="r"><div class="ed-handle-bar"></div></div>
     </div>`;
@@ -1736,7 +1772,7 @@ export function createEditorEngine(deps: EditorDeps): EditorEngine {
     const canSplit = playhead > it.start + 0.2 && playhead < it.start + it.dur - 0.2;
     menu(e.clientX, e.clientY, [
       {label: translate('editor.menuSplit'), kbd: 'S', fn: split, dis: !canSplit},
-      {label: translate('editor.menuDetach'), fn: detachAudio, dis: it.kind !== 'clip' || Boolean(it.muted)},
+      {label: translate('editor.menuDetach'), fn: detachAudio, dis: !snapshot().canDetach},
       '-',
       {label: translate('editor.menuCopy'), kbd: 'Ctrl C', fn: copySel},
       {label: translate('editor.menuPaste'), kbd: 'Ctrl V', fn: paste, dis: !clipboard},

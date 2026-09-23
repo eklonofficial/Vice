@@ -18,6 +18,7 @@ import {accentVars, resolveAccent} from './theme/viceTheme';
 import {StoreProvider, useStore} from './state/store';
 import {PlaybackProvider} from './state/playback';
 import {AppFrame} from './components/AppFrame';
+import {OverlayRoot} from './components/OverlayPortal';
 import {Home} from './screens/Home';
 import {Clips} from './screens/Clips';
 import {Images} from './screens/Images';
@@ -62,9 +63,11 @@ function App() {
       <div className="vice-ambient" style={accentVars(ramp)} aria-hidden="true" />
       <PlaybackProvider>
         <div className="vice-app" style={accentVars(ramp)}>
+          <OverlayRoot>
           <AppFrame>
             <Screen view={view} />
           </AppFrame>
+          </OverlayRoot>
         </div>
       </PlaybackProvider>
     </Theme>

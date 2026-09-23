@@ -1053,3 +1053,343 @@ kbd {
   flex-direction: column;
   gap: var(--spacing-3);
 }
+
+/* Only wide Home owns two panes. Other screens retain the frame scrollbar. */
+.home-images { display: none; }
+.frame-content[data-home-wide] { overflow: hidden; }
+/* The native quit row floats over the bottom edge; the panel stops above it. */
+.frame-content[data-home-wide][data-native] { padding-bottom: 64px; }
+.frame-content[data-home-wide] > .home-layout {
+  flex: 1;
+  min-height: 0;
+}
+.frame-content[data-home-wide] > .banners { flex-shrink: 0; }
+.frame-content[data-home-wide] .home-columns {
+  display: grid;
+  /* Capped so an ultrawide window does not turn the side panel into the
+     main event. Past the rail breakpoint the spare width goes to the rail. */
+  grid-template-columns: 1180px minmax(0, 1300px);
+  gap: var(--spacing-6);
+  height: 100%;
+  min-height: 0;
+}
+.frame-content[data-home-rail] .home-columns {
+  grid-template-columns: 1180px minmax(760px, 1300px) minmax(380px, 560px);
+  /* Past both caps, what is left is split evenly on either side rather than
+     collecting as an unexplained strip down the right. */
+  justify-content: center;
+}
+.frame-content[data-home-wide] .home {
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-width: none;
+  min-height: 0;
+  padding-bottom: var(--spacing-4);
+}
+.frame-content[data-home-wide] .home::-webkit-scrollbar { display: none; }
+.frame-content[data-home-wide] .home-images {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--spacing-5);
+  border-radius: var(--radius-xl);
+  background: var(--raised);
+  overflow: hidden;
+}
+.home-images-head {
+  display: flex;
+  flex: none;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--spacing-4);
+  margin-bottom: var(--spacing-4);
+}
+.home-images-head h2 {
+  margin: 0 0 var(--spacing-1);
+  font-size: var(--text-heading-2-size);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+.home-images-head p { margin: 0; color: var(--color-text-secondary); }
+.home-images-head .section-link { flex: none; }
+.home-images-grid {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  gap: var(--spacing-3);
+  align-content: start;
+}
+.image-card {
+  position: relative;
+  min-width: 0;
+  align-self: start;
+  aspect-ratio: 16 / 9;
+  width: 100%;
+  border-radius: var(--radius-container);
+  isolation: isolate;
+}
+.image-card .clip-thumb { height: 100%; width: 100%; aspect-ratio: auto; }
+.image-card .clip-thumb-empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  background: var(--control);
+  color: var(--on-control);
+}
+.image-card .clip-body {
+  position: absolute;
+  inset: auto 0 0;
+  padding: var(--spacing-3);
+  /* Over a picture, like the viewer's own captions: no theme role is legible on every image. */
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.88));
+  color: #fff;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+.image-card:is(:hover, :focus-within, [data-renaming]) .clip-body {
+  opacity: 1;
+  pointer-events: auto;
+}
+.image-card :is(.clip-name, .clip-meta, .clip-game) { color: inherit; }
+.image-card .clip-meta { opacity: 0.85; }
+.image-card .clip-game { display: none; }
+.image-card .clip-icon-btn {
+  color: #fff;
+  background: rgba(0, 0, 0, 0.62);
+  width: 32px;
+  height: 32px;
+}
+.image-card .clip-icon-btn:hover { background: var(--control); color: var(--on-control); }
+.image-card .clip-thumb:focus-visible {
+  outline: 3px solid var(--color-accent);
+  outline-offset: -3px;
+}
+.home-images-placeholder {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  text-align: center;
+  padding: var(--spacing-4);
+  border-radius: var(--radius-xl);
+  background: var(--tertiary);
+  color: var(--on-tertiary);
+  overflow: hidden;
+}
+.home-images-placeholder h3 { margin: 0 0 var(--spacing-2); font-size: var(--text-heading-2-size); }
+.home-images-placeholder p { margin: 0; max-width: 32ch; opacity: 0.85; }
+.home-images-placeholder .btn { margin-top: var(--spacing-3); }
+.home-images-art { width: min(80%, 280px); min-height: 0; flex: 0 1 180px; }
+.image-art-capsule { fill: var(--vice-tertiary-container); }
+.image-art-burst { fill: var(--color-accent); }
+.image-art-picture { fill: var(--control); }
+.image-art-ink { fill: var(--on-control); }
+.home-images-placeholder[data-compact] { padding: var(--spacing-3); }
+.home-images-placeholder[data-compact] .home-images-art { display: none; }
+.home-images-placeholder[data-compact] h3 { font-size: var(--text-body-size); }
+@media (hover: none) {
+  .image-card .clip-body { opacity: 1; pointer-events: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .image-card .clip-body { transition: none; }
+}
+
+/* In the Home panel a row is exactly as tall as the fit chose, so the last row
+   meets the bottom edge; the library keeps plain 16:9. */
+.home-images-grid .image-card {
+  aspect-ratio: auto;
+  height: 100%;
+}
+
+/* ── quick settings rail ─────────────────────────────────────────────
+   The same controls as the column's tiles, rearranged for a tall narrow
+   space: one large save action, the two capture switches as a square pair,
+   and the link and navigation as M3 connected groups, where neighbours share
+   small inner corners and a selected member rounds off into a pill. */
+
+.home-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+  min-height: 0;
+  padding: var(--spacing-5);
+  border-radius: var(--radius-xl);
+  background: var(--raised);
+  /* As tall as its contents: M3 warns against stretching content to fill a
+     large window, and a save button the height of the screen is that. */
+  align-self: start;
+  max-height: 100%;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.home-rail::-webkit-scrollbar { display: none; }
+.home-rail h2 {
+  margin: 0 0 var(--spacing-2);
+  font-size: var(--text-heading-2-size);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+
+.rail-save {
+  flex: none;
+  min-height: 220px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: 1fr auto;
+  align-items: end;
+  gap: var(--spacing-3);
+  padding: var(--spacing-5);
+  border: none;
+  border-radius: var(--radius-xxl);
+  background: var(--tertiary);
+  color: var(--on-tertiary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-radius var(--duration-medium) var(--vice-ease-spring);
+}
+.rail-save:hover { background: color-mix(in srgb, var(--on-tertiary) 8%, var(--tertiary)); }
+.rail-save:active { border-radius: var(--radius-container); }
+.rail-save:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
+/* Sized like M3's large FAB, 96dp with a 36dp icon, rather than scaled to
+   whatever height is going spare. */
+.rail-save-burst {
+  grid-column: 1 / -1;
+  place-self: center;
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 104px;
+  aspect-ratio: 1;
+  color: var(--color-on-accent);
+}
+.rail-save-burst > svg:first-child {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  fill: var(--color-accent);
+  transition: transform var(--duration-medium) var(--vice-ease-spring);
+}
+/* One lobe is 30 degrees, so hovering turns the shape by exactly one and it
+   comes to rest looking the same, just moved. */
+.rail-save:hover .rail-save-burst > svg:first-child { transform: rotate(30deg); }
+.rail-save:active .rail-save-burst > svg:first-child { transform: rotate(60deg) scale(0.9); }
+.rail-save-burst > svg + svg { position: relative; }
+.rail-save-label {
+  font-size: var(--text-heading-1-size);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+}
+.rail-save kbd {
+  background: color-mix(in srgb, var(--on-tertiary) 14%, transparent);
+  color: var(--on-tertiary);
+}
+
+/* A short window would otherwise scroll the rail to reach Settings. */
+@media (max-height: 880px) {
+  .home-rail { gap: var(--spacing-2); padding: var(--spacing-4); }
+  .rail-save { min-height: 132px; }
+  .rail-save-burst { width: 72px; }
+  .rail-pair .tile { min-height: 96px; }
+}
+
+.rail-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-3);
+}
+.rail-pair .tile {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-4);
+  min-height: 128px;
+  padding: var(--spacing-4);
+}
+
+.rail-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rail-group > .tile { border-radius: var(--radius-inner); }
+.rail-group > .tile:first-child {
+  border-top-left-radius: var(--radius-xl);
+  border-top-right-radius: var(--radius-xl);
+}
+.rail-group > .tile:last-child {
+  border-bottom-left-radius: var(--radius-xl);
+  border-bottom-right-radius: var(--radius-xl);
+}
+.rail-group > .tile:active:not(:disabled) { border-radius: var(--radius-inner); }
+
+.rail-nav { flex-direction: row; }
+.rail-nav > .tile { flex: 1; }
+.rail-nav > .tile:first-child {
+  border-radius: var(--radius-full) var(--radius-inner) var(--radius-inner) var(--radius-full);
+}
+.rail-nav > .tile:last-child {
+  border-radius: var(--radius-inner) var(--radius-full) var(--radius-full) var(--radius-inner);
+}
+
+/* Storage readout under the quick controls. The bar is the whole drive: the
+   filled part is what is used, and the brighter part inside it is Vice's
+   share, so "my clips are the problem" and "the disk is full" read apart. */
+.rail-storage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  margin-top: var(--spacing-2);
+  padding: var(--spacing-4);
+  border-radius: var(--radius-xl);
+  background: var(--recessed);
+}
+.rail-meter {
+  position: relative;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--control);
+  overflow: hidden;
+}
+.rail-meter-fill,
+.rail-meter-vice {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: var(--radius-full);
+}
+.rail-meter-fill { background: var(--on-control); opacity: 0.45; }
+.rail-meter-vice { background: var(--color-accent); }
+.rail-stats {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+}
+.rail-stats > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+}
+.rail-stats dt {
+  color: var(--color-text-secondary);
+  font-size: var(--text-supporting-size);
+}
+.rail-stats dd {
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}

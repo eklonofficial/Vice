@@ -1079,18 +1079,34 @@ def _run_webview(url: str) -> None:
             exc,
         )
 
+    _start_webview_with_fallback(webview, gui, _enable_gtk_workarounds)
+    log.info("Window closed")
+
+
+def _start_webview_with_fallback(webview, gui, enable_gtk_workarounds) -> None:
+    """Start pywebview, recovering from QtWebEngine startup failures.
+
+    QtWebEngine reads its rendering flags during process initialization. A
+    failed GPU setup therefore cannot be repaired by changing the environment
+    in the same process. Relaunch once with software compositing before trying
+    GTK, which keeps NVIDIA and Wayland systems usable when Qt's GPU path dies
+    before it can create a window (issue #203).
+    """
     try:
         webview.start(gui=gui, debug=False, private_mode=False)
     except Exception:
         log.exception("webview.start raised, backend=%s", gui)
         if gui != "qt":
             raise
-        # Qt died before opening a window, retry once on GTK/WebKit2GTK
-        # so the user still gets a native window instead of nothing.
+        if os.environ.get("VICE_WEBVIEW_SOFTWARE") != "1":
+            log.warning("QtWebEngine failed during startup, relaunching with software compositing")
+            _relaunch_with_software_compositing()
+            return
+        # Software compositing already failed in the relaunched process. GTK
+        # is the last native backend available before the browser fallback.
         log.warning("Retrying with the GTK WebKit backend")
-        _enable_gtk_workarounds()
+        enable_gtk_workarounds()
         webview.start(gui=None, debug=False, private_mode=False)
-    log.info("Window closed")
 
 
 if __name__ == "__main__":

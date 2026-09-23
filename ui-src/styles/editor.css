@@ -1157,3 +1157,13 @@
     display: none;
   }
 }
+
+.ed-audio-inspector { gap: var(--spacing-3); }
+.ed-audio-volume, .ed-audio-mute {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+.ed-audio-volume input { flex: 1; min-width: 0; }
+.ed-audio-inspector p { margin: 0; font-size: 12px; }
+.ed-item-audio[data-muted="true"] { opacity: 0.55; }

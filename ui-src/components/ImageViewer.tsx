@@ -6,12 +6,29 @@ import {useExitTransition} from '../lib/exit';
 import {formatBytes} from '../lib/format';
 import {DEFAULT_MARK_COLOR, MARK_COLORS} from '../lib/palette';
 import {imageTitle, type Image} from '../lib/types';
-import {IconClose} from './Icons';
+import {IconClose, IconExpand} from './Icons';
 import {InlineRename} from './InlineRename';
 import {t} from '../lib/i18n';
 
 /** Pen width in image pixels, so a stroke is the same weight on any monitor. */
 const PEN_WIDTH = 6;
+
+/** The video viewer's expand timing, so both viewers grow the same way. */
+const MORPH = {duration: 280, easing: 'cubic-bezier(0.2, 0, 0, 1)'};
+
+interface MorphFrom {
+  dialog: DOMRect;
+  dialogRadius: string;
+  stage: DOMRect;
+  stageRadius: string;
+  frame: DOMRect;
+}
+
+interface MorphRun {
+  scrim: HTMLElement;
+  ghosts: HTMLElement[];
+  animations: Animation[];
+}
 
 interface Stroke {
   color: string;
@@ -25,6 +42,7 @@ export interface ImageViewerProps {
   images: Image[];
   onSelect: (slug: string) => void;
   onClose: () => void;
+  shortcutsBlocked?: boolean;
   onRename: (image: Image, name: string) => void;
   onCopy: (image: Image) => void;
   onReveal: (image: Image) => void;
@@ -52,16 +70,177 @@ export function ImageViewer(props: ImageViewerProps) {
   const imgRef = useRef<HTMLImageElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef<Stroke | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const expandRef = useRef<HTMLButtonElement>(null);
+  const frameRef = useRef<HTMLDivElement>(null);
+  const morphFrom = useRef<MorphFrom | null>(null);
+  const expandedRef = useRef(false);
+  const morphRun = useRef<MorphRun | null>(null);
 
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [color, setColor] = useState(DEFAULT_MARK_COLOR);
   const [pen, setPen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [renamingTitle, setRenamingTitle] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   const index = image ? images.findIndex(i => i.slug === image.slug) : -1;
   const open = props.image !== null;
   const dirty = strokes.length > 0;
+
+  /*
+   * The enlarged picture's box is written straight onto the element rather than
+   * derived in CSS. Container units resolve to zero for the first frame after
+   * the stage becomes a container, which collapsed the picture to a point and,
+   * because the morph measures that box, skipped the animation with it.
+   */
+  const sizeFrame = useCallback(() => {
+    const stage = stageRef.current;
+    const frame = frameRef.current;
+    if (!stage || !frame) return;
+    if (!expandedRef.current) {
+      frame.style.width = '';
+      frame.style.height = '';
+      return;
+    }
+    const natural = imgRef.current;
+    const width = natural?.naturalWidth || image?.width || 0;
+    const height = natural?.naturalHeight || image?.height || 0;
+    const box = stage.getBoundingClientRect();
+    if (!width || !height || !box.width || !box.height) return;
+    const scale = Math.min(box.width / width, box.height / height);
+    frame.style.width = `${width * scale}px`;
+    frame.style.height = `${height * scale}px`;
+  }, [image?.width, image?.height]);
+
+  useLayoutEffect(() => {
+    const stage = stageRef.current;
+    if (!stage || !open) return;
+    const observer = new ResizeObserver(sizeFrame);
+    observer.observe(stage);
+    return () => observer.disconnect();
+  }, [open, sizeFrame]);
+
+  const stopMorph = useCallback(() => {
+    const run = morphRun.current;
+    morphRun.current = null;
+    if (!run) return;
+    for (const animation of run.animations) animation.cancel();
+    for (const ghost of run.ghosts) ghost.remove();
+    delete run.scrim.dataset.morphing;
+  }, []);
+
+  useEffect(() => stopMorph, [stopMorph]);
+
+  // Read while everything is at rest, or mid-morph from the ghosts, so a
+  // second toggle reverses from where the surface actually is.
+  const toggleExpanded = useCallback(() => {
+    const dialog = dialogRef.current;
+    const stage = stageRef.current;
+    const frame = frameRef.current;
+    const [surfaceGhost, stageGhost] = morphRun.current?.ghosts ?? [];
+    const surface = surfaceGhost ?? dialog;
+    const backdrop = stageGhost ?? stage;
+    morphFrom.current = surface && backdrop && frame ? {
+      dialog: surface.getBoundingClientRect(),
+      dialogRadius: getComputedStyle(surface).borderTopLeftRadius,
+      stage: backdrop.getBoundingClientRect(),
+      stageRadius: getComputedStyle(backdrop).borderTopLeftRadius,
+      frame: frame.getBoundingClientRect(),
+    } : null;
+    setExpanded(value => !value);
+  }, []);
+
+  /*
+   * A container transform rather than the video viewer's single FLIP: that one
+   * moves only the stage, but here the header and tools come along, and scaling
+   * them would stretch the text. So the two surfaces are stood in for by plain
+   * boxes that animate their real size, the picture and its ink move as one
+   * unit so strokes stay registered, and the controls fade in once most of the
+   * distance is covered.
+   */
+  useLayoutEffect(() => {
+    const from = morphFrom.current;
+    morphFrom.current = null;
+    expandedRef.current = expanded;
+    sizeFrame();
+    stopMorph();
+    const dialog = dialogRef.current;
+    const stage = stageRef.current;
+    const frame = frameRef.current;
+    const scrim = dialog?.closest<HTMLElement>('.scrim');
+    const stack = dialog?.parentElement;
+    if (!from || !dialog || !stage || !frame || !scrim || !stack || typeof frame.animate !== 'function') return;
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+      || document.documentElement.classList.contains('perf-low')) return;
+
+    const to = frame.getBoundingClientRect();
+    if (!from.frame.width || !to.width) return;
+    const box = (rect: DOMRect, radius: string): Keyframe => ({
+      left: `${rect.left}px`, top: `${rect.top}px`,
+      width: `${rect.width}px`, height: `${rect.height}px`, borderRadius: radius,
+    });
+    const run: MorphRun = {scrim, ghosts: [], animations: []};
+    const ghost = (kind: string, a: DOMRect, ra: string, target: HTMLElement) => {
+      const element = document.createElement('div');
+      element.className = `image-morph image-morph-${kind}`;
+      element.setAttribute('aria-hidden', 'true');
+      scrim.insertBefore(element, stack);
+      run.ghosts.push(element);
+      const b = target.getBoundingClientRect();
+      run.animations.push(element.animate(
+        [box(a, ra), box(b, getComputedStyle(target).borderTopLeftRadius)], {...MORPH, fill: 'forwards'}));
+    };
+    ghost('surface', from.dialog, from.dialogRadius, dialog);
+    ghost('stage', from.stage, from.stageRadius, stage);
+    scrim.dataset.morphing = '';
+
+    // Growing, the real dialog already has its window-sized layout, so it is
+    // clipped to the surface or its header would sit out past the edges of a
+    // box still on its way there. Shrinking is left unclipped: the dialog is
+    // always inside the surface, and a clip would crop the picture on its way in.
+    if (expanded) {
+      const d = dialog.getBoundingClientRect();
+      const inset = (r: DOMRect, radius: string) => `inset(${r.top - d.top}px ${d.right - r.right}px `
+        + `${d.bottom - r.bottom}px ${r.left - d.left}px round ${radius})`;
+      run.animations.push(dialog.animate([
+        {clipPath: inset(from.dialog, from.dialogRadius)},
+        {clipPath: inset(d, getComputedStyle(dialog).borderTopLeftRadius)},
+      ], MORPH));
+    }
+
+    run.animations.push(frame.animate([
+      {transformOrigin: '0 0', transform: `translate(${from.frame.left - to.left}px, ${from.frame.top - to.top}px) `
+        + `scale(${from.frame.width / to.width}, ${from.frame.height / to.height})`},
+      {transformOrigin: '0 0', transform: 'none'},
+    ], MORPH));
+    // Shrinking, the controls are already where they end up, under a picture
+    // still larger than its stage, so they wait until it has nearly arrived.
+    const reveal = expanded ? 0.35 : 0.6;
+    for (const chrome of dialog.querySelectorAll<HTMLElement>(':scope > .viewer-head, :scope > .viewer-bottom')) {
+      run.animations.push(chrome.animate([{opacity: 0}, {opacity: 0, offset: reveal}, {opacity: 1}], MORPH));
+    }
+    morphRun.current = run;
+    void Promise.all(run.animations.map(animation => animation.finished)).then(
+      () => { if (morphRun.current === run) stopMorph(); },
+      () => undefined,
+    );
+  }, [expanded, sizeFrame, stopMorph]);
+
+  useEffect(() => {
+    if (!open) {
+      stopMorph();
+      setExpanded(false);
+      setRenamingTitle(false);
+      return;
+    }
+    const previous = document.activeElement as HTMLElement | null;
+    expandRef.current?.focus({preventScroll: true});
+    return () => {
+      if (previous?.isConnected) previous.focus({preventScroll: true});
+    };
+  }, [open, stopMorph]);
 
   // A different picture is a different drawing. Nothing is carried across.
   useEffect(() => {
@@ -87,11 +266,12 @@ export function ImageViewer(props: ImageViewerProps) {
     const w = img.naturalWidth || image?.width || 0;
     const h = img.naturalHeight || image?.height || 0;
     if (!w || !h) return;
+    sizeFrame();
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
     }
-  }, [image?.width, image?.height]);
+  }, [image?.width, image?.height, sizeFrame]);
 
   useLayoutEffect(sizeCanvas, [sizeCanvas, image?.slug]);
 
@@ -108,27 +288,45 @@ export function ImageViewer(props: ImageViewerProps) {
     for (const stroke of strokes) paintStroke(ctx, stroke);
   }, [strokes]);
 
-  useEscape(open, onClose);
+  useEscape(open && !props.shortcutsBlocked, useCallback(() => {
+    if (expanded) toggleExpanded();
+    else onClose();
+  }, [expanded, onClose, toggleExpanded]));
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || closing || props.shortcutsBlocked) return;
     const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement | null)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (e.defaultPrevented) return;
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      if (e.key === 'Tab') {
+        const controls = dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input, textarea, [tabindex="0"]');
+        const first = controls?.[0];
+        const last = controls?.[controls.length - 1];
+        if (e.shiftKey && target === first) { e.preventDefault(); last?.focus(); }
+        else if (!e.shiftKey && target === last) { e.preventDefault(); first?.focus(); }
+        return;
+      }
+      if (target?.closest('input, textarea, select') || target?.isContentEditable || e.repeat) return;
+      if (e.key.toLowerCase() === 'z' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        setStrokes(list => list.slice(0, -1));
+        return;
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
         step(-1);
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
         step(1);
-      } else if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) {
+      } else if (e.key.toLowerCase() === 'f') {
         e.preventDefault();
-        setStrokes(list => list.slice(0, -1));
+        toggleExpanded();
       }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [open, step]);
+  }, [open, closing, props.shortcutsBlocked, step, toggleExpanded]);
 
   if (!mounted || !image) return null;
 
@@ -211,14 +409,17 @@ export function ImageViewer(props: ImageViewerProps) {
     .filter(Boolean)
     .join(' · ');
 
+
   return (
     <div
-      className="scrim viewer-scrim"
+      className="scrim viewer-scrim image-viewer-scrim"
+      data-expanded={expanded || undefined}
       data-closing={closing || undefined}
       onMouseDown={e => e.target === e.currentTarget && onClose()}>
       <div className="viewer-stack">
         <div
           className="modal viewer image-viewer"
+          ref={dialogRef}
           data-closing={closing || undefined}
           role="dialog"
           aria-modal="true"
@@ -265,6 +466,16 @@ export function ImageViewer(props: ImageViewerProps) {
               <Chevron dir="right" />
             </button>
             <button
+              ref={expandRef}
+              type="button"
+              className="viewer-nav image-expand"
+              onClick={toggleExpanded}
+              aria-label={t(expanded ? 'viewer.shrink' : 'viewer.expand')}
+              title={t(expanded ? 'viewer.shrinkHint' : 'viewer.expandHint')}
+              aria-pressed={expanded}>
+              <IconExpand collapse={expanded} />
+            </button>
+            <button
               type="button"
               className="modal-close"
               onClick={onClose}
@@ -273,8 +484,9 @@ export function ImageViewer(props: ImageViewerProps) {
             </button>
           </header>
 
-          <div className="image-stage">
-            <div className="image-frame">
+          <div className="image-stage" ref={stageRef}
+            onDoubleClick={() => { if (!pen) toggleExpanded(); }}>
+            <div className="image-frame" ref={frameRef}>
               <img
                 ref={imgRef}
                 className="image-full"

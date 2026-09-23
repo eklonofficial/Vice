@@ -56,6 +56,13 @@
     "greetingAfternoon": "Good afternoon",
     "greetingEvening": "Good evening",
     "quickSettings": "Quick settings",
+    "storage": "Storage",
+    "diskFree": "Free space",
+    "diskLibrary": "Vice library",
+    "diskUnknown": "Not measured",
+    "lastClip": "Last clip",
+    "lastClipNever": "None yet",
+    "diskBar": "{used} of {total} used, {library} of it Vice",
     "microphone": "Microphone",
     "desktopAudio": "Desktop audio",
     "publicLink": "Public link",
@@ -330,6 +337,10 @@
     "emptySearch": "Nothing matches “{query}”.",
     "emptyLibrary": "No screenshots yet. Press {hotkey} to save what is on screen.",
     "emptyNoKey": "No screenshots yet. Set a screenshot key in Settings, or open a clip and save a frame from it.",
+    "captureMoment": "Keep a moment",
+    "roomForMore": "Room for your next moment",
+    "captureHint": "Press {hotkey} to save a screenshot.",
+    "captureNoKey": "Set a screenshot key in Settings, or save a frame from a clip.",
     "openTitle": "Open {name}",
     "open": "Open",
     "openExternally": "Open in image viewer",
@@ -353,7 +364,7 @@
     "errCanvas": "This window could not render the image",
     "prev": "Previous image",
     "next": "Next image",
-    "shortcuts": "Arrows step, Ctrl+Z undoes, Esc closes"
+    "shortcuts": "Arrows step, F fills the window, Ctrl+Z undoes, Esc closes"
   },
   "tutorial": {
     "pickColour": "Pick a colour",
@@ -601,7 +612,14 @@
       }
     },
     "exported": "Exported.",
-    "encodingProgress": "{percent}% encoding"
+    "encodingProgress": "{percent}% encoding",
+    "audioSource": "Recorded source",
+    "recordedTrack": "Track {number}",
+    "audioVolume": "Volume",
+    "audioMuted": "Muted",
+    "audioPreviewFailed": "Could not play this audio track. Try again or check the log.",
+    "detachedTracksHelp": "Each recorded source has its own lane. Only track 1 starts enabled, so a combined track is not mixed twice. Unmute the sources you want to hear.",
+    "preparingMedia": "Preparing preview"
   },
   "settings": {
     "title": "Settings",
@@ -645,7 +663,10 @@
     "containerMp4": "MP4 (best compatibility)",
     "containerMkv": "MKV (crash-safe)",
     "encoder": "Video encoder",
-    "encoderHelp": "GPU encoders are faster and use less CPU",
+    "encoderHelp": "GPU encoders are faster and use less CPU. Vulkan options require the gpu-screen-recorder backend.",
+    "encoderH264Vulkan": "H.264 (Vulkan, GSR)",
+    "encoderHevcVulkan": "HEVC (Vulkan, GSR)",
+    "encoderAv1Vulkan": "AV1 (Vulkan, GSR)",
     "encoderH264Nvenc": "NVIDIA H.264 (NVENC)",
     "encoderHevcNvenc": "NVIDIA H.265 (NVENC)",
     "encoderH264Vaapi": "AMD or Intel H.264 (VAAPI)",

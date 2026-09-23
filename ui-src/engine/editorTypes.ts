@@ -20,6 +20,8 @@ export interface EdItem {
   clipId?: string;
   offset?: number;
   muted?: boolean;
+  audioStream?: number;
+  volume?: number;
   trans?: EdTransition;
   text?: string;
   font?: string;

@@ -96,6 +96,7 @@ class RecordingConfig:
     # None = auto-detect from display. E.g. "1920x1080".
     resolution: Optional[str] = None
     # "auto" | "h264_nvenc" | "hevc_nvenc" | "av1_nvenc" | "h264_vaapi" | "hevc_vaapi" | "av1_vaapi" | "libx264" | "libx265" | "copy"
+    # GSR also accepts "h264_vulkan", "hevc_vulkan", and "av1_vulkan".
     encoder: str = "auto"
     # ffmpeg -crf equivalent; lower = better quality. Used only for libx264/libx265.
     crf: int = 23

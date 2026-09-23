@@ -162,6 +162,7 @@
   background: var(--color-background-popover);
   box-shadow: var(--shadow-high);
   animation: ctx-in var(--duration-fast) var(--ease-standard);
+  overscroll-behavior: contain;
 }
 
 @keyframes ctx-in {

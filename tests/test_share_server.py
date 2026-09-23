@@ -231,10 +231,15 @@ class ShareServerSecurityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(f'property="og:url"               content="{public_base}/c/test_clip"', html)
         self.assertIn(f'content="{public_base}/v/test_clip.mp4"', html)
         self.assertIn('property="og:video:type"        content="video/mp4"', html)
-        # twitter:player must be an embeddable HTML page, not a raw file;
-        # Discord renders no embed at all when the player card is unusable
-        # (issues #77, #100). Video embeds ride on OpenGraph alone.
-        self.assertNotIn("twitter:", html)
+        self.assertIn('<meta name="twitter:card"             content="player">', html)
+        self.assertIn(
+            f'<meta name="twitter:player"           content="{public_base}/v/test_clip.mp4">',
+            html,
+        )
+        self.assertIn(
+            f'<meta name="twitter:image"            content="{public_base}/t/test_clip">',
+            html,
+        )
 
     async def test_video_route_accepts_container_suffix(self) -> None:
         # Embed pages link /v/<slug>.mp4 so unfurlers see a file extension.

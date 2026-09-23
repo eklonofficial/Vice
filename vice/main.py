@@ -485,6 +485,7 @@ class ViceDaemon:
                 "recorder_error": self._recorder_error,
                 "cpu_fallback": bool(getattr(self.recorder, "cpu_fallback", False)),
                 "codec_fallback": bool(getattr(self.recorder, "codec_fallback", False)),
+                "disk": self._disk_stats(),
             })
         )
 
@@ -1091,6 +1092,20 @@ class ViceDaemon:
         bundled = [(g["name"], g.get("matches")) for g in _DEFAULT_GAMES]
         return _best_game_match(custom, haystacks) or _best_game_match(bundled, haystacks)
 
+    def _disk_stats(self) -> Optional[dict]:
+        """Free space where clips land, for the Home readout.
+
+        A recorder that quietly runs out of room is the failure this is here to
+        make visible, so a drive that cannot be measured reports nothing rather
+        than a zero that would read as full.
+        """
+        try:
+            usage = shutil.disk_usage(resolve_path(self.cfg.output.directory))
+        except OSError as exc:
+            log.debug("Could not measure free space: %s", exc)
+            return None
+        return {"free": usage.free, "total": usage.total}
+
     def _get_status(self) -> dict:
         return {
             "ready":          self._ready,
@@ -1106,6 +1121,7 @@ class ViceDaemon:
             "session_active":   self._session_active,
             "clip_key":         self.cfg.hotkeys.clip,
             "hotkeys_available": self.hotkeys_available,
+            "disk":             self._disk_stats(),
             # None unless a newer release is known, so a UI opened long after
             # the check still learns about it.
             "update":           self._update,

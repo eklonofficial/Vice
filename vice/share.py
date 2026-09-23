@@ -262,8 +262,58 @@ def _proxy_path(path: Path) -> Path:
 def _purge_slug_proxies(slug: str) -> None:
     """Remove any cached preview proxies for a slug (all file versions)."""
     PROXY_DIR.mkdir(parents=True, exist_ok=True)
-    for p in PROXY_DIR.glob(f"{glob.escape(slug)}*.mp4"):
-        p.unlink(missing_ok=True)
+    for pattern in (f"{glob.escape(slug)}*.mp4", f"{glob.escape(slug)}*_audio_*.m4a"):
+        for p in PROXY_DIR.glob(pattern):
+            p.unlink(missing_ok=True)
+
+
+def _audio_preview_path(path: Path, index: int) -> Path:
+    proxy = _proxy_path(path)
+    return proxy.with_name(f"{proxy.stem}_audio_{index}.m4a")
+
+
+async def _make_audio_preview(path: Path, index: int) -> Path:
+    """Browser-readable audio for one recorded stream, keeping its timeline."""
+    target = _audio_preview_path(path, index)
+    if target.exists() and target.stat().st_size > 0:
+        return target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(prefix=".audio-", suffix=".m4a",
+                                     dir=target.parent, delete=False) as handle:
+        tmp = Path(handle.name)
+    proc = None
+    spawn = None
+    try:
+        spawn = asyncio.create_task(asyncio.create_subprocess_exec(
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-threads", "2",
+            "-i", str(path), "-map", f"0:a:{index}", "-vn",
+            "-af", "aresample=48000:async=1:first_pts=0", "-ac", "2",
+            "-c:a", "aac", "-b:a", "192k", "-threads", "2",
+            "-movflags", "+faststart", "-y", str(tmp),
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        ))
+        proc = await asyncio.shield(spawn)
+        _, stderr = await communicate_with_timeout(proc, timeout=300)
+        if proc.returncode != 0 or tmp.stat().st_size == 0:
+            reason = (stderr or b"").decode(errors="replace").strip()[-300:]
+            raise RuntimeError(reason or "audio preview produced no output")
+        if _audio_preview_path(path, index) != target or not path.exists():
+            raise RuntimeError("clip changed while preparing its audio")
+        tmp.replace(target)
+        return target
+    finally:
+        if proc is None and spawn is not None:
+            try:
+                proc = await spawn
+            except OSError:
+                pass  # The spawn error is propagated by the main path.
+        if proc is not None and proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.communicate()
+        tmp.unlink(missing_ok=True)
 
 
 # WebEngine plays these without help; anything else gets an H.264 preview proxy.
@@ -717,16 +767,19 @@ async def _make_thumb(path: Path, duration: float = 0.0) -> Path:
     return thumb
 
 
-# OpenGraph only, no twitter:card. twitter:player must point at an
-# embeddable HTML page, not a raw video file, and Discord does not iframe
-# arbitrary players anyway: when a player card is present and unusable,
-# Discord renders no embed at all (issues #77, #100). Plain og:video with
-# a direct file URL is the pattern working self-hosted sharers use.
+# Discord can use the Twitter player metadata to skip its thumbnailing pass
+# for direct video links. Keep the OpenGraph metadata as the fallback used by
+# other unfurlers (issues #77, #100, #207).
 _EMBED_PAGE = """\
 <!DOCTYPE html>
 <html><head>
   <meta charset="utf-8">
   <meta name="theme-color"              content="{color}">
+  <meta name="twitter:card"             content="player">
+  <meta name="twitter:player"           content="{video_url}">
+  <meta name="twitter:player:stream"    content="{video_url}">
+  <meta name="twitter:player:stream:content_type" content="{video_type}">
+  <meta name="twitter:image"            content="{thumb_url}">
   <meta property="og:site_name"         content="Vice">
   <meta property="og:type"              content="video.other">
   <meta property="og:url"               content="{page_url}">
@@ -876,6 +929,7 @@ class ShareServer:
         r.add_post("/api/clips/{slug}/open",              self._api_open)
         r.add_post("/api/clips/{slug}/copy-file",         self._api_copy_file)
         r.add_post("/api/clips/{slug}/frame",             self._api_save_frame)
+        r.add_get("/api/clips/{slug}/audio/{index}",      self._audio_track)
         r.add_get("/api/app-state",                       self._api_get_app_state)
         r.add_post("/api/app-state",                      self._api_set_app_state)
         r.add_post("/api/clips/{slug}/view",              self._api_view)
@@ -1098,6 +1152,7 @@ class ShareServer:
             # Lets the UI request an H.264 preview proxy for codecs the native
             # WebEngine can't decode (H.265).
             "vcodec":     meta.get("vcodec",   ""),
+            "audio_tracks": meta.get("audio_tracks", []),
             # ffmpeg cannot read this file. It is still listed, because it is
             # the user's recording and may be recoverable by hand, but the
             # card says so instead of showing a 0:00 clip that will not play.
@@ -1339,6 +1394,34 @@ class ShareServer:
                 "Cache-Control": "no-cache",
             },
         )
+
+    async def _audio_track(self, req: web.Request) -> web.Response:
+        slug = req.match_info["slug"]
+        path = self._clips.get(slug)
+        raw_index = req.match_info["index"]
+        if not path or not path.exists() or not re.fullmatch(r"[0-9]{1,4}", raw_index):
+            raise web.HTTPNotFound()
+        index = int(raw_index)
+        meta = await self._get_meta(slug, path)
+        if index >= meta.get("audio_streams", 0):
+            raise web.HTTPNotFound()
+        if self._proxy_stopping:
+            raise web.HTTPServiceUnavailable()
+        task = asyncio.current_task()
+        self._proxy_tasks.add(task)
+        try:
+            target = _audio_preview_path(path, index)
+            if not target.exists() or target.stat().st_size == 0:
+                async with self._proxy_lock:
+                    target = await _make_audio_preview(path, index)
+        except (OSError, RuntimeError, asyncio.TimeoutError) as exc:
+            log.warning("Audio preview failed for %s track %d: %s", slug, index, exc)
+            raise web.HTTPServiceUnavailable(text="Could not prepare this audio track") from exc
+        finally:
+            self._proxy_tasks.discard(task)
+        return web.FileResponse(target, headers={
+            "Content-Type": "audio/mp4", "Accept-Ranges": "bytes", "Cache-Control": "no-cache",
+        })
 
     async def _thumb(self, req: web.Request) -> web.Response:
         slug = req.match_info["slug"]
@@ -2008,6 +2091,7 @@ class ShareServer:
                 width=meta.get("width", 0),
                 height=meta.get("height", 0),
                 has_audio=meta.get("audio_streams", 0) > 0,
+                audio_streams=meta.get("audio_streams", 0),
             )
         return sources
 

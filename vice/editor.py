@@ -96,6 +96,7 @@ class Source:
     width: int
     height: int
     has_audio: bool
+    audio_streams: Optional[int] = None
 
 
 # ── validation ───────────────────────────────────────────────────────────────
@@ -179,6 +180,22 @@ def validate_project(raw: dict, sources: dict[str, Source]) -> tuple[dict, list[
                 continue
             out["clipId"] = cid
             out["offset"] = offset
+            if kind == "audio":
+                stream = it.get("audioStream", 0)
+                count = src.audio_streams if src.audio_streams is not None else int(src.has_audio)
+                if type(stream) is not int or not 0 <= stream < count:
+                    errors.append(f"item {iid}: audio stream is missing or invalid")
+                    continue
+                volume = it.get("volume", 1)
+                if type(volume) not in (int, float) or not 0 <= volume <= 1:
+                    errors.append(f"item {iid}: volume must be between 0 and 1")
+                    continue
+                if "muted" in it and type(it["muted"]) is not bool:
+                    errors.append(f"item {iid}: muted must be a boolean")
+                    continue
+                for key in ("audioStream", "volume", "muted"):
+                    if key in it:
+                        out[key] = it[key]
             if kind == "clip":
                 out["muted"] = bool(it.get("muted", False))
                 trans = it.get("trans")
@@ -568,17 +585,18 @@ def build_export_cmd(project: dict, sources: dict[str, Source], out_path: Path,
     # silent anchor that pins the output length.
     contribs = [it for it in project["items"]
                 if it.get("clipId") and sources[it["clipId"]].has_audio
-                and (it["kind"] == "audio"
-                     or (it["kind"] == "clip" and not it.get("muted")))]
+                and it["kind"] in ("audio", "clip") and not it.get("muted")]
     contribs.sort(key=lambda i: (i["start"], i["id"]))
     lines.append(f"anullsrc=r={AUDIO_RATE}:cl=stereo,atrim=0:{_n(extent)}[ab]")
     alabels = ["ab"]
     for k, it in enumerate(contribs):
         lines.append(
-            f"[{input_idx[it['clipId']]}:a:0]"
+            f"[{input_idx[it['clipId']]}:a:{it.get('audioStream', 0)}]"
+            + (f"aresample={AUDIO_RATE}:async=1:first_pts=0," if it["kind"] == "audio" else "") +
             f"atrim=start={_n(it['offset'])}:end={_n(it['offset'] + it['dur'])},"
             f"asetpts=PTS-STARTPTS,"
             f"aformat=sample_rates={AUDIO_RATE}:channel_layouts=stereo,"
+            + (f"volume={_n(it['volume'])}," if it.get("volume", 1) != 1 else "") +
             f"adelay={round(it['start'] * 1000)}:all=1[a{k}]")
         alabels.append(f"a{k}")
     if len(alabels) == 1:

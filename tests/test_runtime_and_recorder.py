@@ -26,6 +26,7 @@ from vice.recorder import (
     GSRRecorder,
     SegmentRecorder,
     _classify_gsr_source,
+    _process_argv,
     _read_capture_registry,
     _register_capture,
     _unregister_capture,
@@ -258,6 +259,16 @@ class WebviewEnvironmentTests(unittest.TestCase):
             flags = os.environ["QTWEBENGINE_CHROMIUM_FLAGS"]
 
         self.assertIn("--disable-gpu-compositing", flags)
+
+    def test_qt_start_failure_relaunches_with_software_compositing(self) -> None:
+        webview = mock.Mock()
+        webview.start.side_effect = RuntimeError("QtWebEngine could not initialize")
+        with mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch.object(app_mod, "_relaunch_with_software_compositing") as relaunch, \
+             mock.patch.object(app_mod, "log"):
+            app_mod._start_webview_with_fallback(webview, "qt", mock.Mock())
+        relaunch.assert_called_once_with()
+        webview.start.assert_called_once_with(gui="qt", debug=False, private_mode=False)
 
     def test_nvidia_on_wayland_prefers_xwayland_platform(self) -> None:
         # Chromium's native-Wayland GBM path is flaky on NVIDIA (same
@@ -3270,6 +3281,23 @@ class UnreadableClipListingTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(meta["duration"], 0)
 
 
+async def _wait_until_exec(pid: int, argv: list) -> None:
+    """Wait for the child to become what it was told to run.
+
+    create_subprocess_exec returns once the fork has happened, so
+    /proc/<pid>/cmdline can still be empty or still the runner's own argv.
+    The reaper identifies a capture by its argv and leaves anything it
+    cannot identify alone, so racing the exec reads as "nothing was
+    reaped" (CI, Python 3.10, 19 Sept 2026).
+    """
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if _process_argv(pid) == argv:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"pid {pid} never exec'd {argv}")
+
+
 class OrphanedCaptureTests(unittest.IsolatedAsyncioTestCase):
     """A capture process runs in its own session so its helper dies with it
     (#129), which also means kill -9 on the daemon leaves it recording with
@@ -3301,6 +3329,7 @@ class OrphanedCaptureTests(unittest.IsolatedAsyncioTestCase):
             "sleep", "60", stdout=asyncio.subprocess.DEVNULL, start_new_session=True
         )
         self.addCleanup(lambda: proc.kill() if proc.returncode is None else None)
+        await _wait_until_exec(proc.pid, ["sleep", "60"])
         _write_capture_registry([{"pid": proc.pid, "argv": ["sleep", "60"]}])
 
         self.assertEqual(reap_orphaned_captures(), 1)
@@ -3513,6 +3542,9 @@ class ReapGroupSafetyTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(lambda: proc.kill() if proc.returncode is None else None)
         self.assertNotEqual(os.getpgid(proc.pid), proc.pid)
         # Matching argv and no live owner, so only the group check can save us.
+        # Without the wait the argv would not match yet and the test would pass
+        # for the wrong reason.
+        await _wait_until_exec(proc.pid, ["sleep", "60"])
         _write_capture_registry([{"pid": proc.pid, "argv": ["sleep", "60"]}])
 
         with mock.patch("vice.recorder.os.killpg") as killpg:

@@ -2,10 +2,13 @@ import {useMemo, useState} from 'react';
 
 import {useStore} from '../state/store';
 import {useClipActions} from '../state/clipActions';
+import {useHomeLayout} from '../components/AppFrame';
+import {HomeImages} from '../components/HomeImages';
+import {OverlayPortal} from '../components/OverlayPortal';
 import {usePlaylistDropTarget} from '../lib/clipDrag';
 import {api} from '../lib/api';
 import {copyToClipboard} from '../lib/clipboard';
-import {formatDuration} from '../lib/format';
+import {formatBytes, formatDuration, relativeTime} from '../lib/format';
 import {t, tNode} from '../lib/i18n';
 import {ClipCard} from '../components/ClipCard';
 import {Tile, ActionTile} from '../components/Tile';
@@ -13,6 +16,17 @@ import {Modal} from '../components/Modal';
 import {IconClips, IconPlaylist, IconSettings} from '../components/Icons';
 
 const ROW_LIMIT = 8;
+
+/** M3 Expressive's twelve-lobed cookie, drawn once as a path in a 100 unit box. */
+const COOKIE = (() => {
+  const points: string[] = [];
+  for (let i = 0; i < 96; i++) {
+    const angle = (i / 96) * Math.PI * 2;
+    const radius = 46 + 4 * Math.cos(angle * 12);
+    points.push(`${(50 + radius * Math.cos(angle)).toFixed(2)} ${(50 + radius * Math.sin(angle)).toFixed(2)}`);
+  }
+  return `M${points.join('L')}Z`;
+})();
 
 /** The distinctive part of a quick-tunnel URL, which is all that identifies it. */
 function tunnelHost(url: string): string {
@@ -35,6 +49,7 @@ export function Home() {
   const {clips, playlists, config, tunnelUrl, recentNew, status} = state;
 
   const {actions, overlays} = useClipActions();
+  const layout = useHomeLayout();
   const [busy, setBusy] = useState<string | null>(null);
   const [manualCopy, setManualCopy] = useState<string | null>(null);
   const [restartNeeded, setRestartNeeded] = useState(false);
@@ -114,7 +129,120 @@ export function Home() {
     }
   };
 
+  const saveClip = () => {
+    void api.triggerClip().catch((err: Error) =>
+      notify({kind: 'error', title: t('home.errSaveClip'), detail: err.message, tone: 'error', holdMs: 7000}),
+    );
+  };
+
+  // Built once and placed either in the column or in the rail, so the two
+  // arrangements can never drift apart.
+  const micTile = (
+    <Tile
+      label={t('home.microphone')}
+      detail={captureMic ? t('home.on') : t('home.off')}
+      on={captureMic}
+      busy={busy === 'mic'}
+      icon={<MicIcon />}
+      onToggle={() => {
+        if (micNeedsWfChoice) setWfMicPrompt(true);
+        else void setMic(!captureMic);
+      }}
+    />
+  );
+  const audioTile = (
+    <Tile
+      label={t('home.desktopAudio')}
+      detail={captureAudio ? t('home.on') : t('home.off')}
+      on={captureAudio}
+      busy={busy === 'audio'}
+      icon={<SpeakerIcon />}
+      onToggle={() =>
+        void toggle(
+          'audio',
+          {recording: {capture_audio: !captureAudio}},
+          () =>
+            notify({
+              kind: 'info',
+              title: !captureAudio ? t('home.desktopAudioOn') : t('home.desktopAudioOff'),
+              tone: 'accent',
+              holdMs: 3000,
+            }),
+          t('home.errDesktopAudio'),
+        )
+      }
+    />
+  );
+  const linkTile = (
+    <Tile
+      label={t('home.publicLink')}
+      detail={tunnelOn ? (tunnelUrl ? t('home.active') : t('home.starting')) : t('home.off')}
+      on={tunnelOn}
+      busy={busy === 'tunnel'}
+      icon={<GlobeIcon />}
+      onToggle={() =>
+        void toggle(
+          'tunnel',
+          {sharing: {cloudflare_tunnel: !tunnelOn}},
+          () =>
+            notify({
+              kind: 'info',
+              title: !tunnelOn ? t('home.publicLinkStarting') : t('home.publicLinkStopped'),
+              tone: 'accent',
+              holdMs: 3500,
+            }),
+          t('home.errPublicLink'),
+        )
+      }
+    />
+  );
+  // The address, not a second copy of the switch beside it.
+  const readoutTile = (
+    <button
+      type="button"
+      className="tile tile-readout"
+      onClick={copyTunnel}
+      disabled={!tunnelUrl}
+      aria-label={tunnelUrl ? t('home.copyPublicLink') : t('home.noPublicLinkYet')}>
+      <span className="tile-badge" aria-hidden="true">
+        <LinkIcon />
+      </span>
+      <span className="tile-text">
+        <b>
+          {tunnelUrl
+            ? tunnelHost(tunnelUrl)
+            : tunnelOn
+              ? t('home.connecting')
+              : t('home.localOnly')}
+        </b>
+        <span className="tile-mono">
+          {tunnelUrl
+            ? t('home.tapToCopy')
+            : tunnelOn
+              ? t('home.cloudflaredStarting')
+              : t('home.linksWorkOnNetwork')}
+        </span>
+      </span>
+    </button>
+  );
+  const allClipsTile = (
+    <ActionTile
+      label={t('home.allClips')}
+      icon={<IconClips size={19} />}
+      onClick={() => dispatch({type: 'setView', view: 'clips', playlistId: null})}
+    />
+  );
+  const settingsTile = (
+    <ActionTile
+      label={t('home.settings')}
+      icon={<IconSettings size={19} />}
+      onClick={() => dispatch({type: 'setView', view: 'settings'})}
+    />
+  );
+
   return (
+    <div className="home-layout">
+      <div className="home-columns">
     <div className="home">
       <header className="home-hero">
         <h1>{greeting()}</h1>
@@ -126,115 +254,27 @@ export function Home() {
         </p>
       </header>
 
-      <section className="tiles" aria-label={t('home.quickSettings')}>
-        <div className="tile-row tile-row-2">
-          <Tile
-            label={t('home.microphone')}
-            detail={captureMic ? t('home.on') : t('home.off')}
-            on={captureMic}
-            busy={busy === 'mic'}
-            icon={<MicIcon />}
-            onToggle={() => {
-              if (micNeedsWfChoice) setWfMicPrompt(true);
-              else void setMic(!captureMic);
-            }}
-          />
-          <Tile
-            label={t('home.desktopAudio')}
-            detail={captureAudio ? t('home.on') : t('home.off')}
-            on={captureAudio}
-            busy={busy === 'audio'}
-            icon={<SpeakerIcon />}
-            onToggle={() =>
-              void toggle(
-                'audio',
-                {recording: {capture_audio: !captureAudio}},
-                () =>
-                  notify({
-                    kind: 'info',
-                    title: !captureAudio ? t('home.desktopAudioOn') : t('home.desktopAudioOff'),
-                    tone: 'accent',
-                    holdMs: 3000,
-                  }),
-                t('home.errDesktopAudio'),
-              )
-            }
-          />
-        </div>
-
-        <div className="tile-row tile-row-2">
-          <Tile
-            label={t('home.publicLink')}
-            detail={tunnelOn ? (tunnelUrl ? t('home.active') : t('home.starting')) : t('home.off')}
-            on={tunnelOn}
-            busy={busy === 'tunnel'}
-            icon={<GlobeIcon />}
-            onToggle={() =>
-              void toggle(
-                'tunnel',
-                {sharing: {cloudflare_tunnel: !tunnelOn}},
-                () =>
-                  notify({
-                    kind: 'info',
-                    title: !tunnelOn ? t('home.publicLinkStarting') : t('home.publicLinkStopped'),
-                    tone: 'accent',
-                    holdMs: 3500,
-                  }),
-                t('home.errPublicLink'),
-              )
-            }
-          />
-          {/* The address, not a second copy of the switch beside it. */}
-          <button
-            type="button"
-            className="tile tile-readout"
-            onClick={copyTunnel}
-            disabled={!tunnelUrl}
-            aria-label={tunnelUrl ? t('home.copyPublicLink') : t('home.noPublicLinkYet')}>
-            <span className="tile-badge" aria-hidden="true">
-              <LinkIcon />
-            </span>
-            <span className="tile-text">
-              <b>
-                {tunnelUrl
-                  ? tunnelHost(tunnelUrl)
-                  : tunnelOn
-                    ? t('home.connecting')
-                    : t('home.localOnly')}
-              </b>
-              <span className="tile-mono">
-                {tunnelUrl
-                  ? t('home.tapToCopy')
-                  : tunnelOn
-                    ? t('home.cloudflaredStarting')
-                    : t('home.linksWorkOnNetwork')}
-              </span>
-            </span>
-          </button>
-        </div>
-
-        <div className="tile-row tile-row-3">
-          <ActionTile
-            label={t('home.saveClipNow')}
-            icon={<ClipIcon />}
-            onClick={() => {
-              void api.triggerClip().catch((err: Error) =>
-                notify({kind: 'error', title: t('home.errSaveClip'), detail: err.message, tone: 'error', holdMs: 7000}),
-              );
-            }}
-          />
-          <ActionTile
-            label={t('home.allClips')}
-            icon={<IconClips size={19} />}
-            onClick={() => dispatch({type: 'setView', view: 'clips', playlistId: null})}
-          />
-          <ActionTile
-            label={t('home.settings')}
-            icon={<IconSettings size={19} />}
-            onClick={() => dispatch({type: 'setView', view: 'settings'})}
-          />
-        </div>
-      </section>
+      {layout === 'rail' ? null : (
+        <section className="tiles" aria-label={t('home.quickSettings')}>
+          <div className="tile-row tile-row-2">
+            {micTile}
+            {audioTile}
+          </div>
+          <div className="tile-row tile-row-2">
+            {linkTile}
+            {readoutTile}
+          </div>
+          <div className="tile-row tile-row-3">
+            <ActionTile
+              label={t('home.saveClipNow')}
+              icon={<ClipIcon />}
+              onClick={saveClip}
+            />
+            {allClipsTile}
+            {settingsTile}
+          </div>
+        </section>
+      )}
 
       <ClipRow
         title={t('home.recentClips')}
@@ -274,57 +314,140 @@ export function Home() {
         <ClipRow title={t('home.mostViewed')} clips={mostViewed} recentNew={recentNew} actions={actions} />
       ) : null}
 
-      {overlays}
+      <OverlayPortal>
+        {overlays}
 
-      <Modal
-        open={wfMicPrompt}
-        title={t('home.wfMicTitle')}
-        onClose={() => setWfMicPrompt(false)}>
-        <p>{t('home.wfMicBody')}</p>
-        <div className="choice-list">
-          <button
-            type="button"
-            className="choice"
-            onClick={() => {
-              setWfMicPrompt(false);
-              void setMic(true, 'backend_fallback');
-            }}>
-            <b>{t('home.wfMicBothLabel')}</b>
-            <span>{t('home.wfMicBothHelp')}</span>
-          </button>
-          <button
-            type="button"
-            className="choice"
-            onClick={() => {
-              setWfMicPrompt(false);
-              void setMic(true, 'mic_only');
-            }}>
-            <b>{t('home.wfMicOnlyLabel')}</b>
-            <span>{t('home.wfMicOnlyHelp')}</span>
-          </button>
-        </div>
-      </Modal>
+        <Modal
+          open={wfMicPrompt}
+          title={t('home.wfMicTitle')}
+          onClose={() => setWfMicPrompt(false)}>
+          <p>{t('home.wfMicBody')}</p>
+          <div className="choice-list">
+            <button
+              type="button"
+              className="choice"
+              onClick={() => {
+                setWfMicPrompt(false);
+                void setMic(true, 'backend_fallback');
+              }}>
+              <b>{t('home.wfMicBothLabel')}</b>
+              <span>{t('home.wfMicBothHelp')}</span>
+            </button>
+            <button
+              type="button"
+              className="choice"
+              onClick={() => {
+                setWfMicPrompt(false);
+                void setMic(true, 'mic_only');
+              }}>
+              <b>{t('home.wfMicOnlyLabel')}</b>
+              <span>{t('home.wfMicOnlyHelp')}</span>
+            </button>
+          </div>
+        </Modal>
 
-      <Modal
-        open={manualCopy !== null}
-        title={t('home.copyLinkTitle')}
-        onClose={() => setManualCopy(null)}>
-        <p>{t('home.copyLinkBody')}</p>
-        <textarea className="manual-copy" readOnly value={manualCopy ?? ''} rows={3} />
-      </Modal>
+        <Modal
+          open={manualCopy !== null}
+          title={t('home.copyLinkTitle')}
+          onClose={() => setManualCopy(null)}>
+          <p>{t('home.copyLinkBody')}</p>
+          <textarea className="manual-copy" readOnly value={manualCopy ?? ''} rows={3} />
+        </Modal>
 
-      <Modal
-        open={restartNeeded}
-        title={t('home.restartTitle')}
-        onClose={() => setRestartNeeded(false)}
-        footer={
-          <button type="button" className="btn" onClick={() => setRestartNeeded(false)}>
-            {t('home.gotIt')}
-          </button>
-        }>
-        <p>{t('home.restartBody')}</p>
-      </Modal>
+        <Modal
+          open={restartNeeded}
+          title={t('home.restartTitle')}
+          onClose={() => setRestartNeeded(false)}
+          footer={
+            <button type="button" className="btn" onClick={() => setRestartNeeded(false)}>
+              {t('home.gotIt')}
+            </button>
+          }>
+          <p>{t('home.restartBody')}</p>
+        </Modal>
+      </OverlayPortal>
     </div>
+        <HomeImages />
+        {layout === 'rail' ? (
+          <aside className="home-rail" aria-label={t('home.quickSettings')}>
+            <h2>{t('home.quickSettings')}</h2>
+            <button type="button" className="rail-save" onClick={saveClip}>
+              <span className="rail-save-burst" aria-hidden="true">
+                <svg viewBox="0 0 100 100"><path d={COOKIE} /></svg>
+                <ClipIcon size={40} weight={1.4} />
+              </span>
+              <span className="rail-save-label">{t('home.saveClipNow')}</span>
+              <kbd>{hotkey}</kbd>
+            </button>
+            <div className="rail-pair">
+              {micTile}
+              {audioTile}
+            </div>
+            <div className="rail-group">
+              {linkTile}
+              {readoutTile}
+            </div>
+            <div className="rail-group rail-nav">
+              {allClipsTile}
+              {settingsTile}
+            </div>
+            <RailStorage />
+          </aside>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What the sidebar counts and the About screen cannot tell you: whether there
+ * is room left on the drive the clips land on, how much of it is Vice's, and
+ * when the buffer last turned into a file.
+ */
+function RailStorage() {
+  const {state} = useStore();
+  const disk = state.status.disk;
+  const library = useMemo(
+    () =>
+      state.clips.reduce((sum, clip) => sum + (clip.size ?? 0), 0) +
+      state.images.reduce((sum, image) => sum + (image.size ?? 0), 0),
+    [state.clips, state.images],
+  );
+  const total = disk?.total ?? 0;
+  const free = disk?.free ?? 0;
+  const used = Math.max(0, total - free);
+  const lastClip = state.clips[0]?.created_at;
+
+  return (
+    <section className="rail-storage" aria-label={t('home.storage')}>
+      {total > 0 ? (
+        <div
+          className="rail-meter"
+          role="img"
+          aria-label={t('home.diskBar', {
+            used: formatBytes(used),
+            total: formatBytes(total),
+            library: formatBytes(library),
+          })}>
+          <span className="rail-meter-fill" style={{width: `${(used / total) * 100}%`}} />
+          <span className="rail-meter-vice" style={{width: `${Math.min(library, total) / total * 100}%`}} />
+        </div>
+      ) : null}
+      <dl className="rail-stats">
+        <div>
+          <dt>{t('home.diskFree')}</dt>
+          <dd>{total > 0 ? formatBytes(free) : t('home.diskUnknown')}</dd>
+        </div>
+        <div>
+          <dt>{t('home.diskLibrary')}</dt>
+          <dd>{formatBytes(library)}</dd>
+        </div>
+        <div>
+          <dt>{t('home.lastClip')}</dt>
+          <dd>{lastClip ? relativeTime(lastClip) : t('home.lastClipNever')}</dd>
+        </div>
+      </dl>
+    </section>
   );
 }
 
@@ -440,8 +563,10 @@ const GlobeIcon = () => (
   </svg>
 );
 
-const ClipIcon = () => (
-  <svg width="19" height="19" viewBox="0 0 24 24" {...stroke} aria-hidden="true">
+/* Weight drops as the icon grows, the way Material Symbols' optical size axis
+   does: a 19px icon's stroke blown up to 40px reads as a blob. */
+const ClipIcon = ({size = 19, weight = 2}: {size?: number; weight?: number} = {}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...stroke} strokeWidth={weight} aria-hidden="true">
     <path d="M5 3h11l3 3v15H5z" />
     <path d="M9 3v6h6" />
   </svg>

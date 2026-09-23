@@ -75,3 +75,55 @@
     0 0 0 2px var(--color-background-popover),
     0 0 0 4px var(--color-text-primary);
 }
+
+/* Expansion keeps the same image and ink canvas, so drawing coordinates do not change. */
+.image-viewer-scrim[data-expanded] { padding: 0; display: flex; align-items: stretch; }
+.image-viewer-scrim[data-expanded] .viewer-stack { width: 100%; height: 100%; min-height: 0; }
+.image-viewer-scrim[data-expanded] .image-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100%;
+  border-radius: 0;
+}
+.image-viewer-scrim[data-expanded] :is(.viewer-head, .viewer-bottom) { flex: none; }
+.image-viewer-scrim[data-expanded] .image-stage {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
+/* The box itself is written by the viewer, in the same commit as the layout
+   change; these only lift the normal-size limits. */
+.image-viewer-scrim[data-expanded] .image-frame {
+  max-width: none;
+  max-height: none;
+}
+.image-viewer-scrim[data-expanded] .image-full {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: contain;
+}
+
+/* While the viewer changes size, these boxes stand in for the dialog and the
+   black stage, so the real ones can take their final layout at once. The
+   stack is positioned so it still paints above them. */
+.image-morph {
+  position: fixed;
+  pointer-events: none;
+}
+.image-morph-surface {
+  background: var(--color-background-popover);
+  box-shadow: var(--shadow-high);
+}
+.image-morph-stage { background: #000; }
+.image-viewer-scrim[data-morphing] .viewer-stack { position: relative; }
+.image-viewer-scrim[data-morphing] .image-viewer {
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+.image-viewer-scrim[data-morphing] .image-stage {
+  background: transparent;
+  overflow: visible;
+}

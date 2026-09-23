@@ -1,6 +1,8 @@
+import importlib
 import re
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +52,46 @@ class InstallScriptTests(unittest.TestCase):
         self.assertIn("Silverblue", script)
         self.assertIn("dnf is not the right install path", script)
         self.assertLess(script.index("if is_rpm_ostree_system; then"), script.index("detect_package_manager()"))
+
+    def test_arch_qt_preflight_preserves_existing_install(self) -> None:
+        """A failed Arch Qt preflight must not remove a working install."""
+        install_venv = re.search(
+            r"install_vice_venv\(\) \{\n(?P<body>.*?)\n\}",
+            self.script,
+            flags=re.S,
+        )
+        self.assertIsNotNone(install_venv)
+        body = install_venv.group("body")
+
+        qt_check = body.index("import PyQt6.QtWebEngineWidgets, qtpy")
+        cleanup = body.index("clean_previous_local_install")
+        remove_venv = body.index('rm -rf "$VENV_DIR"')
+        create_venv = body.index('"$python_bin" -m venv')
+
+        self.assertLess(qt_check, cleanup)
+        self.assertLess(cleanup, remove_venv)
+        self.assertLess(remove_venv, create_venv)
+        self.assertEqual(self.script.count('rm -rf "$VENV_DIR"'), 1)
+
+    def test_missing_optional_parent_is_reported_as_missing(self) -> None:
+        """find_spec imports dotted-name parents and may raise if one is absent."""
+        helper = re.search(
+            r"^def _missing\(deps\):\n.*?^    return missing$",
+            self.script,
+            flags=re.M | re.S,
+        )
+        self.assertIsNotNone(helper)
+
+        namespace = {"importlib": importlib}
+        exec(helper.group(0), namespace)
+        dependency = {"PyQt6.QtWebEngineWidgets": "PyQt6-WebEngine>=6.5"}
+        missing_parent = ModuleNotFoundError("No module named 'PyQt6'")
+
+        with mock.patch.object(importlib.util, "find_spec", side_effect=missing_parent):
+            self.assertEqual(
+                namespace["_missing"](dependency),
+                ["PyQt6-WebEngine>=6.5"],
+            )
 
     def test_gsr_build_runs_as_user_with_sudo_only_for_install(self) -> None:
         """Regression test for #84: building under sudo left a root-owned

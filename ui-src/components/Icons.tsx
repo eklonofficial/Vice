@@ -151,3 +151,17 @@ export const IconPlus = ({size = 14, className}: IconProps) => (
     <path d="M12 5v14M5 12h14" />
   </svg>
 );
+
+/* Corners pointing out to grow, pointing in to shrink. The same pair the
+   browser chrome uses, which is what people already read as this gesture. */
+export const IconExpand = ({collapse, size = 15}: IconProps & {collapse?: boolean}) => (
+  <svg {...base(size)} aria-hidden="true">
+    <path
+      d={
+        collapse
+          ? 'M9 3v4a2 2 0 0 1-2 2H3M15 3v4a2 2 0 0 0 2 2h4M9 21v-4a2 2 0 0 0-2-2H3M15 21v-4a2 2 0 0 1 2-2h4'
+          : 'M3 9V5a2 2 0 0 1 2-2h4M21 9V5a2 2 0 0 0-2-2h-4M3 15v4a2 2 0 0 0 2 2h4M21 15v4a2 2 0 0 1-2 2h-4'
+      }
+    />
+  </svg>
+);

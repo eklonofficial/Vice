@@ -5,6 +5,7 @@ import {
   useEffect,
   useMemo,
   useReducer,
+  useRef,
   type ReactNode,
 } from 'react';
 
@@ -144,6 +145,20 @@ function withEvent(state: State, event: Omit<IslandEvent, 'id'>): State {
   return {...state, event: {...event, id: ++eventSeq}};
 }
 
+// Share links are built from the public address the daemon had when the
+// clip was listed. The library usually loads before cloudflared has a URL,
+// so those links point at the LAN fallback; move them onto the tunnel.
+function rebaseShareUrls(clips: Clip[], base: string | null): Clip[] {
+  if (!base) return clips;
+  const root = base.replace(/\/+$/, '');
+  return clips.map(c => {
+    const at = c.share_url ? c.share_url.lastIndexOf('/c/') : -1;
+    if (at < 0) return c;
+    const url = root + c.share_url.slice(at);
+    return url === c.share_url ? c : {...c, share_url: url};
+  });
+}
+
 function reduce(state: State, action: Action): State {
   switch (action.type) {
     case 'loaded':
@@ -152,7 +167,9 @@ function reduce(state: State, action: Action): State {
         ready: true,
         loadError: null,
         config: action.config,
-        clips: action.clips,
+        clips: action.status.public_is_tunnel
+          ? rebaseShareUrls(action.clips, action.status.public_url)
+          : action.clips,
         images: action.images,
         playlists: action.playlists,
         status: action.status,
@@ -200,7 +217,7 @@ function reduce(state: State, action: Action): State {
     }
 
     case 'setClips':
-      return {...state, clips: action.clips};
+      return {...state, clips: rebaseShareUrls(action.clips, state.tunnelUrl)};
 
     case 'setImages':
       return {...state, images: action.images};
@@ -341,7 +358,7 @@ function reduceWs(state: State, msg: WsMessage): State {
 
     case 'tunnel_url':
       return withEvent(
-        {...state, tunnelUrl: msg.url},
+        {...state, tunnelUrl: msg.url, clips: rebaseShareUrls(state.clips, msg.url)},
         {kind: 'info', title: t('events.publicLinkReady'), detail: msg.url, tone: 'accent', holdMs: 6000},
       );
 
@@ -482,7 +499,14 @@ export function StoreProvider({children}: {children: ReactNode}) {
     }
   }, []);
 
-  useEffect(() => connectWs(msg => dispatch({type: 'ws', msg})), []);
+  // Bumped by every picture event, so a list fetched before one can tell it is
+  // out of date. Listing probes every file and takes about a second on a real
+  // library, long enough to delete a picture while a stale copy is in flight.
+  const imageEvents = useRef(0);
+  useEffect(() => connectWs(msg => {
+    if (msg.type === 'image_saved' || msg.type === 'image_deleted') imageEvents.current += 1;
+    dispatch({type: 'ws', msg});
+  }), []);
 
   // Transient island events expire on their own.
   useEffect(() => {
@@ -513,7 +537,10 @@ export function StoreProvider({children}: {children: ReactNode}) {
   }, []);
 
   const refreshImages = useCallback(async () => {
-    dispatch({type: 'setImages', images: await api.images()});
+    const seen = imageEvents.current;
+    const images = await api.images();
+    // The events that arrived meanwhile are newer than this list and already applied.
+    if (imageEvents.current === seen) dispatch({type: 'setImages', images});
   }, []);
 
   const refreshPlaylists = useCallback(async () => {

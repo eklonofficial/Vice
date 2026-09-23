@@ -18,7 +18,7 @@ import {t} from '../lib/i18n';
  * picture has nothing to keep alive across a change of view, which is the only
  * thing that put the clip viewer up at the app root.
  */
-export function useImageActions(): {actions: ImageActionSet; overlays: ReactNode} {
+export function useImageActions(collection?: Image[]): {actions: ImageActionSet; overlays: ReactNode} {
   const {state, visibleImages, notify, refreshImages, refreshPlaylists} = useStore();
   const {playlists} = state;
 
@@ -26,8 +26,20 @@ export function useImageActions(): {actions: ImageActionSet; overlays: ReactNode
   const [menu, setMenu] = useState<{image: Image; at: {x: number; y: number}} | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Image | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [sequence, setSequence] = useState<string[] | null>(null);
+  const [pendingRename, setPendingRename] = useState<Image | null>(null);
 
-  const viewingImage = visibleImages.find(i => i.slug === viewing) ?? null;
+  const navigation = useMemo(() => sequence === null ? visibleImages : sequence
+    .map(slug => state.images.find(image => image.slug === slug))
+    .filter((image): image is Image => Boolean(image)), [sequence, visibleImages, state.images]);
+  // Rename broadcasts deletion of the old slug before its replacement arrives.
+  const viewingImage = navigation.find(i => i.slug === viewing)
+    ?? (pendingRename?.slug === viewing ? pendingRename : null);
+  const openImage = useCallback((image: Image) => {
+    setSequence(collection ? collection.map(item => item.slug) : null);
+    setViewing(image.slug);
+  }, [collection]);
+  const closeImage = useCallback(() => setViewing(null), []);
 
   const fail = useCallback(
     (title: string) => (err: Error) =>
@@ -71,13 +83,15 @@ export function useImageActions(): {actions: ImageActionSet; overlays: ReactNode
 
   const rename = useCallback(
     async (image: Image, name: string) => {
+      setPendingRename(image);
       try {
         const updated = await api.renameImage(image.slug, name);
-        await refreshImages();
         // Renaming changes the slug, so the viewer has to follow it or the
         // picture the user just named disappears from under them.
         if (updated?.slug) {
+          setPendingRename(updated);
           setViewing(current => (current === image.slug ? updated.slug : current));
+          setSequence(current => current?.map(slug => slug === image.slug ? updated.slug : slug) ?? null);
           if (imageTitle(updated) !== name) {
             notify({
               kind: 'info',
@@ -87,6 +101,7 @@ export function useImageActions(): {actions: ImageActionSet; overlays: ReactNode
             });
           }
         }
+        await refreshImages();
       } catch (err) {
         notify({
           kind: 'error',
@@ -95,6 +110,8 @@ export function useImageActions(): {actions: ImageActionSet; overlays: ReactNode
           tone: 'error',
           holdMs: 7000,
         });
+      } finally {
+        setPendingRename(null);
       }
     },
     [notify, refreshImages],
@@ -102,7 +119,7 @@ export function useImageActions(): {actions: ImageActionSet; overlays: ReactNode
 
   const actions = useMemo<ImageActionSet>(
     () => ({
-      onOpen: image => setViewing(image.slug),
+      onOpen: openImage,
       onCopy: copy,
       onReveal: reveal,
       onDelete: setConfirmDelete,
@@ -111,7 +128,7 @@ export function useImageActions(): {actions: ImageActionSet; overlays: ReactNode
       renamingSlug: renaming,
       onRenameDone: () => setRenaming(null),
     }),
-    [copy, reveal, rename, renaming],
+    [openImage, copy, reveal, rename, renaming],
   );
 
   const menuImage = menu?.image;
@@ -119,9 +136,10 @@ export function useImageActions(): {actions: ImageActionSet; overlays: ReactNode
     <>
       <ImageViewer
         image={viewingImage}
-        images={visibleImages}
+        images={navigation}
         onSelect={setViewing}
-        onClose={() => setViewing(null)}
+        onClose={closeImage}
+        shortcutsBlocked={confirmDelete !== null || menu !== null}
         onRename={rename}
         onCopy={copy}
         onReveal={reveal}
@@ -136,7 +154,7 @@ export function useImageActions(): {actions: ImageActionSet; overlays: ReactNode
           emptyLabel={t('common.noActions')}
           onClose={() => setMenu(null)}
           items={[
-            {id: 'open', label: t('images.open'), onSelect: () => setViewing(menuImage.slug)},
+            {id: 'open', label: t('images.open'), onSelect: () => openImage(menuImage)},
             {id: 'rename', label: t('card.rename'), onSelect: () => setRenaming(menuImage.slug)},
             {id: 'copy', label: t('images.copy'), onSelect: () => copy(menuImage)},
             {id: 'reveal', label: t('card.reveal'), onSelect: () => reveal(menuImage)},

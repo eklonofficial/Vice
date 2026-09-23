@@ -85,6 +85,24 @@ class RecorderStartupFailureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status["recorder_error"], "")
         self.assertFalse(status["cpu_fallback"])
 
+    def test_status_carries_free_space_for_the_clips_drive(self) -> None:
+        daemon = _startup_daemon(_StubRecorder())
+        daemon._ready = True
+        with tempfile.TemporaryDirectory() as out:
+            daemon.cfg.output.directory = out
+
+            disk = daemon._get_status()["disk"]
+
+        self.assertGreater(disk["total"], 0)
+        self.assertGreaterEqual(disk["total"], disk["free"])
+
+    def test_an_unmeasurable_drive_reports_nothing_rather_than_zero(self) -> None:
+        # Zero free space is the one reading a storage meter must never invent.
+        daemon = _startup_daemon(_StubRecorder())
+        daemon.cfg.output.directory = "/nonexistent/vice-test-path"
+
+        self.assertIsNone(daemon._get_status()["disk"])
+
     def test_status_surfaces_cpu_fallback(self) -> None:
         recorder = _StubRecorder()
         recorder.cpu_fallback = True

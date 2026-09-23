@@ -5,6 +5,7 @@ import {formatBytes} from '../lib/format';
 import {imageTitle, type Image} from '../lib/types';
 import {t} from '../lib/i18n';
 import {InlineRename} from './InlineRename';
+import {IconImages} from './Icons';
 
 export interface ImageActionSet {
   onOpen?: (image: Image) => void;
@@ -19,9 +20,8 @@ export interface ImageActionSet {
 }
 
 /**
- * Deliberately the clip card's markup and the clip card's classes. The two
- * grids are the same object with a different subject, and giving pictures their
- * own card is how they would end up a different size in the same row.
+ * The picture is the card: details and actions sit over it on hover or focus,
+ * the same on Home, in the library and inside a playlist.
  */
 export function ImageCard({
   image,
@@ -35,6 +35,7 @@ export function ImageCard({
   draggable?: boolean;
 }) {
   const [renamingHere, setRenamingHere] = useState(false);
+  const [failedThumb, setFailedThumb] = useState<string | null>(null);
   const renaming = renamingHere || actions.renamingSlug === image.slug;
 
   const stopRenaming = () => {
@@ -59,7 +60,8 @@ export function ImageCard({
 
   return (
     <article
-      className="clip-card"
+      className="clip-card image-card"
+      data-renaming={renaming || undefined}
       draggable={draggable && !renaming}
       onDragStart={e => startImageDrag(e, image)}
       onDragEnd={endClipDrag}
@@ -79,10 +81,11 @@ export function ImageCard({
         className="clip-thumb"
         onClick={() => actions.onOpen?.(image)}
         aria-label={t('images.openTitle', {name: imageTitle(image)})}>
-        {image.thumb_url ? (
-          <img src={image.thumb_url} loading="lazy" alt="" draggable={false} />
+        {image.thumb_url && failedThumb !== image.thumb_url ? (
+          <img src={image.thumb_url} loading="lazy" alt="" draggable={false}
+            onError={() => setFailedThumb(image.thumb_url ?? null)} />
         ) : (
-          <span className="clip-thumb-empty" aria-hidden="true" />
+          <span className="clip-thumb-empty" aria-hidden="true"><IconImages size={32} /></span>
         )}
         <span className="clip-badges">
           {isNew ? <span className="clip-badge clip-badge-new">{t('common.new')}</span> : null}

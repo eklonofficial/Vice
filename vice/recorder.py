@@ -206,6 +206,10 @@ def _gsr_codec_for_encoder(encoder: str, depth: str = "8") -> Optional[str]:
     """The gpu-screen-recorder -k value for an encoder choice, or None to let
     GSR pick. 10-bit only exists for HEVC and AV1, so a 10-bit request with
     H.264 or auto resolves to HEVC."""
+    if encoder in {"h264_vulkan", "hevc_vulkan", "av1_vulkan"}:
+        if depth == "10":
+            return "av1_10bit_vulkan" if encoder == "av1_vulkan" else "hevc_10bit_vulkan"
+        return encoder
     if depth == "10":
         if encoder in {"av1", "av1_nvenc", "av1_vaapi", "libaom-av1", "libsvtav1"}:
             return "av1_10bit"
@@ -260,7 +264,7 @@ def _gsr_supported_codecs() -> frozenset[str]:
         if value.startswith("section="):
             in_section = value == "section=video_codecs"
             continue
-        if in_section and value:
+        if in_section and re.fullmatch(r"[a-z0-9_]+", value):
             codecs.add(value)
     return frozenset(codecs)
 
@@ -277,6 +281,8 @@ def _gsr_codec_unsupported(codec: Optional[str]) -> bool:
 # with an AV1 encoder also has HEVC, and HEVC is the wider bet for players.
 _GSR_CODEC_PREFERENCE = ("hevc", "av1", "h264")
 _GSR_CODEC_PREFERENCE_10BIT = ("hevc_10bit", "av1_10bit")
+_GSR_VULKAN_PREFERENCE = ("h264_vulkan", "hevc_vulkan", "av1_vulkan")
+_GSR_VULKAN_PREFERENCE_10BIT = ("hevc_10bit_vulkan", "av1_10bit_vulkan")
 
 
 def _gsr_codec_choice(rc, avoid: Optional[str] = None) -> Optional[str]:
@@ -288,6 +294,12 @@ def _gsr_codec_choice(rc, avoid: Optional[str] = None) -> Optional[str]:
     """
     depth = _color_depth(rc)
     codec = _gsr_codec_for_encoder(rc.encoder, depth)
+    supported = _gsr_supported_codecs()
+    # GSR's automatic selection does not consider Vulkan encoders (#206).
+    # Leave its normal choice alone unless only the Vulkan path is available.
+    if (rc.encoder == "auto" and depth == "8" and supported
+            and not supported.intersection(_GSR_CODEC_PREFERENCE)):
+        codec = next((c for c in _GSR_VULKAN_PREFERENCE if c in supported), None)
     rejected = {c for c in (avoid,) if c}
     if codec and _gsr_codec_unsupported(codec):
         rejected.add(codec)
@@ -298,10 +310,11 @@ def _gsr_codec_choice(rc, avoid: Optional[str] = None) -> Optional[str]:
     if codec and codec not in rejected:
         return codec
 
-    supported = _gsr_supported_codecs()
     if not supported:
         return None
     order = _GSR_CODEC_PREFERENCE_10BIT if depth == "10" else _GSR_CODEC_PREFERENCE
+    vulkan = _GSR_VULKAN_PREFERENCE_10BIT if depth == "10" else _GSR_VULKAN_PREFERENCE
+    order += vulkan
     for candidate in order:
         if candidate in supported and candidate not in rejected:
             return candidate
@@ -311,6 +324,9 @@ def _gsr_codec_choice(rc, avoid: Optional[str] = None) -> Optional[str]:
 def _gsr_codec_args(rc, extra: list[str], avoid: Optional[str] = None) -> list[str]:
     """The -k arguments for a GSR command, honouring a user-supplied -k."""
     if _gsr_has_any_flag(extra, "-k"):
+        return []
+    if any(arg == "-encoder=cpu" or (arg == "-encoder" and extra[i + 1:i + 2] == ["cpu"])
+           for i, arg in enumerate(extra)):
         return []
     configured = _gsr_codec_for_encoder(rc.encoder, _color_depth(rc))
     codec = _gsr_codec_choice(rc, avoid)

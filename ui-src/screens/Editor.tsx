@@ -192,11 +192,40 @@ export function Editor() {
                 </div>
               ) : null}
               {snap.preparing ? (
-                <div className="ed-stage-preparing">{t('editor.preparingPreview')}</div>
+                <div className="ed-stage-preparing">{t('editor.preparingMedia')}</div>
               ) : null}
               <div className="ed-fade-overlay" ref={fadeRef} />
             </div>
           </div>
+
+          {selected?.kind === 'audio' ? (
+            <div className="ed-inspector ed-audio-inspector">
+              <span className="eyebrow">{t('editor.audioTrack')}</span>
+              <div className="ed-insp-field">
+              <span>{t('editor.audioSource')}</span>
+              <Select
+                label={t('editor.audioSource')}
+                value={String(selected.audioStream ?? 0)}
+                onChange={v => engine.inspectorChange('audioStream', Number(v))}
+                options={(clips.find(c => c.slug === selected.clipId)?.audio_tracks ?? []).map((track): [string, string] => [
+                  String(track.index), track.title || t('editor.recordedTrack', {number: track.index + 1}),
+                ])}
+              />
+              </div>
+              <label className="ed-audio-volume">
+                <span>{t('editor.audioVolume')} {Math.round((selected.volume ?? 1) * 100)}%</span>
+                <input type="range" min="0" max="100" step="1"
+                  value={Math.round((selected.volume ?? 1) * 100)}
+                  onChange={e => engine.inspectorChange('volume', Number(e.target.value) / 100)} />
+              </label>
+              <label className="ed-audio-mute">
+                <span>{t('editor.audioMuted')}</span>
+                <Toggle label={t('editor.audioMuted')} checked={Boolean(selected.muted)}
+                  onChange={v => engine.inspectorChange('muted', v)} />
+              </label>
+              <p className="dim">{t('editor.detachedTracksHelp')}</p>
+            </div>
+          ) : null}
 
           {isText ? (
             <div className="ed-inspector">
