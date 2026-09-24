@@ -105,7 +105,11 @@ export function Clips() {
           <IconWarning size={17} className="banner-icon" />
           <div className="banner-text">
             <strong>{t('clips.hotkeysUnavailableTitle')}</strong>
-            <span>{t('clips.hotkeysUnavailableBody', {hotkey})}</span>
+            <span>
+              {status.platform === 'windows'
+                ? t('clips.hotkeysUnavailableBodyWindows', {hotkey})
+                : t('clips.hotkeysUnavailableBody', {hotkey})}
+            </span>
           </div>
         </div>
       ) : null}

@@ -29,6 +29,8 @@ import wave
 from pathlib import Path
 from typing import Optional
 
+from .oscompat import IS_WINDOWS, runtime_dir
+
 log = logging.getLogger("vice.audio")
 
 # ── Tone synthesis ─────────────────────────────────────────────────────────────
@@ -139,7 +141,7 @@ def _wav_for(name: str, volume: float) -> bytes:
 # ── Playback ───────────────────────────────────────────────────────────────────
 
 # Stable temp paths so we never accumulate files
-_TMP_DIR = Path("/tmp/vice")
+_TMP_DIR = runtime_dir()
 
 
 def _find_player() -> Optional[str]:
@@ -183,7 +185,53 @@ def resolve_custom_sound(custom: Optional[str]) -> Optional[Path]:
     return path
 
 
+def _play_windows_blocking(wav: Optional[bytes], path: Optional[Path]) -> None:
+    import winsound
+    if wav is not None:
+        winsound.PlaySound(wav, winsound.SND_MEMORY | winsound.SND_NODEFAULT)
+    elif path is not None:
+        winsound.PlaySound(str(path), winsound.SND_FILENAME | winsound.SND_NODEFAULT)
+
+
+async def _decode_to_wav(path: Path) -> Optional[bytes]:
+    """winsound only plays WAV, so anything else goes through ffmpeg first."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path),
+            "-t", "10", "-f", "wav", "-",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        data, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+    except (OSError, asyncio.TimeoutError) as exc:
+        log.debug("Could not decode %s: %s", path, exc)
+        return None
+    return data if proc.returncode == 0 and data else None
+
+
+async def _play_windows(name: str, volume: float, custom: Optional[str]) -> None:
+    """Windows plays WAV itself, straight from memory, so no player program
+    and no temp file are involved."""
+    sound = resolve_custom_sound(custom)
+    wav: Optional[bytes] = None
+    path: Optional[Path] = None
+    if sound is None:
+        wav = _wav_for(name, volume)
+    elif sound.suffix.lower() == ".wav":
+        path = sound
+    else:
+        wav = await _decode_to_wav(sound)
+        if wav is None:
+            wav = _wav_for(name, volume)
+    try:
+        await asyncio.to_thread(_play_windows_blocking, wav, path)
+    except Exception as exc:
+        log.debug("Audio playback error: %s", exc)
+
+
 async def _play(name: str, volume: float, custom: Optional[str] = None) -> None:
+    if IS_WINDOWS:
+        await _play_windows(name, volume, custom)
+        return
     player = _find_player()
     if not player:
         log.debug("No audio player found (paplay/aplay/ffplay); skipping notification")

@@ -248,6 +248,10 @@ export function Settings() {
     }
   };
 
+  // Windows has its own capture backends and encoders; everything else in
+  // Settings is the same on both platforms.
+  const isWindows = status.platform === 'windows';
+
   const micNeedsWfChoice =
     !draft.captureMic &&
     draft.captureAudio &&
@@ -380,20 +384,23 @@ export function Settings() {
             />
           </Row>
 
-          <Row
-            label={t('settings.replayStorage')}
-            help={t('settings.replayStorageHelp')}>
-            <Select
+          {/* gpu-screen-recorder's RAM/disk choice; the Windows ring is always on disk. */}
+          {!isWindows && (
+            <Row
               label={t('settings.replayStorage')}
-              value={draft.replayStorage}
-              onChange={replayStorage => update({replayStorage})}
-              options={[
-                ['auto', t('settings.optAutoRecommended')],
-                ['ram', t('settings.replayRam')],
-                ['disk', t('settings.replayDisk')],
-              ]}
-            />
-          </Row>
+              help={t('settings.replayStorageHelp')}>
+              <Select
+                label={t('settings.replayStorage')}
+                value={draft.replayStorage}
+                onChange={replayStorage => update({replayStorage})}
+                options={[
+                  ['auto', t('settings.optAutoRecommended')],
+                  ['ram', t('settings.replayRam')],
+                  ['disk', t('settings.replayDisk')],
+                ]}
+              />
+            </Row>
+          )}
 
           <Row label={t('settings.clipDuration')} help={t('settings.clipDurationHelp')}>
             <Slider
@@ -463,60 +470,123 @@ export function Settings() {
               label={t('settings.encoder')}
               value={draft.encoder}
               onChange={encoder => update({encoder})}
-              options={[
-                ['auto', t('settings.optAutoRecommended')],
-                ['h264_nvenc', t('settings.encoderH264Nvenc')],
-                ['hevc_nvenc', t('settings.encoderHevcNvenc')],
-                ['h264_vaapi', t('settings.encoderH264Vaapi')],
-                ['hevc_vaapi', t('settings.encoderHevcVaapi')],
-                ['av1_nvenc', t('settings.encoderAv1Nvenc')],
-                ['av1_vaapi', t('settings.encoderAv1Vaapi')],
-                ['h264_vulkan', t('settings.encoderH264Vulkan')],
-                ['hevc_vulkan', t('settings.encoderHevcVulkan')],
-                ['av1_vulkan', t('settings.encoderAv1Vulkan')],
-                ['libx264', t('settings.encoderX264')],
-                ['libx265', t('settings.encoderX265')],
-              ]}
+              options={
+                isWindows
+                  ? [
+                      ['auto', t('settings.optAutoRecommended')],
+                      ['h264_nvenc', t('settings.encoderH264Nvenc')],
+                      ['hevc_nvenc', t('settings.encoderHevcNvenc')],
+                      ['av1_nvenc', t('settings.encoderAv1Nvenc')],
+                      ['h264_qsv', t('settings.encoderH264Qsv')],
+                      ['hevc_qsv', t('settings.encoderHevcQsv')],
+                      ['av1_qsv', t('settings.encoderAv1Qsv')],
+                      ['h264_amf', t('settings.encoderH264Amf')],
+                      ['hevc_amf', t('settings.encoderHevcAmf')],
+                      ['av1_amf', t('settings.encoderAv1Amf')],
+                      ['libx264', t('settings.encoderX264')],
+                      ['libx265', t('settings.encoderX265')],
+                    ]
+                  : [
+                      ['auto', t('settings.optAutoRecommended')],
+                      ['h264_nvenc', t('settings.encoderH264Nvenc')],
+                      ['hevc_nvenc', t('settings.encoderHevcNvenc')],
+                      ['h264_vaapi', t('settings.encoderH264Vaapi')],
+                      ['hevc_vaapi', t('settings.encoderHevcVaapi')],
+                      ['av1_nvenc', t('settings.encoderAv1Nvenc')],
+                      ['av1_vaapi', t('settings.encoderAv1Vaapi')],
+                      ['h264_vulkan', t('settings.encoderH264Vulkan')],
+                      ['hevc_vulkan', t('settings.encoderHevcVulkan')],
+                      ['av1_vulkan', t('settings.encoderAv1Vulkan')],
+                      ['libx264', t('settings.encoderX264')],
+                      ['libx265', t('settings.encoderX265')],
+                    ]
+              }
             />
           </Row>
 
-          <Row
-            label={t('settings.colourDepth')}
-            help={t('settings.colourDepthHelp')}>
-            <Select
+          {/* The Windows backend records 8-bit only for now, and the decode
+              toggle only changes QtWebEngine flags, which WebView2 ignores. */}
+          {!isWindows && (
+            <Row
               label={t('settings.colourDepth')}
-              value={draft.colorDepth}
-              onChange={colorDepth => update({colorDepth})}
-              options={[
-                ['8', t('settings.colour8')],
-                ['10', t('settings.colour10')],
-              ]}
-            />
-          </Row>
+              help={t('settings.colourDepthHelp')}>
+              <Select
+                label={t('settings.colourDepth')}
+                value={draft.colorDepth}
+                onChange={colorDepth => update({colorDepth})}
+                options={[
+                  ['8', t('settings.colour8')],
+                  ['10', t('settings.colour10')],
+                ]}
+              />
+            </Row>
+          )}
 
-          <Row
-            label={t('settings.hardwareDecode')}
-            help={t('settings.hardwareDecodeHelp')}>
-            <Toggle
+          {!isWindows && (
+            <Row
               label={t('settings.hardwareDecode')}
-              checked={draft.hardwareDecode}
-              onChange={hardwareDecode => update({hardwareDecode})}
-            />
-          </Row>
+              help={t('settings.hardwareDecodeHelp')}>
+              <Toggle
+                label={t('settings.hardwareDecode')}
+                checked={draft.hardwareDecode}
+                onChange={hardwareDecode => update({hardwareDecode})}
+              />
+            </Row>
+          )}
 
           <Row label={t('settings.backend')} help={t('settings.backendHelp')}>
             <Select
               label={t('settings.backend')}
               value={draft.backend}
               onChange={backend => update({backend})}
-              options={[
-                ['auto', t('settings.optAutoRecommended')],
-                ['gsr', 'gpu-screen-recorder'],
-                ['wf-recorder', t('settings.backendWf')],
-                ['ffmpeg', t('settings.backendFfmpeg')],
-              ]}
+              options={
+                isWindows
+                  ? [
+                      ['auto', t('settings.optAutoRecommended')],
+                      ['ffmpeg', t('settings.backendFfmpegWindows')],
+                      ['obs', t('settings.backendObs')],
+                    ]
+                  : [
+                      ['auto', t('settings.optAutoRecommended')],
+                      ['gsr', 'gpu-screen-recorder'],
+                      ['wf-recorder', t('settings.backendWf')],
+                      ['ffmpeg', t('settings.backendFfmpeg')],
+                    ]
+              }
             />
           </Row>
+
+          {isWindows && draft.backend === 'obs' && (
+            <>
+              <Row label={t('settings.obsHost')} help={t('settings.obsHostHelp')}>
+                <TextField
+                  label={t('settings.obsHost')}
+                  mono
+                  value={draft.obsHost}
+                  placeholder="127.0.0.1"
+                  onChange={obsHost => update({obsHost})}
+                />
+              </Row>
+              <Row label={t('settings.obsPort')}>
+                <TextField
+                  label={t('settings.obsPort')}
+                  type="number"
+                  min={1}
+                  max={65535}
+                  value={draft.obsPort}
+                  onChange={obsPort => update({obsPort: Number(obsPort) || 4455})}
+                />
+              </Row>
+              <Row label={t('settings.obsPassword')} help={t('settings.obsPasswordHelp')}>
+                <TextField
+                  label={t('settings.obsPassword')}
+                  type="password"
+                  value={draft.obsPassword}
+                  onChange={obsPassword => update({obsPassword})}
+                />
+              </Row>
+            </>
+          )}
 
           <Row
             label={t('settings.followMouse')}
@@ -697,20 +767,22 @@ export function Settings() {
             />
           </Row>
 
-          <Row
-            label={t('settings.wfMicMode')}
-            help={t('settings.wfMicModeHelp')}>
-            <Select
+          {!isWindows && (
+            <Row
               label={t('settings.wfMicMode')}
-              value={draft.wfMicStrategy}
-              onChange={wfMicStrategy => update({wfMicStrategy})}
-              options={[
-                ['prompt', t('settings.wfMicPrompt')],
-                ['backend_fallback', t('settings.wfMicFallback')],
-                ['mic_only', t('settings.wfMicOnly')],
-              ]}
-            />
-          </Row>
+              help={t('settings.wfMicModeHelp')}>
+              <Select
+                label={t('settings.wfMicMode')}
+                value={draft.wfMicStrategy}
+                onChange={wfMicStrategy => update({wfMicStrategy})}
+                options={[
+                  ['prompt', t('settings.wfMicPrompt')],
+                  ['backend_fallback', t('settings.wfMicFallback')],
+                  ['mic_only', t('settings.wfMicOnly')],
+                ]}
+              />
+            </Row>
+          )}
         </Card>
 
         {/* ── Hotkeys ───────────────────────────────────────────── */}
@@ -720,7 +792,9 @@ export function Settings() {
             note={
               status.hotkeys_available === false
                 ? {
-                    text: t('settings.hotkeysUnavailable'),
+                    text: isWindows
+                      ? t('settings.hotkeysUnavailableWindows')
+                      : t('settings.hotkeysUnavailable'),
                     tone: 'warning' as const,
                   }
                 : null
@@ -792,7 +866,7 @@ export function Settings() {
           <Row
             label={t('settings.blocklist')}
             stack
-            help={t('settings.blocklistHelp')}>
+            help={isWindows ? t('settings.blocklistHelpWindows') : t('settings.blocklistHelp')}>
             <TextArea
               label={t('settings.blocklist')}
               value={draft.hotkeyBlocklist}
@@ -1000,21 +1074,21 @@ export function Settings() {
         {/* ── Advanced ──────────────────────────────────────────── */}
         <Card id="advanced" title={t('settings.secAdvanced')} register={register('advanced')}>
           <Row
-            label={t('settings.gsrArgs')}
+            label={isWindows ? t('settings.ffmpegArgs') : t('settings.gsrArgs')}
             stack
             help={
               <>
                 {tNode('settings.gsrArgsHelp', {
-                  example: <code>-k hevc -bm cbr -q 20000 -fm cfr</code>,
+                  example: <code>{isWindows ? '-maxrate 40M -bufsize 80M' : '-k hevc -bm cbr -q 20000 -fm cfr'}</code>,
                 })}
               </>
             }>
             <TextField
-              label={t('settings.gsrArgs')}
+              label={isWindows ? t('settings.ffmpegArgs') : t('settings.gsrArgs')}
               wide
               mono
               value={draft.gsrArgs}
-              placeholder="-k hevc -bm cbr -q 20000 -fm cfr"
+              placeholder={isWindows ? '-maxrate 40M -bufsize 80M' : '-k hevc -bm cbr -q 20000 -fm cfr'}
               onChange={gsrArgs => update({gsrArgs})}
             />
           </Row>

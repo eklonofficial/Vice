@@ -28,11 +28,12 @@ from typing import Optional
 
 from importlib.resources import files as _pkg_files
 
+from .oscompat import data_dir
 from .runtime import actual_home_dir
 
 log = logging.getLogger("vice.playlists")
 
-PLAYLISTS_PATH = actual_home_dir() / ".local" / "share" / "vice" / "playlists.json"
+PLAYLISTS_PATH = data_dir() / "playlists.json"
 
 # Same 8 gradient pairs as PL_COLORS in the UI; auto playlists pick one
 # deterministically so a recreated playlist keeps its look.
@@ -74,7 +75,7 @@ def build_tag_index(custom_games: list | None = None) -> dict[str, str]:
     proper names instead of raw filename tags."""
     index: dict[str, str] = {}
     try:
-        raw = json.loads((_pkg_files("vice") / "data" / "games.json").read_text())
+        raw = json.loads((_pkg_files("vice") / "data" / "games.json").read_text(encoding="utf-8"))
         for g in raw:
             name = str(g.get("name", "")).strip()
             if name:
@@ -106,7 +107,7 @@ class PlaylistStore:
         if not self.path.exists():
             return
         try:
-            data = json.loads(self.path.read_text())
+            data = json.loads(self.path.read_text(encoding="utf-8"))
             items = data.get("playlists", [])
             self._playlists = [p for p in items if isinstance(p, dict) and p.get("id")]
             self._dismissed_auto = {str(k) for k in data.get("dismissed_auto", []) if k}

@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <b>Instant-replay game clipping for Linux.</b><br/>
+  <b>Instant-replay game clipping for Linux and Windows.</b><br/>
   Press one key to save the last 20 seconds of gameplay. No scenes, no setup, no upload.
 </p>
 
@@ -67,6 +67,15 @@ Both paths install everything Vice needs, including the `gpu-screen-recorder` ca
 | Git clone | `cd Vice && git pull && ./install.sh` | `vice uninstall && rm -rf Vice` |
 
 > Don't mix the AUR package and `./install.sh` on the same machine. Uninstall one before switching.
+
+**Windows 10 / 11:**
+
+```powershell
+git clone https://github.com/eklonofficial/Vice; cd Vice
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+
+It installs anything missing (Python, ffmpeg, cloudflared) without admin rights and adds Vice to the Start Menu. To update, `git pull` and run it again; to uninstall, add `-Uninstall`.
 
 **Bazzite / Fedora Atomic:** not supported yet. rpm-ostree systems can't use `install.sh`, and the installer exits early on them rather than breaking your system. A Flatpak will fix this; follow [#97](https://github.com/eklonofficial/Vice/issues/97).
 
@@ -139,6 +148,16 @@ OBS has a replay buffer. So why use Vice?
 `gpu-screen-recorder` is the default backend everywhere. `wf-recorder` (Wayland) and `ffmpeg x11grab` (X11) exist as explicit opt-ins via `recording.backend` for unusual setups; they are never auto-selected.
 
 Game detection (filename tagging and Discord presence) works on X11, Hyprland, and sway. Works on KDE Plasma Wayland when `kdotool` is available. On other compositors clips simply save untagged.
+
+### Windows
+
+| | |
+|---|---|
+| Windows 10 (1903+) / 11 | ✅ |
+| NVIDIA / Intel / AMD | ✅ NVENC / Quick Sync / AMF |
+| Anything else | ✅ software encoding |
+
+Vice records the screen with ffmpeg and never injects into games. A few exclusive-fullscreen or DX9 games record black; for those, set **Settings → Recording → Recording backend** to **OBS Studio replay buffer** and turn on OBS's WebSocket server (Tools → WebSocket Server Settings).
 
 ## CLI
 
@@ -277,6 +296,16 @@ vice-app --debug
 # reproduce the crash, then Ctrl+C if the window didn't exit
 ```
 The log lands at `~/.local/share/vice/vice-debug.log`; attach it to a GitHub issue. Don't pipe the command through `tee`: Chromium's stderr can back up through the pipe and freeze the Qt event loop.
+
+### Windows
+
+**Windows asks whether Python can use the network.** Allow it for LAN share links; tunnel links work either way.
+
+**Clips are black.** The game uses exclusive fullscreen. Switch it to borderless, or use the OBS backend.
+
+**NVIDIA GPU, but Vice uses another encoder.** Your NVIDIA driver is too old for the installed ffmpeg. Update the driver.
+
+Logs are in `%LOCALAPPDATA%\Vice\`.
 
 **Anything else.** Run `vice doctor` for full diagnostics, or open an issue with the output.
 

@@ -38,9 +38,14 @@ from typing import Callable, List, Optional
 from .config import Config
 from .media import get_duration as _get_duration
 from .media import probe_media_detailed
+from .oscompat import IS_WINDOWS, new_group_kwargs, runtime_dir
 from .runtime import recover_wayland_display, resolve_path
 
 log = logging.getLogger("vice.recorder")
+
+# Windows has no SIGKILL. There every "signal" to another process is
+# TerminateProcess anyway, so SIGTERM is the same hard stop.
+_SIGKILL = getattr(signal, "SIGKILL", signal.SIGTERM)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Environment helpers
@@ -691,6 +696,9 @@ def resolve_display_backend(preferred: str = "auto") -> str:
 
 
 def list_display_options(preferred: str = "auto") -> dict:
+    if IS_WINDOWS:
+        from . import recorder_win
+        return recorder_win.list_display_options()
     backend = resolve_display_backend(preferred)
     warning = None
     if backend == "wf-recorder":
@@ -741,6 +749,9 @@ def _parse_gsr_audio_lines(raw: str, prefix: str) -> list[dict]:
 
 
 def list_gsr_audio_sources() -> dict:
+    if IS_WINDOWS:
+        from .win_audio import list_audio_sources
+        return list_audio_sources()
     sources = [
         {"id": "default_output", "label": "Default output", "kind": "monitor"},
         {"id": "default_input", "label": "Default input", "kind": "input"},
@@ -1100,7 +1111,7 @@ async def _read_stream_text(stream) -> str:
     return _combine_process_output(data)
 
 
-async def _spawn_capture(cmd: list[str], stderr) -> asyncio.subprocess.Process:
+async def _spawn_capture(cmd: list[str], stderr, stdin=None) -> asyncio.subprocess.Process:
     """Start a capture process as its own process-group leader.
 
     gpu-screen-recorder forks a privileged gsr-kms-server helper. Signalling
@@ -1110,11 +1121,15 @@ async def _spawn_capture(cmd: list[str], stderr) -> asyncio.subprocess.Process:
     until the daemon hit EMFILE and stopped clipping (#129). Own group means
     the helper can be reaped with the recorder.
     """
+    extra = new_group_kwargs()
+    if stdin is not None:
+        # The Windows backend feeds desktop audio to ffmpeg through stdin.
+        extra["stdin"] = stdin
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=stderr,
-        start_new_session=True,
+        **extra,
     )
     _register_capture(proc.pid, cmd)
     return proc
@@ -1129,7 +1144,7 @@ async def _spawn_capture(cmd: list[str], stderr) -> asyncio.subprocess.Process:
 # session cannot be given up, it is the #129 fix, so instead every capture
 # process is written down and a stale one is reaped at startup.
 
-CAPTURE_REGISTRY = Path("/tmp/vice/capture.json")
+CAPTURE_REGISTRY = runtime_dir() / "capture.json"
 
 
 def _register_capture(pid: int, cmd: list[str]) -> None:
@@ -1145,7 +1160,7 @@ def _unregister_capture(pid: int) -> None:
 
 def _read_capture_registry() -> list[dict]:
     try:
-        data = json.loads(CAPTURE_REGISTRY.read_text())
+        data = json.loads(CAPTURE_REGISTRY.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return []
     except (OSError, ValueError) as exc:
@@ -1166,6 +1181,15 @@ def _write_capture_registry(entries: list[dict]) -> None:
 
 def _process_argv(pid: int) -> Optional[list[str]]:
     """The argv of a live process, or None when it is gone or unreadable."""
+    if IS_WINDOWS:
+        import psutil
+        try:
+            return psutil.Process(pid).cmdline()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            return None
+        except OSError as exc:
+            log.debug("Could not read the command line of pid %d: %s", pid, exc)
+            return None
     try:
         raw = Path(f"/proc/{pid}/cmdline").read_bytes()
     except (FileNotFoundError, ProcessLookupError):
@@ -1218,6 +1242,17 @@ def reap_orphaned_captures() -> int:
                 pid,
             )
             continue
+        if IS_WINDOWS:
+            # No process groups to check: the argv match above is the proof,
+            # and the tree kill below only reaches this process's children.
+            log.warning(
+                "Found a recorder left over from a previous run (pid %d, %s). "
+                "Stopping it before starting a new one.",
+                pid, Path(argv[0]).name if argv else "?",
+            )
+            if _kill_tree(pid):
+                killed += 1
+            continue
         # Capture processes are always started with start_new_session, so a
         # real one leads its own group. If this pid does not, the group is
         # somebody else's and killpg would signal every process in it.
@@ -1253,10 +1288,39 @@ def _signal_group(proc: asyncio.subprocess.Process, sig: int) -> None:
     An empty group is the ordinary outcome once everything has exited, so
     ProcessLookupError is not an error here.
     """
+    if IS_WINDOWS:
+        _kill_tree(proc.pid)
+        return
     try:
         os.killpg(proc.pid, sig)
     except (ProcessLookupError, PermissionError, OSError):
         pass
+
+
+def _kill_tree(pid: int) -> bool:
+    """Windows stand-in for killpg: stop a process and everything it started.
+
+    Children are collected before the parent dies, because Windows forgets
+    the parent/child link as soon as the parent is gone. Returns whether the
+    process was there to stop.
+    """
+    import psutil
+    try:
+        parent = psutil.Process(pid)
+        family = parent.children(recursive=True) + [parent]
+    except psutil.NoSuchProcess:
+        return False
+    except psutil.Error as exc:
+        log.debug("Could not inspect pid %d: %s", pid, exc)
+        return False
+    for member in family:
+        try:
+            member.kill()
+        except psutil.NoSuchProcess:
+            pass
+        except psutil.Error as exc:
+            log.debug("Could not stop pid %d: %s", member.pid, exc)
+    return True
 
 
 async def _terminate_group(proc: asyncio.subprocess.Process, timeout: float = 5.0) -> None:
@@ -1274,7 +1338,7 @@ async def _terminate_group(proc: asyncio.subprocess.Process, timeout: float = 5.
         pass
     except Exception as exc:
         log.warning("Error while stopping capture process: %s", exc)
-    _signal_group(proc, signal.SIGKILL)
+    _signal_group(proc, _SIGKILL)
     try:
         await proc.wait()
     except Exception as exc:
@@ -1470,7 +1534,7 @@ class Recorder(ABC):
             log.error("Session recorder failed to start: %s", detail)
             # Session recording uses GSR on Wayland, so the same helper can
             # be left behind here (#129).
-            _signal_group(self._session_proc, signal.SIGKILL)
+            _signal_group(self._session_proc, _SIGKILL)
             _unregister_capture(self._session_proc.pid)
             self._session_proc = None
             self._session_program = ""
@@ -1783,6 +1847,9 @@ async def capture_screenshot(
     one holding the replay buffer, which is why nothing here touches the
     recorder's state.
     """
+    if IS_WINDOWS:
+        from . import recorder_win
+        return await recorder_win.capture_screenshot(out_path, rc, override, timeout)
     if not _has("gpu-screen-recorder"):
         raise RuntimeError("gpu-screen-recorder is not installed, so screenshots cannot be taken.")
 
@@ -2194,7 +2261,7 @@ class GSRRecorder(Recorder):
             stderr_text,
         )
         # GSR may have forked its helper before giving up.
-        _signal_group(self._proc, signal.SIGKILL)
+        _signal_group(self._proc, _SIGKILL)
         _unregister_capture(self._proc.pid)
         self._proc = None
         return detail
@@ -2392,7 +2459,7 @@ class SegmentRecorder(Recorder):
     def __init__(self, cfg: Config, use_wf_recorder: bool) -> None:
         super().__init__(cfg)
         self._use_wf = use_wf_recorder
-        self._seg_dir = Path("/tmp/vice/segs")
+        self._seg_dir = runtime_dir() / "segs"
         self._seg_dir.mkdir(parents=True, exist_ok=True)
         self._seg_index = 0
         self._segments: list[tuple[float, Path]] = []  # (start_time, path)
@@ -2628,8 +2695,8 @@ class SegmentRecorder(Recorder):
         )
 
         # Write concat list for ffmpeg
-        concat_list = Path("/tmp/vice/concat.txt")
-        with concat_list.open("w") as fh:
+        concat_list = runtime_dir() / "concat.txt"
+        with concat_list.open("w", encoding="utf-8") as fh:
             for _, seg in relevant:
                 fh.write(f"file '{seg}'\n")
 
@@ -2705,11 +2772,33 @@ def _create_wf_compatible_recorder(cfg: Config) -> Recorder:
     )
 
 
+def _create_windows_recorder(cfg: Config) -> Recorder:
+    """Windows has two backends: ffmpeg's ddagrab, which needs nothing but
+    ffmpeg, and OBS's replay buffer for the games ddagrab cannot see."""
+    pref = cfg.recording.backend
+    if pref == "obs":
+        from .recorder_obs import OBSRecorder
+        log.info("Selected backend: OBS replay buffer")
+        return OBSRecorder(cfg)
+    if pref not in ("auto", "ffmpeg"):
+        log.warning("recording.backend=%r does not exist on Windows; using ffmpeg", pref)
+    if not _has("ffmpeg"):
+        raise RuntimeError(
+            "ffmpeg is required on Windows but is not installed or not on PATH. "
+            "Install it with: winget install Gyan.FFmpeg"
+        )
+    from .recorder_win import DDAGrabRecorder
+    log.info("Selected backend: ffmpeg ddagrab")
+    return DDAGrabRecorder(cfg)
+
+
 def create_recorder(cfg: Config) -> Recorder:
     """
     Instantiate the best available recorder for this system.
     Respects cfg.recording.backend if not 'auto'.
     """
+    if IS_WINDOWS:
+        return _create_windows_recorder(cfg)
     pref = cfg.recording.backend
     on_wayland = _is_wayland()
     on_x11 = _is_x11()

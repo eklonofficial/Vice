@@ -5,17 +5,19 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "vice"
 dynamic = ["version"]
-description = "Linux game clip recorder, like Medal.tv, for Wayland and X11"
+description = "Game clip recorder, like Medal.tv, for Linux (Wayland and X11) and Windows"
 requires-python = ">=3.10"
 license = { text = "GPL-3.0-or-later" }
 dependencies = [
-    "evdev>=1.6.1",
+    "evdev>=1.6.1; sys_platform == 'linux'",
     "aiohttp>=3.9.0",
     "click>=8.1.7",
     "tomli>=2.0.1; python_version < '3.11'",
     "tomli-w>=1.0.0",
     "psutil>=5.9.0",
     "pywebview>=5.0",
+    # WASAPI loopback for desktop audio; Windows has no PipeWire to ask.
+    "soundcard>=0.4.3; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
@@ -34,4 +36,4 @@ include = ["vice*"]
 version = {attr = "vice.__version__"}
 
 [tool.setuptools.package-data]
-vice = ["ui/*", "ui/fonts/*", "ui/styles/*", "ui/scripts/*", "data/*.json", "fonts/*"]
+vice = ["ui/*", "ui/fonts/*", "ui/styles/*", "ui/scripts/*", "data/*.json", "data/*.ico", "fonts/*"]

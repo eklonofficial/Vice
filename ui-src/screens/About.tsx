@@ -30,6 +30,7 @@ export function About() {
 
   const recording = (config?.recording ?? {}) as Record<string, unknown>;
   const version = status.version || '';
+  const isWindows = status.platform === 'windows';
 
   const rows: Array<[string, string]> = [
     [t('about.version'), version || 'unknown'],
@@ -57,7 +58,7 @@ export function About() {
     <div className="about">
       <header className="about-head">
         <h1>{t('about.title')}</h1>
-        <p>{t('about.subtitle')}</p>
+        <p>{isWindows ? t('about.subtitleWindows') : t('about.subtitle')}</p>
       </header>
 
       <section className="about-hero">
@@ -68,11 +69,13 @@ export function About() {
           <h2>
             <Wordmark height={26} />
           </h2>
-          <p>{t('about.tagline')}</p>
+          <p>{isWindows ? t('about.taglineWindows') : t('about.tagline')}</p>
           <div className="about-chips">
             <span className="about-chip mono">{version || 'unknown'}</span>
             <span className="about-chip mono">GPL-3.0</span>
-            <span className="about-chip mono">{t('about.waylandAndX11')}</span>
+            <span className="about-chip mono">
+              {isWindows ? t('about.windows') : t('about.waylandAndX11')}
+            </span>
           </div>
         </div>
       </section>
@@ -109,7 +112,7 @@ export function About() {
 
       <section className="about-danger">
         <h3 className="eyebrow">{t('about.dangerZone')}</h3>
-        <p>{t('about.uninstallHelp')}</p>
+        <p>{isWindows ? t('about.uninstallHelpWindows') : t('about.uninstallHelp')}</p>
         <div className="about-cmd">
           <code className="mono">{UNINSTALL_CMD}</code>
           <button type="button" className="btn btn-quiet btn-sm" onClick={() => void copyUninstall()}>

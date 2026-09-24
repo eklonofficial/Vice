@@ -80,6 +80,8 @@ export interface Status {
   public_is_tunnel: boolean;
   recording: boolean;
   backend: string;
+  /** Which platform the daemon runs on; decides the backends Settings offers. */
+  platform?: 'linux' | 'windows';
   session_active: boolean;
   hotkeys_available: boolean;
   /** False while the recorder is down, paired with recorder_error (#156). */

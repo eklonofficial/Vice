@@ -29,20 +29,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Callable, Coroutine
 
 import evdev
 from evdev import InputDevice, categorize, ecodes
 
-from .config import MODIFIER_CANON, MODIFIER_KEYS, normalize_combo
+# DOUBLE_TAP_WINDOW, AsyncCallback and _safe_call used to live here; kept
+# importable from this module.
+from .hotkey_dispatch import DOUBLE_TAP_WINDOW, AsyncCallback, HotkeyDispatcher, _safe_call  # noqa: F401
 
 log = logging.getLogger("vice.hotkey")
-
-# A callback type: async def handler() -> None
-AsyncCallback = Callable[[], Coroutine]
-
-# Seconds within which a second press counts as a double-tap.
-DOUBLE_TAP_WINDOW = 0.35
 
 # How often the supervisor rescans /dev/input for plugged/unplugged
 # keyboards. Scanning is a handful of open/ioctl/close calls; 3 s keeps
@@ -50,54 +45,14 @@ DOUBLE_TAP_WINDOW = 0.35
 RESCAN_INTERVAL = 3.0
 
 
-class HotkeyListener:
+class HotkeyListener(HotkeyDispatcher):
     def __init__(self) -> None:
-        self._bindings: dict[str, list[AsyncCallback]] = {}
-        self._double_bindings: dict[str, list[AsyncCallback]] = {}
+        super().__init__()
         # One (device, listener task) per device path, supervised for
         # hotplug. The device handle is kept so stop()/reaping can close
         # it even when the task never got to run.
         self._listeners: dict[str, tuple[InputDevice, asyncio.Task]] = {}
         self._supervisor: asyncio.Task | None = None
-        self._running = False
-        # Per-key pending single-tap timer tasks
-        self._pending: dict[str, asyncio.Task] = {}
-        # Modifier keys currently held down (canonical names, e.g. KEY_LEFTALT),
-        # so a press like Alt+F9 can be matched as one combo.
-        self._held_mods: set[str] = set()
-        self.available = False
-        # Optional: called with the new availability whenever it changes
-        # (e.g. last keyboard unplugged, or one plugged back in).
-        self.on_availability_change: Callable[[bool], None] | None = None
-
-    def on(self, key_name: str, callback: AsyncCallback) -> None:
-        """
-        Register an async callback for a single-tap of key_name.
-        Fires after DOUBLE_TAP_WINDOW if no second press is detected.
-        Multiple callbacks per key are supported.
-
-        key_name may be a combo like "KEY_LEFTALT+KEY_F9"; it is normalized so
-        registration and live matching share one canonical form.
-        """
-        self._bindings.setdefault(normalize_combo(key_name), []).append(callback)
-
-    def on_double(self, key_name: str, callback: AsyncCallback) -> None:
-        """
-        Register an async callback for a double-tap of key_name.
-        Fires immediately on the second press within DOUBLE_TAP_WINDOW.
-        Multiple callbacks per key are supported.
-
-        key_name may be a combo like "KEY_LEFTALT+KEY_F9".
-        """
-        self._double_bindings.setdefault(normalize_combo(key_name), []).append(callback)
-
-    def clear_bindings(self) -> None:
-        """Remove all hotkey bindings and cancel pending single-tap timers."""
-        self._bindings.clear()
-        self._double_bindings.clear()
-        for t in self._pending.values():
-            t.cancel()
-        self._pending.clear()
 
     async def start(self) -> None:
         """Discover keyboards, then keep watching for hotplug events.
@@ -124,9 +79,7 @@ class HotkeyListener:
         if self._supervisor:
             self._supervisor.cancel()
             self._supervisor = None
-        for t in self._pending.values():
-            t.cancel()
-        self._pending.clear()
+        self._cancel_pending()
         tasks = []
         for dev, task in self._listeners.values():
             task.cancel()
@@ -157,20 +110,6 @@ class HotkeyListener:
             self._listeners[dev.path] = (dev, asyncio.create_task(self._listen(dev)))
         self._set_available(bool(self._listeners))
 
-    def _set_available(self, value: bool) -> None:
-        if value == self.available:
-            return
-        self.available = value
-        if value:
-            log.info("Keyboard available, hotkeys active")
-        else:
-            log.warning("All keyboards disconnected, hotkeys inactive until one reappears")
-        if self.on_availability_change:
-            try:
-                self.on_availability_change(value)
-            except Exception:
-                log.exception("Hotkey availability callback raised")
-
     async def _listen(self, dev: InputDevice) -> None:
         log.debug("Listening on %s (%s)", dev.path, dev.name)
         try:
@@ -184,19 +123,7 @@ class HotkeyListener:
                 if isinstance(pressed, str):
                     pressed = [pressed]
                 for key_name in pressed:
-                    if key_name in MODIFIER_KEYS:
-                        # Track held modifiers so the next main-key press can be
-                        # matched as a combo. Modifiers never fire on their own.
-                        canon = MODIFIER_CANON.get(key_name, key_name)
-                        if key_event.keystate == key_event.key_down:
-                            self._held_mods.add(canon)
-                        elif key_event.keystate == key_event.key_up:
-                            self._held_mods.discard(canon)
-                        continue
-                    # key_down = 1
-                    if key_event.keystate != key_event.key_down:
-                        continue
-                    await self._handle_press(self._combo_for(key_name))
+                    await self._key_event(key_name, key_event.keystate)
         except OSError as exc:
             log.warning(
                 "Device %s disconnected: %s, will reattach when it returns",
@@ -209,59 +136,6 @@ class HotkeyListener:
             # phantom modifier stuck on.
             self._held_mods.clear()
             _close_quietly(dev)
-
-    def _combo_for(self, key_name: str) -> str:
-        """Build the canonical combo string for a main-key press, folding in any
-        modifiers currently held down."""
-        if not self._held_mods:
-            return key_name
-        return normalize_combo("+".join((*self._held_mods, key_name)))
-
-    async def _handle_press(self, key_name: str) -> None:
-        has_single = bool(self._bindings.get(key_name))
-        has_double = bool(self._double_bindings.get(key_name))
-
-        # If neither single nor double bindings, nothing to do
-        if not has_single and not has_double:
-            return
-
-        # If there's a pending single-tap timer for this key, cancel it,
-        # this is the second press, so fire double-tap callbacks instead.
-        if key_name in self._pending:
-            self._pending.pop(key_name).cancel()
-            if has_double:
-                for cb in self._double_bindings[key_name]:
-                    asyncio.create_task(_safe_call(cb, key_name))
-            return
-
-        if not has_double:
-            # No double-tap binding, fire single immediately.
-            if has_single:
-                for cb in self._bindings[key_name]:
-                    asyncio.create_task(_safe_call(cb, key_name))
-            return
-
-        # Has a double-tap binding: start a wait window.
-        # If it expires without a second press, fire single-tap callbacks.
-        async def _wait_and_fire():
-            try:
-                await asyncio.sleep(DOUBLE_TAP_WINDOW)
-            except asyncio.CancelledError:
-                return
-            self._pending.pop(key_name, None)
-            if has_single:
-                for cb in self._bindings[key_name]:
-                    asyncio.create_task(_safe_call(cb, key_name))
-
-        task = asyncio.create_task(_wait_and_fire())
-        self._pending[key_name] = task
-
-
-async def _safe_call(cb: AsyncCallback, key_name: str) -> None:
-    try:
-        await cb()
-    except Exception:
-        log.exception("Hotkey callback for %s raised an exception", key_name)
 
 
 def _close_quietly(dev: InputDevice) -> None:

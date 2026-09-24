@@ -44,7 +44,12 @@ from .config import (
     load as load_config,
     save as save_config,
 )
-from .hotkey import HotkeyListener, can_access_hotkeys, list_available_keys
+from .oscompat import IS_WINDOWS, data_dir, hide_child_consoles, open_path, runtime_dir
+
+if IS_WINDOWS:
+    from .hotkey_win import HotkeyListener, can_access_hotkeys, list_available_keys
+else:
+    from .hotkey import HotkeyListener, can_access_hotkeys, list_available_keys
 from .media import cleanup_temp_files
 from .recorder import (capture_screenshot, create_recorder, filename_tag,
                        reap_orphaned_captures)
@@ -53,8 +58,12 @@ from .runtime import (
     claim_daemon_lock,
     daemon_is_running,
     normalize_runtime_environment,
+    open_ipc_connection,
+    request_shutdown,
     resolve_path,
     has_display,
+    set_shutdown_handler,
+    start_ipc_server,
     installed_version,
     runtime_env_snapshot,
     running_under_systemd,
@@ -108,10 +117,10 @@ def _best_game_match(entries, haystacks) -> Optional[str]:
                 best_name, best_len = name, len(n)
     return best_name
 
-PID_FILE    = Path("/tmp/vice/vice.pid")
-SOCKET_FILE = Path("/tmp/vice/vice.sock")
+PID_FILE    = runtime_dir() / "vice.pid"
+SOCKET_FILE = runtime_dir() / "vice.sock"
 USER_BIN_DIR = actual_home_dir() / ".local" / "bin"
-INSTALL_VENV_DIR = actual_home_dir() / ".local" / "share" / "vice" / "venv"
+INSTALL_VENV_DIR = data_dir() / "venv"
 USER_DESKTOP_FILE = actual_home_dir() / ".local" / "share" / "applications" / "vice.desktop"
 USER_ICON_FILE = (
     actual_home_dir()
@@ -123,7 +132,7 @@ USER_ICON_FILE = (
     / "apps"
     / "vice.svg"
 )
-DAEMON_LOG_FILE = actual_home_dir() / ".local" / "share" / "vice" / "vice.log"
+DAEMON_LOG_FILE = data_dir() / "vice.log"
 
 # Consecutive unexpected recorder deaths before the watchdog starts backing
 # off. Two is normal turbulence (a driver reset, a suspend edge); a third in a
@@ -204,7 +213,15 @@ class ViceDaemon:
         return ""
 
     async def run(self) -> None:
-        Path("/tmp/vice").mkdir(parents=True, exist_ok=True)
+        stop_event = asyncio.Event()
+        if IS_WINDOWS:
+            # Registered before anything else starts: the IPC server and the
+            # UI's Quit accept "stop" as soon as they are up, and recorder
+            # start-up (encoder probes) can take seconds after that. A stop
+            # arriving then used to be acknowledged and dropped.
+            loop = asyncio.get_running_loop()
+            set_shutdown_handler(lambda: loop.call_soon_threadsafe(stop_event.set))
+        runtime_dir().mkdir(parents=True, exist_ok=True)
         out_dir = resolve_path(self.cfg.output.directory)
 
         # A capture process runs in its own session so its helper can be
@@ -244,9 +261,7 @@ class ViceDaemon:
 
         PID_FILE.write_text(str(os.getpid()))
 
-        server = await asyncio.start_unix_server(
-            self._handle_ipc, path=str(SOCKET_FILE)
-        )
+        server = await start_ipc_server(self._handle_ipc, SOCKET_FILE)
 
         async def _abort_startup() -> None:
             try:
@@ -385,9 +400,19 @@ class ViceDaemon:
             self._update_task = asyncio.create_task(self._update_check_soon())
 
         loop = asyncio.get_running_loop()
-        stop_event = asyncio.Event()
-        loop.add_signal_handler(signal.SIGTERM, stop_event.set)
-        loop.add_signal_handler(signal.SIGINT,  stop_event.set)
+        if IS_WINDOWS:
+            # The Proactor loop has no add_signal_handler. Ctrl+C and
+            # Ctrl+Break arrive as plain signals; "stop" over IPC and the UI's
+            # quit button come through the shutdown handler (registered at
+            # the top of run()) instead of a self-SIGTERM, which Windows
+            # would turn into TerminateProcess.
+            def _from_signal(*_args) -> None:
+                loop.call_soon_threadsafe(stop_event.set)
+            signal.signal(signal.SIGINT, _from_signal)
+            signal.signal(signal.SIGBREAK, _from_signal)
+        else:
+            loop.add_signal_handler(signal.SIGTERM, stop_event.set)
+            loop.add_signal_handler(signal.SIGINT,  stop_event.set)
 
         await stop_event.wait()
         await self._shutdown(server)
@@ -1089,6 +1114,9 @@ class ViceDaemon:
             "cpu_fallback":   bool(getattr(self.recorder, "cpu_fallback", False)),
             "codec_fallback": bool(getattr(self.recorder, "codec_fallback", False)),
             "backend":          self.recorder.name,
+            # The settings screen offers different backends and encoders per
+            # platform, so it needs to know which one it is talking to.
+            "platform":         "windows" if IS_WINDOWS else "linux",
             "clips":            self._clips_in_library(),
             "session_active":   self._session_active,
             "clip_key":         self.cfg.hotkeys.clip,
@@ -1411,7 +1439,10 @@ class ViceDaemon:
                     await writer.drain()
                 finally:
                     # A client closing early must not discard an accepted stop.
-                    os.kill(os.getpid(), signal.SIGTERM)
+                    if IS_WINDOWS:
+                        request_shutdown()
+                    else:
+                        os.kill(os.getpid(), signal.SIGTERM)
                 return
             elif cmd == "status":
                 writer.write(json.dumps({
@@ -1450,7 +1481,7 @@ async def _ipc(command: str, timeout: float = 5.0) -> Optional[str]:
     writer = None
     try:
         reader, writer = await asyncio.wait_for(
-            asyncio.open_unix_connection(str(SOCKET_FILE)), timeout=timeout,
+            open_ipc_connection(SOCKET_FILE), timeout=timeout,
         )
         writer.write(command.encode() + b"\n")
         await asyncio.wait_for(writer.drain(), timeout=timeout)
@@ -1565,8 +1596,8 @@ def _refresh_desktop_caches() -> None:
 
 def _setup_daemon_logging(debug: bool) -> None:
     DAEMON_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    handlers: list[logging.Handler] = [logging.FileHandler(DAEMON_LOG_FILE)]
-    if sys.stderr.isatty():
+    handlers: list[logging.Handler] = [logging.FileHandler(DAEMON_LOG_FILE, encoding="utf-8")]
+    if sys.stderr is not None and sys.stderr.isatty():
         handlers.append(logging.StreamHandler())
     logging.basicConfig(
         level=logging.DEBUG if debug else logging.INFO,
@@ -1641,7 +1672,8 @@ def _http_probe(url: str, timeout: float = 2.0) -> tuple[bool, str]:
 @click.version_option(__version__, prog_name="vice")
 @click.pass_context
 def cli(ctx: click.Context) -> None:
-    """Vice, Linux game clip recorder (Medal.tv for Linux)."""
+    """Vice, instant-replay game clip recorder for Linux and Windows."""
+    hide_child_consoles()
     normalize_runtime_environment()
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
@@ -1750,10 +1782,7 @@ def _run_daemon(open_ui: bool) -> None:
         port = daemon.cfg.sharing.port
         from threading import Timer
         def _open():
-            subprocess.Popen(
-                ["xdg-open", f"http://localhost:{port}/"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+            open_path(f"http://localhost:{port}/")
         Timer(1.5, _open).start()
 
     try:
@@ -1778,10 +1807,7 @@ def ui() -> None:
         url = f"http://localhost:{cfg.sharing.port}/"
         if not raw:
             click.echo("Daemon may not be running, opening default port anyway.")
-    subprocess.Popen(
-        ["xdg-open", url],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
+    open_path(url)
     click.echo(f"Opening {url}")
 
 
@@ -1855,20 +1881,28 @@ def doctor() -> None:
     click.echo("")
 
     click.echo("Environment")
-    for key, value in runtime_env_snapshot().items():
+    env = ({key: os.environ.get(key, "") for key in ("APPDATA", "LOCALAPPDATA", "TEMP")}
+           if IS_WINDOWS else runtime_env_snapshot())
+    for key, value in env.items():
         click.echo(f"  {key}={value or '(unset)'}")
     click.echo("")
 
-    click.echo("User systemd environment")
-    if systemd_env:
-        for key in sorted(systemd_env):
-            click.echo(f"  {key}={systemd_env[key]}")
+    if IS_WINDOWS:
+        _doctor_windows(cfg)
     else:
-        click.echo("  (unavailable)")
-    click.echo("")
+        click.echo("User systemd environment")
+        if systemd_env:
+            for key in sorted(systemd_env):
+                click.echo(f"  {key}={systemd_env[key]}")
+        else:
+            click.echo("  (unavailable)")
+        click.echo("")
 
     click.echo("Service")
-    if service_file is not None:
+    if IS_WINDOWS:
+        from .win32 import autostart_command
+        click.echo(f"  Start at login: {autostart_command() or '(off, run `vice autostart --enable`)'}")
+    elif service_file is not None:
         click.echo(f"  File: {service_file}")
         click.echo(f"  Enabled: {_systemctl_user_query('is-enabled')}")
         click.echo(f"  Active: {_systemctl_user_query('is-active')}")
@@ -1904,8 +1938,10 @@ def doctor() -> None:
     click.echo("")
 
     click.echo("Dependencies")
-    for tool in ("gpu-screen-recorder", "wf-recorder", "ffmpeg", "xdg-open", "systemctl",
-                 "xdotool", "xprop", "wmctrl"):
+    tools = (("ffmpeg", "ffprobe", "cloudflared") if IS_WINDOWS else
+             ("gpu-screen-recorder", "wf-recorder", "ffmpeg", "xdg-open", "systemctl",
+              "xdotool", "xprop", "wmctrl"))
+    for tool in tools:
         click.echo(f"  {tool}: {shutil.which(tool) or '(not found)'}")
     click.echo("")
 
@@ -1930,7 +1966,7 @@ def show_config() -> None:
     """Print the config file path and its contents."""
     click.echo(f"Config: {CONFIG_PATH}\n")
     if CONFIG_PATH.exists():
-        click.echo(CONFIG_PATH.read_text())
+        click.echo(CONFIG_PATH.read_text(encoding="utf-8"))
     else:
         click.echo("(no config file yet, will be created on first `vice start`)")
 
@@ -1942,6 +1978,10 @@ def open_config() -> None:
         from .config import Config
         save_config(Config())
         click.echo(f"Created default config at {CONFIG_PATH}")
+    if IS_WINDOWS and not os.environ.get("EDITOR"):
+        # .toml usually has no association, so name an editor that exists.
+        subprocess.Popen(["notepad.exe", str(CONFIG_PATH)])
+        return
     editor = os.environ.get("EDITOR", "nano")
     os.execlp(editor, editor, str(CONFIG_PATH))
 
@@ -1979,6 +2019,10 @@ def clips() -> None:
 def uninstall(yes: bool) -> None:
     """Remove Vice cleanly, config, service, and optionally clips."""
     click.echo("Vice uninstaller\n")
+
+    if IS_WINDOWS:
+        _uninstall_windows(yes)
+        return
 
     if _installed_via_aur():
         click.echo("Vice was installed via AUR.")
@@ -2044,6 +2088,102 @@ def uninstall(yes: bool) -> None:
         _refresh_desktop_caches()
 
     click.echo("\nVice has been removed. Goodbye!")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Windows
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _daemon_launch_command() -> str:
+    """How login autostart starts the daemon: pythonw, so no console window
+    appears at login, running this same installation."""
+    from .win32 import pythonw_executable
+    return f'"{pythonw_executable()}" -m vice.main start --no-open-ui'
+
+
+@cli.command()
+@click.option("--enable/--disable", default=None,
+              help="Start the recorder when you log in, or stop doing so.")
+def autostart(enable: Optional[bool]) -> None:
+    """Start recording at login (Windows). On Linux the systemd service does this."""
+    if not IS_WINDOWS:
+        click.echo("On Linux, run: systemctl --user enable --now vice.service")
+        return
+    from .win32 import autostart_command, set_autostart
+    if enable is None:
+        current = autostart_command()
+        click.echo(f"Start at login: {'on' if current else 'off'}")
+        if current:
+            click.echo(f"  {current}")
+        return
+    set_autostart(_daemon_launch_command() if enable else None)
+    click.echo(f"Start at login: {'on' if enable else 'off'}")
+
+
+def _doctor_windows(cfg: Config) -> None:
+    """The Windows half of `vice doctor`: what the capture backend will use."""
+    from . import recorder_win
+    from .win32 import dxgi_outputs
+
+    click.echo("Capture")
+    info = recorder_win.ffmpeg_capabilities()
+    click.echo(f"  ffmpeg: {info.get('version') or '(not found)'}")
+    click.echo(f"  ddagrab: {'yes' if info.get('ddagrab') else 'NO, needs ffmpeg 6.0 or newer'}")
+    click.echo(f"  encoders: {', '.join(info.get('encoders') or []) or '(none)'}")
+    for out in dxgi_outputs():
+        click.echo(
+            f"  display {out['adapter']}:{out['output']} {out['device']} "
+            f"{out['width']}x{out['height']} on {out['gpu']}"
+        )
+    try:
+        from .win_audio import list_audio_devices
+        devices = list_audio_devices()
+        click.echo(f"  audio outputs: {', '.join(d['name'] for d in devices['outputs']) or '(none)'}")
+        click.echo(f"  microphones: {', '.join(d['name'] for d in devices['inputs']) or '(none)'}")
+    except Exception as exc:
+        click.echo(f"  audio: unavailable ({exc})")
+    click.echo("")
+
+
+def _uninstall_windows(yes: bool) -> None:
+    if SOCKET_FILE.exists():
+        click.echo("Stopping daemon…")
+        asyncio.run(_ipc("stop"))
+
+    from .win32 import autostart_command, set_autostart
+    if autostart_command():
+        set_autostart(None)
+        click.echo("  Removed start at login.")
+
+    # Read where the clips are before the config that says so is removed.
+    try:
+        cfg = load_config() if CONFIG_PATH.exists() else Config()
+        clips_dir = resolve_path(cfg.output.directory)
+    except Exception:
+        clips_dir = Path(Config().output.directory)
+
+    if CONFIG_DIR.exists():
+        if yes or click.confirm(f"Remove config directory {CONFIG_DIR}?", default=False):
+            shutil.rmtree(CONFIG_DIR, ignore_errors=True)
+            click.echo(f"  Removed {CONFIG_DIR}.")
+
+    # Clips are only ever deleted on an explicit answer, never by --yes (the
+    # app's Uninstall button uses it, and promises the clips stay), and only
+    # the clip files themselves: the folder may hold anything else too.
+    clip_files = ([p for p in clips_dir.iterdir() if p.suffix.lower() in (".mp4", ".mkv")]
+                  if clips_dir.is_dir() else [])
+    if clip_files and not yes and click.confirm(
+        f"Delete {len(clip_files)} saved clip(s) in {clips_dir}?", default=False
+    ):
+        for clip_file in clip_files:
+            clip_file.unlink(missing_ok=True)
+        click.echo(f"  Deleted {len(clip_files)} clip(s).")
+
+    click.echo(
+        "\nTo remove the program itself, shortcuts and its data folder, run:\n"
+        "  powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall\n"
+        f"or delete {data_dir()} once Vice has exited."
+    )
 
 
 if __name__ == "__main__":

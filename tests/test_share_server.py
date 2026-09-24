@@ -1078,6 +1078,12 @@ class AutoPlaylistToggleTests(unittest.IsolatedAsyncioTestCase):
         # memory and leak into the assertions.
         server.playlists.path = Path(tmp) / "playlists.json"
         server.playlists.load()
+        # add_clip also starts probing and thumbnailing the clip in the
+        # background. Nothing here needs it, and on Python 3.12, when the test
+        # ends while ffprobe is still being spawned, the teardown's cancel
+        # hangs inside asyncio's own create_subprocess_exec (a CPython 3.12
+        # bug), stalling the whole run whenever ffmpeg is installed.
+        server._broadcast_clip = mock.AsyncMock()
         return server
 
     async def test_auto_playlist_created_when_enabled(self) -> None:
@@ -1116,7 +1122,12 @@ class ShareServerViewPersistenceTests(unittest.IsolatedAsyncioTestCase):
             sharing=SharingConfig(port=_free_port(), public_port=_free_port(),
                                   cloudflare_tunnel=False),
         )
-        return ShareServer(cfg)
+        server = ShareServer(cfg)
+        # Background probing is not what these tests are about, and on Python
+        # 3.12 a teardown that cancels it mid-spawn hangs inside asyncio's own
+        # create_subprocess_exec (see AutoPlaylistToggleTests).
+        server._broadcast_clip = mock.AsyncMock()
+        return server
 
     async def test_counts_survive_a_restart_with_an_empty_scan(self) -> None:
         import vice.share as share_mod

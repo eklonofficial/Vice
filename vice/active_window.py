@@ -1,4 +1,4 @@
-"""Active-window detection: adapters for X11, Hyprland, Sway and KDE Plasma.
+"""Active-window detection: adapters for X11, Hyprland, Sway, KDE Plasma and Windows.
 
 Each adapter shells out to the compositor's CLI/IPC and returns
 {"process": str, "class": str, "pid": int} or None. On other Wayland
@@ -21,12 +21,22 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Optional
 
+from .oscompat import IS_WINDOWS
+
 log = logging.getLogger(__name__)
 
 ActiveWindow = dict  # {"process": str, "class": str, "pid": int}
 
 
 def _read_proc_comm(pid: int) -> str:
+    if IS_WINDOWS:
+        # The executable name, e.g. "cs2.exe". games.json matches by
+        # substring, so the Linux names ("cs2") still match it.
+        import psutil
+        try:
+            return psutil.Process(pid).name()
+        except (psutil.Error, OSError, ValueError):
+            return ""
     try:
         return Path(f"/proc/{pid}/comm").read_text(errors="replace").strip()
     except Exception:
@@ -49,11 +59,20 @@ def read_steam_app_id(pid) -> Optional[str]:
         return None
     if pid <= 0:
         return None
-    try:
-        raw = Path(f"/proc/{pid}/environ").read_bytes()
-    except OSError as exc:
-        log.debug("Cannot read the environment of pid %s: %s", pid, exc)
-        return None
+    if IS_WINDOWS:
+        import psutil
+        try:
+            env = psutil.Process(pid).environ()
+        except (psutil.Error, OSError) as exc:
+            log.debug("Cannot read the environment of pid %s: %s", pid, exc)
+            return None
+        raw = b"\0".join(f"{k}={v}".encode("utf-8", "replace") for k, v in env.items())
+    else:
+        try:
+            raw = Path(f"/proc/{pid}/environ").read_bytes()
+        except OSError as exc:
+            log.debug("Cannot read the environment of pid %s: %s", pid, exc)
+            return None
 
     fallback = None
     for entry in raw.split(b"\0"):
@@ -227,6 +246,12 @@ def list_candidate_windows() -> list[ActiveWindow]:
     compositors where the focused window can't be read reliably (KWin only
     partially mirrors focus into XWayland's EWMH properties, #102). Empty on
     non-X11 adapters, Hyprland and Sway report focus natively."""
+    if _current_adapter() is _get_active_window_win32:
+        try:
+            return _candidate_windows_win32()
+        except Exception as exc:
+            log.debug("candidate window scan raised: %s", exc)
+            return []
     if _current_adapter() is not _get_active_window_x11:
         return []
     try:
@@ -237,6 +262,46 @@ def list_candidate_windows() -> list[ActiveWindow]:
     except Exception as exc:
         log.debug("candidate window scan raised: %s", exc)
         return []
+
+
+# ─── Windows ────────────────────────────────────────────────────────────────
+
+def _get_active_window_win32() -> Optional[ActiveWindow]:
+    from .win32 import foreground_window
+    win = foreground_window()
+    if not win:
+        return None
+    pid = int(win.get("pid") or 0)
+    proc = _read_proc_comm(pid) if pid else ""
+    cls = str(win.get("class") or "")
+    if not (cls or proc):
+        return None
+    return {"process": proc, "class": cls, "pid": pid, "title": win.get("title") or ""}
+
+
+# Windows and shell furniture that is visible and titled but never a game.
+_WIN32_SKIP_PROCESSES = {"explorer.exe", "textinputhost.exe", "applicationframehost.exe",
+                         "shellexperiencehost.exe", "searchhost.exe", "startmenuexperiencehost.exe"}
+
+
+def _candidate_windows_win32() -> list[ActiveWindow]:
+    from .win32 import visible_windows
+    windows: list[ActiveWindow] = []
+    for win in visible_windows():
+        pid = int(win.get("pid") or 0)
+        proc = _read_proc_comm(pid) if pid else ""
+        if proc.lower() in _WIN32_SKIP_PROCESSES:
+            continue
+        windows.append({"process": proc, "class": win.get("class") or "", "pid": pid,
+                        "title": win.get("title") or ""})
+    return windows
+
+
+def _pointer_display_win32() -> Optional[str]:
+    """The DXGI device name (DISPLAY1 and so on) of the monitor under the pointer,
+    which is the id the Windows capture backend takes."""
+    from .win32 import monitor_device_at_cursor
+    return monitor_device_at_cursor()
 
 
 # ─── pointer monitor ────────────────────────────────────────────────────────
@@ -354,7 +419,9 @@ def pointer_display() -> Optional[str]:
     """Name of the monitor the pointer is on, or None when it cannot be
     determined (unsupported compositor, missing tools)."""
     adapter = _current_adapter()
-    if adapter is _get_active_window_hyprland:
+    if adapter is _get_active_window_win32:
+        resolver = _pointer_display_win32
+    elif adapter is _get_active_window_hyprland:
         resolver = _pointer_display_hyprland
     elif adapter is _get_active_window_sway:
         resolver = _pointer_display_sway
@@ -375,7 +442,7 @@ def pointer_display_supported() -> bool:
     """For the settings UI. Whether follow-the-pointer capture can work on the
     running session."""
     adapter = _current_adapter()
-    if adapter in (_get_active_window_hyprland, _get_active_window_sway):
+    if adapter in (_get_active_window_hyprland, _get_active_window_sway, _get_active_window_win32):
         return True
     return adapter is _get_active_window_x11 and not os.environ.get("WAYLAND_DISPLAY")
 
@@ -389,6 +456,8 @@ def detection_tools_status() -> dict:
 # ─── compositor detection (one-shot at import time) ─────────────────────────
 
 def _detect_compositor_adapter() -> Optional[Callable[[], Optional[ActiveWindow]]]:
+    if IS_WINDOWS:
+        return _get_active_window_win32
     desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
     if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
         return _get_active_window_hyprland
@@ -461,4 +530,5 @@ def adapter_name() -> str:
         _get_active_window_sway:     "sway",
         _get_active_window_kde:      "kde",
         _get_active_window_x11:      "x11",
+        _get_active_window_win32:    "win32",
     }.get(_current_adapter(), "none")

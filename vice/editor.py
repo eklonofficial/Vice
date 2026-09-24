@@ -30,11 +30,12 @@ from typing import Awaitable, Callable, Optional
 from importlib.resources import files as _pkg_files
 
 from .recorder import slugify_clip_name
+from .oscompat import IS_WINDOWS, data_dir
 from .runtime import actual_home_dir
 
 log = logging.getLogger("vice.editor")
 
-PROJECT_PATH = actual_home_dir() / ".local" / "share" / "vice" / "editor_project.json"
+PROJECT_PATH = data_dir() / "editor_project.json"
 
 # Transition fx ids shared with the UI. xfade covers most; dipaccent has no
 # xfade equivalent and is rendered as color fades around a hard cut.
@@ -281,6 +282,26 @@ def _n(x: float) -> str:
 def _q(value: str) -> str:
     """Quote a filter option value for the filtergraph parser."""
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def _escape_filter_path(value: str) -> str:
+    """A path as a filter option value, escaped for both parsing passes.
+
+    ffmpeg unescapes a filtergraph twice: once splitting the graph, once
+    splitting each filter's key=value options. The single quoting above
+    survives the first pass only, which is fine for /home/... but leaves the
+    colon of a Windows drive letter to split the option (C:\\Users... became
+    an option named "\\Users"). So on Windows each pass gets its own
+    backslash-escaping: \\ ' : for the options, then \\ ' [ ] , ; for the graph.
+    """
+    inner = "".join("\\" + c if c in "\\':" else c for c in value)
+    return "".join("\\" + c if c in "\\'[],;" else c for c in inner)
+
+
+def _qpath(path) -> str:
+    if IS_WINDOWS:
+        return _escape_filter_path(str(path))
+    return _q(str(path))
 
 
 def _hexcolor(color: str) -> str:
@@ -548,8 +569,8 @@ def build_export_cmd(project: dict, sources: dict[str, Source], out_path: Path,
         fs = max(8, round(it["size"] * h / 1080))
         lbl = ctx.label("t")
         lines.append(
-            f"[{cur}]drawtext=expansion=none:fontfile={_q(str(ff))}:"
-            f"textfile={_q(str(text_file_path(text_dir, it['id'])))}:"
+            f"[{cur}]drawtext=expansion=none:fontfile={_qpath(ff)}:"
+            f"textfile={_qpath(text_file_path(text_dir, it['id']))}:"
             f"fontsize={fs}:fontcolor={_hexcolor(it['color'])}:"
             f"shadowcolor=black@0.5:shadowx=2:shadowy=2:"
             f"x=(w*{_n(it['x'])}/100)-(text_w/2):"
@@ -633,7 +654,7 @@ class EditorProjectStore:
         if not self.path.exists():
             return None
         try:
-            data = json.loads(self.path.read_text())
+            data = json.loads(self.path.read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else None
         except Exception as exc:
             log.warning("Editor project file %s is unreadable: %s", self.path, exc)
