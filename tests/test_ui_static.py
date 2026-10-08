@@ -250,6 +250,16 @@ class PlatformWorkaroundTests(unittest.TestCase):
         self.assertIn("'1'", env)
         self.assertIn("pywebview", env)
 
+    def test_native_tray_labels_come_from_the_locale_system(self) -> None:
+        env = (UI_SRC / "lib" / "env.ts").read_text()
+        main = (UI_SRC / "main.tsx").read_text()
+        self.assertIn("set_tray_labels", env)
+        self.assertIn("tray.openVice", main)
+        self.assertIn("tray.quitVice", main)
+        tray = english_copy()["tray"]
+        self.assertEqual(tray["openVice"], "Open Vice")
+        self.assertEqual(tray["quitVice"], "Quit Vice")
+
     def test_clipboard_falls_back_when_the_async_api_is_unavailable(self) -> None:
         clipboard = (UI_SRC / "lib" / "clipboard.ts").read_text()
         self.assertIn("pywebview", clipboard)

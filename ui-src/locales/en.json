@@ -2,6 +2,10 @@
   "app": {
     "name": "Vice"
   },
+  "tray": {
+    "openVice": "Open Vice",
+    "quitVice": "Quit Vice"
+  },
   "common": {
     "delete": "Delete",
     "keepIt": "Keep it",
