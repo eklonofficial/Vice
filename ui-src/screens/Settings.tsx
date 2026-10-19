@@ -1134,6 +1134,14 @@ export function Settings() {
 
         {/* ── Appearance ────────────────────────────────────────── */}
         <Card id="appearance" title={t('settings.secAppearance')} register={register('appearance')}>
+          <Row label={t('settings.closeToTray')} help={t('settings.closeToTrayHelp')}>
+            <Toggle
+              label={t('settings.closeToTray')}
+              checked={draft.closeToTray}
+              onChange={closeToTray => update({closeToTray})}
+            />
+          </Row>
+
           <Row label={t('settings.language')} help={t('settings.languageHelp')}>
             <Select
               label={t('settings.language')}

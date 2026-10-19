@@ -268,7 +268,9 @@ class ClosePolicyConfigTests(unittest.TestCase):
                     vice_app, "_close_to_tray_enabled", return_value=opt_in
                 ):
                     vice_app._run_webview("http://127.0.0.1:8765/")
-                    self.assertIs(controller.call_args.kwargs["close_to_tray"], opt_in)
+                    policy = controller.call_args.kwargs["close_to_tray"]
+                    self.assertIs(policy, vice_app._close_to_tray_enabled)
+                    self.assertIs(policy(), opt_in)
                     self.assertIs(controller.call_args.kwargs["shutdown_daemon"], shutdown)
                     controller.return_value.start.assert_called()
                     api = webview.create_window.call_args.kwargs["js_api"]

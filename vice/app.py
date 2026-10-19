@@ -1082,7 +1082,7 @@ def _run_webview(url: str) -> None:
         shutdown_daemon=_stop_daemon_completely,
         close_window=lambda: _close_window_after_bridge(win),
         logger=log,
-        close_to_tray=_close_to_tray_enabled(),
+        close_to_tray=_close_to_tray_enabled,
     )
     tray_controller.start()
     api._bind_tray(tray_controller)

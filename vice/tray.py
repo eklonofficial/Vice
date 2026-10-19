@@ -107,7 +107,7 @@ class WindowTrayController:
         shutdown_daemon: Callable[[], None],
         close_window: Callable[[], None],
         logger: Any,
-        close_to_tray: bool = False,
+        close_to_tray: bool | Callable[[], bool] = False,
     ) -> None:
         self._win = win
         self._close_to_tray = close_to_tray
@@ -283,10 +283,15 @@ class WindowTrayController:
 
     def _on_closing(self) -> bool | None:
         """Allow GUI destruction unless retaining it in the tray is opted in."""
-        if self._quitting or not self._close_to_tray or not self._tray_available:
+        if self._quitting or not self._tray_available or not self._should_hide():
             return None
         self.hide_window()
         return False
+
+    def _should_hide(self) -> bool:
+        # Consult live policy only on close/minimize, not on a polling timer.
+        policy = self._close_to_tray
+        return policy() if callable(policy) else policy
 
     def show_window(self) -> None:
         if self._dispatcher is not None:
@@ -311,7 +316,7 @@ class WindowTrayController:
 
     def keep_running(self) -> None:
         """In-app Minimize uses the same GUI-only close policy as X."""
-        if self._close_to_tray and self._tray_available:
+        if self._tray_available and self._should_hide():
             self.hide_window()
         else:
             self._close_window()

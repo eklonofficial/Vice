@@ -210,17 +210,7 @@ The systemd user service created by the installer runs `vice start --no-open-ui`
 
 ## Configuration
 
-Vice writes `~/.config/vice/config.toml` on first run. Most settings below are also editable live from the GUI.
-
-Closing the native window with **X** or the in-app **Minimize** action releases
-the GUI and its webview by default; the background daemon keeps recording.
-The GUI's tray icon also disappears. Launch Vice again to open a new window
-connected to the running daemon. **Quit Vice** still stops the daemon completely.
-
-To keep the old hide-to-tray behavior, set `close_to_tray = true` in the `[ui]`
-section below and reopen the GUI. This retains the webview and its memory while
-hidden. Without a supported tray host, closing always releases the GUI instead.
-This option is configured in the TOML file, not the live settings UI.
+Vice writes `~/.config/vice/config.toml` on first run. Everything below is also editable live from the GUI.
 
 ```toml
 [recording]
