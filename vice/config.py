@@ -284,6 +284,9 @@ class NotificationsConfig:
 
 @dataclass
 class UIConfig:
+    # Opt in to retaining the GUI in the tray on X / in-app Minimize.
+    # Otherwise release the GUI while the recording daemon keeps running.
+    close_to_tray: bool = False
     # Let Chromium decode clip previews on the GPU. Off by default: hardware
     # decode draws a black rectangle on a lot of Linux GPU and driver
     # combinations, and a laggy preview beats no picture (#140). Worth turning

@@ -96,7 +96,7 @@ def request_window_activation(socket_path: Path, timeout: float = 0.75) -> bool:
 
 
 class WindowTrayController:
-    """Own tray lifecycle without changing behavior on unsupported desktops."""
+    """Own GUI-only close policy and explicit full-shutdown tray actions."""
 
     def __init__(
         self,
@@ -107,8 +107,10 @@ class WindowTrayController:
         shutdown_daemon: Callable[[], None],
         close_window: Callable[[], None],
         logger: Any,
+        close_to_tray: bool = False,
     ) -> None:
         self._win = win
+        self._close_to_tray = close_to_tray
         self._icon_paths = tuple(icon_paths)
         self._shutdown_daemon = shutdown_daemon
         self._close_window = close_window
@@ -280,8 +282,8 @@ class WindowTrayController:
         return QIcon.fromTheme("vice")
 
     def _on_closing(self) -> bool | None:
-        """X hides to tray only when a real tray host exists."""
-        if self._quitting or not self._tray_available:
+        """Allow GUI destruction unless retaining it in the tray is opted in."""
+        if self._quitting or not self._close_to_tray or not self._tray_available:
             return None
         self.hide_window()
         return False
@@ -308,8 +310,8 @@ class WindowTrayController:
         self._win.hide()
 
     def keep_running(self) -> None:
-        """In-app Minimize: hide to tray, or preserve upstream close behavior."""
-        if self._tray_available:
+        """In-app Minimize uses the same GUI-only close policy as X."""
+        if self._close_to_tray and self._tray_available:
             self.hide_window()
         else:
             self._close_window()
