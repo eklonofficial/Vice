@@ -92,6 +92,20 @@ def _load_default_games() -> list[dict]:
 _DEFAULT_GAMES: list[dict] = _load_default_games()
 
 
+_STEAM_ID_NEEDLE = re.compile(r"steam_app_\d+")
+# The kernel keeps 15 characters of a process name (TASK_COMM_LEN).
+_COMM_MAX = 15
+
+
+def _needle_hits(needle: str, haystacks) -> bool:
+    if _STEAM_ID_NEEDLE.fullmatch(needle):
+        # An app id is a whole number: Half-Life's steam_app_70 is not
+        # SCP: Secret Laboratory's steam_app_700330 (#264).
+        tail = re.compile(re.escape(needle) + r"(?!\d)")
+        return any(tail.search(h) for h in haystacks)
+    return any(needle in h for h in haystacks)
+
+
 def _best_game_match(entries, haystacks) -> Optional[str]:
     """Name of the entry whose longest needle matches, or None.
 
@@ -99,10 +113,8 @@ def _best_game_match(entries, haystacks) -> Optional[str]:
     specific: "hades" matches Hades II's "hades2.exe", and a generic
     "client-win64-shipping.exe" matches every Unreal game that ships under
     that name. Taking the longest match rather than the first in list order
-    means the specific entry wins wherever the two overlap, and it makes a
-    Steam id safe to use even when a longer id starts with it
-    (steam_app_400 vs Garry's Mod's steam_app_4000). Equal lengths keep list
-    order, so nothing else moves.
+    means the specific entry wins wherever the two overlap. Equal lengths keep
+    list order, so nothing else moves.
     """
     best_name: Optional[str] = None
     best_len = 0
@@ -110,7 +122,26 @@ def _best_game_match(entries, haystacks) -> Optional[str]:
         for needle in matches or []:
             n = (needle or "").lower()
             # Length first: it is cheap and skips most substring scans.
-            if len(n) > best_len and any(n in h for h in haystacks):
+            if len(n) > best_len and _needle_hits(n, haystacks):
+                best_name, best_len = name, len(n)
+    return best_name
+
+
+def _truncated_process_match(entries, process: str) -> Optional[str]:
+    """The entry with the longest needle the kernel would cut down to
+    *process*, when *process* is exactly as long as it keeps. Rocket League
+    runs as "RocketLeague.ex", which its needle "RocketLeague.exe" never
+    matched (#262). Only used once nothing else names the game, because a
+    cut-down generic name ("client-win64-sh") is weaker evidence than any
+    full match."""
+    if len(process) != _COMM_MAX:
+        return None
+    best_name: Optional[str] = None
+    best_len = 0
+    for name, matches in entries:
+        for needle in matches or []:
+            n = (needle or "").lower()
+            if len(n) > max(best_len, _COMM_MAX) and n.startswith(process):
                 best_name, best_len = name, len(n)
     return best_name
 
@@ -1304,7 +1335,8 @@ class ViceDaemon:
         if not app_id:
             from_class = re.match(r"steam_app_(\d+)$", cls)
             app_id = from_class.group(1) if from_class else None
-        return steam_game_name(app_id) if app_id else None
+        named = steam_game_name(app_id) if app_id else None
+        return named or _truncated_process_match(custom, proc) or _truncated_process_match(bundled, proc)
 
     def _disk_stats(self) -> Optional[dict]:
         """Free space where clips land, for the Home readout.

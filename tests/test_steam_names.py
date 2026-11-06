@@ -9,7 +9,7 @@ except ModuleNotFoundError:
     from tests import _sandbox  # noqa: F401
 
 from vice import active_window
-from vice.config import Config, DiscordConfig
+from vice.config import Config, DiscordConfig, DiscordCustomGame
 from vice.main import ViceDaemon
 
 FLATPAK = ".var/app/com.valvesoftware.Steam/.local/share/Steam"
@@ -171,6 +171,48 @@ class MatchGameSteamFallbackTests(unittest.TestCase):
                 )
 
         self.assertIsNone(got)
+
+
+class GameMatchPrecisionTests(unittest.TestCase):
+    def _daemon(self, custom=()) -> ViceDaemon:
+        daemon = ViceDaemon.__new__(ViceDaemon)
+        daemon.cfg = Config(discord=DiscordConfig(custom_games=list(custom)))
+        return daemon
+
+    def _match(self, win, steam_name=None, custom=()):
+        with mock.patch("vice.active_window.read_steam_app_id", return_value=None), \
+             mock.patch("vice.main.steam_game_name", return_value=steam_name):
+            return self._daemon(custom)._match_game({"pid": 1, **win})
+
+    def test_an_app_id_is_not_matched_by_a_shorter_one(self) -> None:
+        # #264: Half-Life's steam_app_70 claimed SCP: Secret Laboratory.
+        got = self._match({"process": "scpsl.x86_64", "class": "steam_app_700330"},
+                          steam_name="SCP: Secret Laboratory")
+        self.assertEqual(got, "SCP: Secret Laboratory")
+
+    def test_an_app_id_still_matches_on_its_own(self) -> None:
+        self.assertEqual(self._match({"process": "hl_linux", "class": "steam_app_70"}), "Half-Life")
+        self.assertEqual(self._match({"process": "x", "class": "steam_app_70"}), "Half-Life")
+
+    def test_a_cut_down_process_name_matches_its_game(self) -> None:
+        # #262: the kernel shows RocketLeague.exe as RocketLeague.ex.
+        got = self._match({"process": "RocketLeague.ex", "class": "steam_app_252950"})
+        self.assertEqual(got, "Rocket League")
+
+    def test_a_custom_entry_wins_on_a_cut_down_name(self) -> None:
+        custom = [DiscordCustomGame(name="My League", matches=["rocketleague.exe"])]
+        got = self._match({"process": "RocketLeague.ex", "class": ""}, custom=custom)
+        self.assertEqual(got, "My League")
+
+    def test_steam_names_the_game_before_a_cut_down_name_guesses(self) -> None:
+        # Client-Win64-Shipping.exe is shared by many Unreal games, so its
+        # cut-down form only counts when nothing better is known.
+        got = self._match({"process": "Client-Win64-Sh", "class": "steam_app_999999999"},
+                          steam_name="Some Unreal Game")
+        self.assertEqual(got, "Some Unreal Game")
+
+    def test_a_short_process_name_is_not_treated_as_cut_down(self) -> None:
+        self.assertIsNone(self._match({"process": "rocket", "class": ""}))
 
 
 if __name__ == "__main__":
