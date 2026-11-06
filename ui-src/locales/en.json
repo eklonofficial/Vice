@@ -920,6 +920,12 @@
     "title": "What's new in Vice {version}",
     "close": "Got it",
     "thanks": "Thanks to {names} for their work on this release.",
+    "v2_15_1": {
+      "gameCaptureX11": {
+        "title": "Game Capture needs X11",
+        "body": "gpu-screen-recorder can only record a single window in an X11 session. On Wayland, Game Capture now stays off and Vice records the whole display. Before, it kept restarting the recording, so clips came out a few seconds long."
+      }
+    },
     "v2_15_0": {
       "gameCapture": {
         "title": "Record only the game",
