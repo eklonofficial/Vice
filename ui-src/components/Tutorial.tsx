@@ -5,6 +5,7 @@ import {api} from '../lib/api';
 import {useStore} from '../state/store';
 import {Modal} from '../components/Modal';
 import {formatDuration} from '../lib/format';
+import {gameCaptureBlocked} from '../lib/gameCapture';
 import {t} from '../lib/i18n';
 import {IconCheck, IconPlus} from './Icons';
 import {AccentPicker} from './AccentPicker';
@@ -139,7 +140,7 @@ export function Tutorial({open, onClose}: {open: boolean; onClose: () => void}) 
   // Both default off, which is how Vice behaved before either existed. Asking
   // here is the only place a new user meets them before they matter.
   const gameCapture = Boolean(state.config?.recording?.window_capture);
-  const gameCaptureSupported = state.status.backend === 'gpu-screen-recorder';
+  const gameCaptureBlock = gameCaptureBlocked(state.status);
   const shareDiscordFile = Boolean(state.config?.sharing?.share_discord_file);
 
   const persist = (patch: Record<string, Record<string, unknown>>) => {
@@ -295,9 +296,9 @@ export function Tutorial({open, onClose}: {open: boolean; onClose: () => void}) 
             </p>
             <Option
               title={t('tutorial.gameCaptureTitle')}
-              help={gameCaptureSupported ? t('tutorial.gameCaptureHelp') : t('home.gameCaptureUnsupported')}
-              checked={gameCaptureSupported && gameCapture}
-              disabled={!gameCaptureSupported}
+              help={gameCaptureBlock ?? t('tutorial.gameCaptureHelp')}
+              checked={!gameCaptureBlock && gameCapture}
+              disabled={Boolean(gameCaptureBlock)}
               onChange={enabled =>
                 persist({recording: {window_capture: enabled, ...(enabled ? {follow_mouse_display: false} : {})}})
               }

@@ -55,6 +55,24 @@ def _is_x11() -> bool:
     return bool(os.environ.get("DISPLAY")) and not _is_wayland()
 
 
+# What gpu-screen-recorder prints when asked for a window on a Wayland
+# session (src/recorder/capture_setup.c).
+GSR_WINDOW_CAPTURE_WAYLAND_ERROR = "window capture only works in a pure X11 session"
+
+
+def gsr_window_capture_supported() -> bool:
+    """Whether gpu-screen-recorder can pin capture to a window here.
+
+    GSR treats an XWayland server as Wayland and refuses every window target
+    on it, so Game Capture only works in a pure X11 session (#261, #274).
+    Only the session's own variables count: a leftover wayland socket on an
+    X11 desktop must not switch the feature off, and a session this misses is
+    caught by the first refused pin instead."""
+    if os.environ.get("WAYLAND_DISPLAY"):
+        return False
+    return os.environ.get("XDG_SESSION_TYPE", "").lower() != "wayland"
+
+
 def _is_nvidia() -> bool:
     if Path("/proc/driver/nvidia/version").exists():
         return True
@@ -932,11 +950,10 @@ def _gsr_capture_args(
     recognized game is focused, see Daemon._window_capture_loop. This is
     deliberately not GSR's own `-w focused` mode, which tracks whichever
     window currently has input focus and would jump to Discord/a browser/etc.
-    the moment you alt-tab away from the game. Pinning by id is X11/XWayland-
-    only (GSR's per-window capture doesn't support native-Wayland windows),
-    which is still the common case: Steam/Proton games render through
-    XWayland even on a Wayland desktop. Falls back to full-display capture
-    when no game is pinned yet or geometry can't be resolved.
+    the moment you alt-tab away from the game. Pinning by id needs a pure X11
+    session: GSR refuses window capture on XWayland too, see
+    gsr_window_capture_supported. Falls back to full-display capture when no
+    game is pinned yet or geometry can't be resolved.
     """
     if _gsr_has_any_flag(extra, "-w"):
         return []

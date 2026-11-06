@@ -346,7 +346,8 @@ export function Settings() {
   const followSupported = displays.follow_mouse_supported !== false;
   // Window pinning is GSR-only; status.backend is what's actually running,
   // not just configured (backend can be "auto").
-  const windowCaptureSupported = draft.backend === 'gsr' || status.backend === 'gpu-screen-recorder';
+  const windowCaptureBackend = draft.backend === 'gsr' || status.backend === 'gpu-screen-recorder';
+  const windowCaptureSupported = windowCaptureBackend && !status.window_capture_unavailable;
 
   return (
     <div className="settings">
@@ -565,7 +566,12 @@ export function Settings() {
             note={
               windowCaptureSupported
                 ? null
-                : {text: t('settings.windowCaptureUnsupported'), tone: 'warning' as const}
+                : {
+                    text: windowCaptureBackend
+                      ? t('settings.windowCaptureNeedsX11')
+                      : t('settings.windowCaptureUnsupported'),
+                    tone: 'warning' as const,
+                  }
             }
             help={t('settings.windowCaptureHelp')}>
             <Toggle

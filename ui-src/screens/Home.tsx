@@ -9,6 +9,7 @@ import {usePlaylistDropTarget} from '../lib/clipDrag';
 import {api} from '../lib/api';
 import {copyToClipboard} from '../lib/clipboard';
 import {formatBytes, formatDuration, relativeTime} from '../lib/format';
+import {gameCaptureBlocked} from '../lib/gameCapture';
 import {t, tNode} from '../lib/i18n';
 import {ClipCard} from '../components/ClipCard';
 import {Tile, ActionTile} from '../components/Tile';
@@ -60,9 +61,7 @@ export function Home() {
   const captureMic = Boolean(config?.recording?.capture_microphone);
   const tunnelOn = Boolean(config?.sharing?.cloudflare_tunnel);
   const gameCapture = Boolean(config?.recording?.window_capture);
-  // Window pinning is GSR-only, and status.backend is what is actually
-  // running rather than the configured "auto".
-  const gameCaptureSupported = status.backend === 'gpu-screen-recorder';
+  const gameCaptureBlock = gameCaptureBlocked(status);
 
   const recent = useMemo(() => clips.slice(0, ROW_LIMIT), [clips]);
   const mostViewed = useMemo(
@@ -197,16 +196,10 @@ export function Home() {
   const gameCaptureTile = (
     <Tile
       label={t('home.gameCapture')}
-      detail={
-        !gameCaptureSupported
-          ? t('home.gameCaptureUnsupported')
-          : gameCapture
-            ? t('home.gameCaptureGame')
-            : t('home.gameCaptureDesktop')
-      }
-      on={gameCaptureSupported && gameCapture}
+      detail={gameCaptureBlock ?? (gameCapture ? t('home.gameCaptureGame') : t('home.gameCaptureDesktop'))}
+      on={!gameCaptureBlock && gameCapture}
       busy={busy === 'gameCapture'}
-      disabled={!gameCaptureSupported}
+      disabled={Boolean(gameCaptureBlock)}
       icon={<GamepadIcon />}
       onToggle={() => void setGameCapture(!gameCapture)}
     />

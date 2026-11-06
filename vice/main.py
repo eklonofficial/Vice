@@ -50,8 +50,9 @@ from .hotkey import HotkeyListener, can_access_hotkeys, list_available_keys
 from .keys import KeyRing, save_sidecar as save_key_sidecar
 from .media import cleanup_temp_files, probe_media
 from .overlay_host import KeyOverlayHost
-from .recorder import (GSRRecorder, capture_screenshot, create_recorder, filename_tag,
-                       gsr_flatpak_installed, gsr_source, reap_orphaned_captures)
+from .recorder import (GSR_WINDOW_CAPTURE_WAYLAND_ERROR, GSRRecorder, capture_screenshot,
+                       create_recorder, filename_tag, gsr_flatpak_installed, gsr_source,
+                       gsr_window_capture_supported, reap_orphaned_captures)
 from .runtime import (
     actual_home_dir,
     claim_daemon_lock,
@@ -206,6 +207,11 @@ class ViceDaemon:
         # recognized game (games.json) is focused. None means full display.
         self._window_capture_id: Optional[str] = None
         self._window_capture_task: Optional[asyncio.Task] = None
+        # Window ids a pin already failed on. Every attempt restarts the
+        # recorder and empties the buffer, so one is never tried twice.
+        self._window_capture_failed: set[str] = set()
+        # "wayland" once GSR has refused window capture outright (#261, #274).
+        self._window_capture_refused: Optional[str] = None
 
     @staticmethod
     def _output_dir_problem(out_dir: Path) -> str:
@@ -802,10 +808,20 @@ class ViceDaemon:
     # confirmed gone, so quitting drops to full-display instead of GSR
     # crashing on a dead target.
 
+    def _window_capture_unavailable(self) -> Optional[str]:
+        """Why Game Capture cannot pin a window on this session, or None."""
+        if self._window_capture_refused:
+            return self._window_capture_refused
+        return None if gsr_window_capture_supported() else "wayland"
+
     def _sync_window_capture_task(self) -> None:
         # Window pinning only exists on GSR (-w flag); segment backends would
         # just eat pointless recorder restarts for a pin that's never applied.
         wanted = bool(self.cfg.recording.window_capture) and isinstance(self.recorder, GSRRecorder)
+        if wanted and self._window_capture_unavailable():
+            log.info("Game Capture is on, but gpu-screen-recorder can only capture a "
+                     "window in an X11 session. Recording the whole display")
+            wanted = False
         running = self._window_capture_task is not None and not self._window_capture_task.done()
         if wanted and not running:
             self._window_capture_task = asyncio.create_task(self._window_capture_loop())
@@ -846,7 +862,8 @@ class ViceDaemon:
                     # Asking X11 for focus again here would pin whatever the
                     # user tabbed to in between (Discord) under the game's name.
                     current = win.get("window_id")
-                    if not current or current == self._window_capture_id:
+                    if (not current or current == self._window_capture_id
+                            or current in self._window_capture_failed):
                         pending_switch = None
                         continue
                     if self._window_capture_id and current != pending_switch:
@@ -864,7 +881,11 @@ class ViceDaemon:
                                 await self._restart_recorder_for_config()
                             except Exception as exc:
                                 self._window_capture_id = previous
+                                self._window_capture_failed.add(current)
                                 log.warning("Could not pin capture to %s: %s", game, exc)
+                                if GSR_WINDOW_CAPTURE_WAYLAND_ERROR.lower() in str(exc).lower():
+                                    self._refuse_window_capture()
+                                    return
                     continue
 
                 # Focus is on something unrecognized (or nothing). That's
@@ -903,6 +924,17 @@ class ViceDaemon:
                             log.warning("Could not release capture pin: %s", exc)
         except asyncio.CancelledError:
             pass
+
+    def _refuse_window_capture(self) -> None:
+        """Stop pinning for the rest of this run. Retrying could only fail the
+        same way, and each try empties the replay buffer (#261, #274)."""
+        log.warning("gpu-screen-recorder refuses window capture on this session. "
+                    "Game Capture is off until Vice restarts; recording the whole display")
+        self._window_capture_refused = "wayland"
+        self._window_capture_task = None
+        if self.share:
+            asyncio.create_task(self.share.broadcast(
+                {"type": "status", "window_capture_unavailable": "wayland"}))
 
     async def _hotkeys_suppressed(self) -> bool:
         """Whether the focused app is one the user asked Vice to keep its hands
@@ -1377,6 +1409,8 @@ class ViceDaemon:
             # Which gpu-screen-recorder runs, and whether the Flatpak one is
             # there to choose in Settings.
             "gsr":              {"source": gsr_source(), "flatpak": gsr_flatpak_installed()},
+            # Game Capture pins a window, which GSR only does on X11.
+            "window_capture_unavailable": self._window_capture_unavailable(),
         }
 
     # ── update check ─────────────────────────────────────────────────────────

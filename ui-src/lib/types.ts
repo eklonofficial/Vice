@@ -98,6 +98,8 @@ export interface Status {
     source?: 'native' | 'flatpak' | null;
   } | null;
   gsr?: {source: 'native' | 'flatpak' | null; flatpak: boolean} | null;
+  /** Set when Game Capture cannot pin a window here: GSR only does it on X11. */
+  window_capture_unavailable?: 'wayland' | null;
   codec_fallback: boolean;
   /** Where clips land. Absent when the drive could not be measured. */
   disk?: {free: number; total: number} | null;

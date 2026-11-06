@@ -63,6 +63,7 @@ def _startup_daemon(recorder: _StubRecorder, *, share=None) -> ViceDaemon:
     daemon.hotkeys_available = True
     daemon._clip_count = 0
     daemon._update = None
+    daemon._window_capture_refused = None
     return daemon
 
 

@@ -2973,9 +2973,87 @@ class WindowCaptureLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(recorder.stop_calls, 0)
 
 
+    async def test_a_failed_pin_is_not_retried_on_the_same_window(self) -> None:
+        # Each attempt restarts the recorder and empties the buffer, so
+        # retrying a window that already failed only throws clips away.
+        recorder = _PinFailingRecorder("gsr error: failed to capture window 0xGAME")
+        daemon = self._daemon(recorder, window_capture_id=None)
+
+        await self._run_loop(daemon, recorder, ticks=3, wins=[_game_window("0xGAME")] * 3)
+
+        self.assertIsNone(daemon._window_capture_id)
+        self.assertEqual(recorder.start_calls, 2)  # the pin, then the restore
+        self.assertIsNone(daemon._window_capture_refused)
+
+    async def test_a_new_window_is_still_tried_after_a_failed_one(self) -> None:
+        recorder = _PinFailingRecorder("gsr error: failed to capture window 0xGAME")
+        daemon = self._daemon(recorder, window_capture_id=None)
+
+        await self._run_loop(daemon, recorder, ticks=2,
+                             wins=[_game_window("0xGAME"), _game_window("0xRELAUNCHED")])
+
+        self.assertEqual(daemon._window_capture_id, "0xRELAUNCHED")
+        self.assertEqual(recorder.start_calls, 3)
+
+    async def test_a_wayland_refusal_stops_game_capture(self) -> None:
+        # #261, #274: on XWayland every pin failed this way and was retried
+        # every five seconds, so the buffer never held more than a few.
+        recorder = _PinFailingRecorder(
+            "gsr error: GPU Screen Recorder window capture only works in a pure X11 "
+            "session. Xwayland is not supported. You can record a monitor instead on wayland")
+        daemon = self._daemon(recorder, window_capture_id=None)
+
+        await self._run_loop(daemon, recorder, ticks=3,
+                             wins=[_game_window("0xGAME"), _game_window("0xOTHER"), _game_window("0xOTHER")])
+        await asyncio.sleep(0)
+
+        self.assertIsNone(daemon._window_capture_id)
+        self.assertEqual(recorder.start_calls, 2)
+        self.assertEqual(daemon._window_capture_unavailable(), "wayland")
+        self.assertIn({"type": "status", "window_capture_unavailable": "wayland"},
+                      daemon.share.messages)
+
+
+class _PinFailingRecorder(_FakeRecorder):
+    """Refuses the first start, the pin, and comes back when restored."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__()
+        self._message = message
+
+    async def start(self) -> None:
+        self.start_calls += 1
+        if self.start_calls == 1:
+            raise RuntimeError(self._message)
+
+
+class GSRWindowCaptureSupportTests(unittest.TestCase):
+    def _supported(self, env: dict) -> bool:
+        with mock.patch.dict(os.environ, env, clear=True):
+            return recorder_mod.gsr_window_capture_supported()
+
+    def test_x11_session(self) -> None:
+        self.assertTrue(self._supported({"DISPLAY": ":0", "XDG_SESSION_TYPE": "x11"}))
+
+    def test_x11_without_a_session_type(self) -> None:
+        self.assertTrue(self._supported({"DISPLAY": ":0"}))
+
+    def test_wayland_display_means_xwayland(self) -> None:
+        self.assertFalse(self._supported({"DISPLAY": ":0", "WAYLAND_DISPLAY": "wayland-1"}))
+
+    def test_wayland_session_type(self) -> None:
+        self.assertFalse(self._supported({"DISPLAY": ":0", "XDG_SESSION_TYPE": "wayland"}))
+
+
 class WindowCaptureTaskGatingTests(unittest.IsolatedAsyncioTestCase):
     """_sync_window_capture_task: window pinning is GSR-only, so segment
-    backends (wf-recorder, ffmpeg) must never start the polling loop."""
+    backends (wf-recorder, ffmpeg) must never start the polling loop, and GSR
+    only pins a window on X11."""
+
+    def setUp(self) -> None:
+        patcher = mock.patch("vice.main.gsr_window_capture_supported", return_value=True)
+        self.supported = patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _daemon(self, cfg: Config, recorder) -> main_mod.ViceDaemon:
         with mock.patch("vice.main.load_config", return_value=cfg), \
@@ -3012,6 +3090,16 @@ class WindowCaptureTaskGatingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(daemon._window_capture_task)
         self.assertIsNone(daemon._window_capture_id)
+
+    async def test_does_not_start_on_a_wayland_session(self) -> None:
+        self.supported.return_value = False
+        cfg = Config(recording=RecordingConfig(window_capture=True))
+        daemon = self._daemon(cfg, GSRRecorder(cfg))
+
+        daemon._sync_window_capture_task()
+
+        self.assertIsNone(daemon._window_capture_task)
+        self.assertEqual(daemon._get_status()["window_capture_unavailable"], "wayland")
 
 
 class VolumeBalanceTests(unittest.IsolatedAsyncioTestCase):
