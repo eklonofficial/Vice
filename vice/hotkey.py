@@ -314,4 +314,11 @@ def can_access_hotkeys() -> bool:
 
 def list_available_keys() -> list[str]:
     """Return all KEY_* names evdev knows about (for documentation/config help)."""
-    return sorted(k for k in ecodes.bytype[ecodes.EV_KEY].values() if k.startswith("KEY_"))
+    names: set[str] = set()
+    for value in ecodes.bytype[ecodes.EV_KEY].values():
+        # A code with aliases maps to all of its names, as a tuple or a list
+        # depending on the evdev version (#278).
+        for name in (value,) if isinstance(value, str) else value:
+            if name.startswith("KEY_"):
+                names.add(name)
+    return sorted(names)

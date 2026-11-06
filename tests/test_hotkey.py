@@ -7,7 +7,7 @@ from evdev import InputEvent, ecodes
 from vice import main as main_mod
 from vice.config import (Config, HotkeyClipPreset, HotkeyConfig, normalize_combo,
                          validate_hotkeys)
-from vice.hotkey import HotkeyListener
+from vice.hotkey import HotkeyListener, list_available_keys
 
 
 def _key_event(name: str, value: int) -> InputEvent:
@@ -281,3 +281,24 @@ class FocusedAppSuppressionTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ListAvailableKeysTests(unittest.TestCase):
+    """#278: evdev maps a code with aliases to all of its names at once."""
+
+    def _keys(self, table: dict) -> list[str]:
+        with mock.patch.dict(ecodes.bytype, {ecodes.EV_KEY: table}):
+            return list_available_keys()
+
+    def test_aliases_as_a_list(self) -> None:
+        self.assertEqual(self._keys({1: "KEY_ESC", 113: ["KEY_MIN_INTERESTING", "KEY_MUTE"]}),
+                         ["KEY_ESC", "KEY_MIN_INTERESTING", "KEY_MUTE"])
+
+    def test_aliases_as_a_tuple(self) -> None:
+        self.assertEqual(self._keys({122: ("KEY_HANGEUL", "KEY_HANGUEL"), 256: "BTN_0"}),
+                         ["KEY_HANGEUL", "KEY_HANGUEL"])
+
+    def test_the_installed_evdev(self) -> None:
+        keys = list_available_keys()
+        self.assertIn("KEY_F9", keys)
+        self.assertEqual(keys, sorted(set(keys)))
