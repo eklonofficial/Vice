@@ -93,6 +93,7 @@ _RECORDER = textwrap.dedent('''\
         sys.exit(0)
     signal.signal(signal.SIGTERM, finish)
     signal.signal(signal.SIGUSR1, lambda *_: open(out, "a").write("saved\\n"))
+    open(out + ".ready", "w").close()
     while True:
         time.sleep(0.05)
 ''')
@@ -117,6 +118,19 @@ class SandboxedRecorderTests(unittest.IsolatedAsyncioTestCase):
         self.proc.vice_flatpak = True
         self.addAsyncCleanup(self._kill)
 
+    async def _ready_recorder(self) -> int:
+        """The fake recorder's pid once its handlers are installed. The pid
+        shows up as soon as the process exists, and a signal that beats the
+        handlers kills it instead, which a slow builder hit (#268)."""
+        inner = await recorder._recorder_pid(self.proc)
+        self.assertIsNotNone(inner)
+        ready = Path(f"{self.out}.ready")
+        for _ in range(200):
+            if ready.exists():
+                return inner
+            await asyncio.sleep(0.05)
+        self.fail("the fake recorder never installed its signal handlers")
+
     async def _kill(self) -> None:
         try:
             os.killpg(self.proc.pid, signal.SIGKILL)
@@ -124,8 +138,7 @@ class SandboxedRecorderTests(unittest.IsolatedAsyncioTestCase):
             pass
 
     async def test_save_signals_the_recorder_not_the_sandbox(self):
-        inner = await recorder._recorder_pid(self.proc)
-        self.assertIsNotNone(inner)
+        inner = await self._ready_recorder()
         self.assertNotEqual(inner, self.proc.pid)
         os.kill(inner, signal.SIGUSR1)
         for _ in range(50):
@@ -136,6 +149,6 @@ class SandboxedRecorderTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.proc.returncode)
 
     async def test_stop_waits_for_the_recorder_to_finish(self):
-        await recorder._recorder_pid(self.proc)
+        await self._ready_recorder()
         await recorder._terminate_group(self.proc, timeout=5)
         self.assertEqual(self.out.read_text(), "finished\n")
