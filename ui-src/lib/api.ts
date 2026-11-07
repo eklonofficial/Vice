@@ -91,6 +91,13 @@ export const api = {
       `/api/clips/${enc(slug)}/discord`,
     ),
   /** With `copy` the selection becomes a new clip and the original is kept. */
+  /** Keep a clip's audio track settings (volume 0 to 2). The clip is not
+   * changed; what gets sent is mixed from them. */
+  saveTrackMix: (slug: string, tracks: Array<{index: number; enabled: boolean; volume: number}>) =>
+    post<{ok: boolean; track_mix?: Record<string, {enabled: boolean; volume: number}>}>(
+      `/api/clips/${enc(slug)}/track-mix`,
+      {tracks},
+    ),
   trimClip: (slug: string, start: number, end: number, copy = false) =>
     post<{slug: string; copy?: boolean}>(`/api/clips/${enc(slug)}/trim`, {start, end, copy}),
   markViewed: (slug: string) => post<{ok?: boolean; views: number}>(`/api/clips/${enc(slug)}/view`),

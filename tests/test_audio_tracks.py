@@ -344,3 +344,442 @@ class TrackVolumeRestartTests(unittest.TestCase):
         self.assertEqual(ViceDaemon._recording_signature(stub), before)
         cfg.recording.audio_tracks = ['default_output']
         self.assertNotEqual(ViceDaemon._recording_signature(stub), before)
+
+
+def _apps_rc(tracks, mix_first=False, mic=True):
+    from vice.config import RecordingConfig
+    rc = RecordingConfig()
+    rc.capture_audio = True
+    rc.capture_microphone = mic
+    rc.audio_tracks = list(tracks)
+    rc.audio_tracks_mix_first = mix_first
+    return rc
+
+
+class EverythingElseTests(unittest.TestCase):
+    """Recording Desktop next to an app's own track put the app on both, so
+    muting its track in the editor left a call or music in the clip.
+    Everything else records every app without a track of its own."""
+
+    def test_it_records_every_app_except_the_ones_with_their_own_track(self):
+        from vice.recorder import _gsr_audio_args
+        args = _gsr_audio_args(_apps_rc(['everything_else', 'app:Spotify', 'app:vesktop']))
+        self.assertEqual(args, ['-a', 'default_output|default_input',
+                                '-a', 'app-inverse:Spotify|app-inverse:vesktop',
+                                '-a', 'app:Spotify', '-a', 'app:vesktop',
+                                '-a', 'default_input'])
+
+    def test_it_always_comes_with_the_combined_track(self):
+        """As track 1, which is all players and share links play, it would
+        leave out every app with a track of its own."""
+        from vice.recorder import _track_titles
+        rc = _apps_rc(['everything_else', 'app:Spotify'], mix_first=False)
+        self.assertEqual(_track_titles(rc), ['All audio', 'Everything else', 'Spotify', 'Microphone'])
+        self.assertEqual(_track_titles(_apps_rc(['default_output', 'app:Spotify'], mix_first=False)),
+                         ['Desktop', 'Spotify', 'Microphone'])
+
+    def test_gsr_is_never_handed_the_vice_only_name(self):
+        from vice.recorder import _gsr_audio_args
+        for tracks in (['everything_else'], ['everything_else|default_input', 'app:Discord'],
+                       ['app:Discord', 'everything_else']):
+            for mix_first in (False, True):
+                with self.subTest(tracks=tracks, mix_first=mix_first):
+                    args = _gsr_audio_args(_apps_rc(tracks, mix_first))
+                    self.assertFalse(any('everything_else' in a for a in args), args)
+
+    def test_with_no_app_tracks_it_is_the_desktop(self):
+        from vice.recorder import _gsr_audio_args
+        self.assertEqual(_gsr_audio_args(_apps_rc(['everything_else'], mic=False)),
+                         ['-a', 'default_output'])
+
+    def test_apps_are_named_once_whatever_their_case(self):
+        from vice.recorder import _gsr_audio_args
+        args = _gsr_audio_args(_apps_rc(['everything_else', 'app:Discord', 'app:discord'], mic=False))
+        self.assertEqual(args[3], 'app-inverse:Discord')
+
+    def test_the_combined_track_records_the_desktop_not_the_apps(self):
+        """GSR refuses app: and app-inverse: on one track, and the desktop
+        already holds every app."""
+        from vice.recorder import _gsr_audio_args
+        args = _gsr_audio_args(_apps_rc(['everything_else', 'app:Spotify'], mix_first=True))
+        self.assertEqual(args[:2], ['-a', 'default_output|default_input'])
+        for i in range(1, len(args), 2):
+            parts = args[i].split('|')
+            self.assertFalse(any(p.startswith('app:') for p in parts)
+                             and any(p.startswith('app-inverse:') for p in parts), args[i])
+
+    def test_it_is_dropped_with_desktop_audio_off(self):
+        from vice.recorder import _gsr_audio_args
+        rc = _apps_rc(['everything_else', 'app:Spotify'])
+        rc.capture_audio = False
+        with self.assertLogs('vice.recorder', 'WARNING'):
+            self.assertEqual(_gsr_audio_args(rc), ['-a', 'default_input'])
+
+    def test_a_volume_change_rebuilds_the_combined_track_from_every_part(self):
+        from vice.recorder import _separate_track_layout, _track_volume_cmd
+        layout, mixed = _separate_track_layout(
+            _apps_rc(['everything_else', 'app:Spotify'], mix_first=True))
+        cmd = _track_volume_cmd(Path('c.mp4'), Path('t.mp4'), layout, mixed,
+                                [1.0, 1.0, 0.5, 1.0], [('aac', 0)] * 4)
+        graph = cmd[cmd.index('-filter_complex') + 1]
+        # Spotify is not on the Everything else track, so the combined track
+        # is rebuilt with it rather than left out as a desktop app would be.
+        self.assertIn('[m1][m2][m3]amix=inputs=3', graph)
+
+    def test_the_source_list_offers_it(self):
+        from unittest import mock
+        from vice.recorder import list_gsr_audio_sources
+        with mock.patch('vice.recorder._has', return_value=True), \
+             mock.patch('vice.recorder._run_command_capture', return_value=(0, 'Spotify\n')):
+            sources = list_gsr_audio_sources()['sources']
+        kinds = {s['id']: s['kind'] for s in sources}
+        self.assertEqual(kinds['everything_else'], 'others')
+
+
+class TrackTitleTests(unittest.TestCase):
+    def test_tracks_are_named_after_their_sources(self):
+        from vice.recorder import _track_titles
+        self.assertEqual(
+            _track_titles(_apps_rc(['everything_else', 'app:Spotify', 'app:vesktop'], True)),
+            ['All audio', 'Everything else', 'Spotify', 'vesktop', 'Microphone'])
+        self.assertEqual(
+            _track_titles(_apps_rc(['default_output|default_input', 'app-inverse:Discord',
+                                    'device:alsa_output.usb.monitor'], mic=False)),
+            ['Desktop + Microphone', 'Everything except Discord', 'alsa_output.usb'])
+        self.assertEqual(_track_titles(_apps_rc([])), [])
+
+    def test_every_part_starts_on_when_each_app_is_on_one_track(self):
+        from vice.recorder import _track_titles, audio_track_parts
+        rc = _apps_rc(['everything_else', 'app:Spotify', 'app:vesktop'], True)
+        self.assertEqual(audio_track_parts(rc, _track_titles(rc)),
+                         [False, True, True, True, True])
+
+    def test_an_app_the_desktop_track_holds_is_not_a_part(self):
+        from vice.recorder import _track_titles, audio_track_parts
+        rc = _apps_rc(['default_output', 'app:Discord'], True)
+        self.assertEqual(audio_track_parts(rc, _track_titles(rc)),
+                         [False, True, False, True])
+
+    def test_a_clip_recorded_some_other_way_has_no_parts(self):
+        from vice.recorder import audio_track_parts
+        rc = _apps_rc(['everything_else', 'app:Spotify'])
+        self.assertIsNone(audio_track_parts(rc, ['Desktop', 'Discord', 'Microphone']))
+        self.assertIsNone(audio_track_parts(rc, ['', '', '']))
+        self.assertIsNone(audio_track_parts(_apps_rc([]), ['']))
+
+    def test_everything_else_says_what_the_tracks_hold_whatever_the_settings(self):
+        """Automatic app tracks change from one start to the next, so their
+        clips are read by their titles."""
+        from vice.recorder import audio_track_parts
+        rc = _apps_rc(['everything_else', 'app:Spotify'])
+        self.assertEqual(
+            audio_track_parts(rc, ['All audio', 'Everything else', 'Discord', 'Microphone']),
+            [False, True, True, True])
+        self.assertIsNone(audio_track_parts(rc, ['Everything else', 'Desktop', 'Discord']))
+
+    def test_generic_handler_names_are_not_titles(self):
+        from vice.media import _track_title
+        for handler in ('SoundHandler', 'Core Media Audio', 'GPAC ISO Audio Handler',
+                        'L-SMASH Audio Handler', 'ISO Media file produced by Google Inc.'):
+            with self.subTest(handler=handler):
+                self.assertEqual(_track_title({'handler_name': handler}), '')
+        self.assertEqual(_track_title({'handler_name': 'Spotify'}), 'Spotify')
+        self.assertEqual(_track_title({'name': 'Spotify', 'handler_name': 'SoundHandler'}), 'Spotify')
+        self.assertEqual(_track_title({'title': 'Mic', 'handler_name': 'Spotify'}), 'Mic')
+
+    @unittest.skipIf(_share is None, 'share server dependencies not installed')
+    def test_the_clip_list_marks_the_parts(self):
+        from types import SimpleNamespace
+        rc = _apps_rc(['everything_else', 'app:Spotify'])
+        stub = SimpleNamespace(cfg=SimpleNamespace(recording=rc))
+        stub._audio_parts = lambda tracks: _share.ShareServer._audio_parts(stub, tracks)
+        tracks = [{'index': i, 'title': t} for i, t in
+                  enumerate(['Everything else', 'Spotify', 'Microphone'])]
+        out = _share.ShareServer._audio_tracks_json(stub, tracks)
+        self.assertEqual([t['part'] for t in out], [True, True, True])
+        tracks[0]['title'] = 'Desktop'
+        out = _share.ShareServer._audio_tracks_json(stub, tracks)
+        self.assertFalse(any('part' in t for t in out))
+        tracks = [{'index': i, 'title': t} for i, t in
+                  enumerate(['All audio', 'Everything else', 'Spotify'])]
+        out = _share.ShareServer._audio_tracks_json(stub, tracks)
+        self.assertEqual([(t['part'], t['combined']) for t in out],
+                         [(False, True), (True, False), (True, False)])
+
+
+@unittest.skipUnless(shutil.which('ffmpeg') and shutil.which('ffprobe'), 'ffmpeg not installed')
+class LabelTracksTests(unittest.IsolatedAsyncioTestCase):
+    def _clip(self, path, tracks):
+        inputs, maps = [], ['-map', '0:v']
+        for n in range(1, tracks + 1):
+            inputs += ['-f', 'lavfi', '-i', f'sine=frequency={220 * n}:duration=1']
+            maps += ['-map', f'{n}:a']
+        subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i',
+                        'color=size=128x72:rate=10:duration=1', *inputs, *maps,
+                        '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac',
+                        str(path)], check=True, timeout=30)
+        return path
+
+    async def test_titles_are_written_and_survive_a_trim(self):
+        from vice.recorder import _label_audio_tracks
+        rc = _apps_rc(['everything_else', 'app:Spotify'])
+        expected = ['All audio', 'Everything else', 'Spotify', 'Microphone']
+        for ext in ('mp4', 'mkv'):
+            with self.subTest(container=ext), tempfile.TemporaryDirectory() as directory:
+                path = self._clip(Path(directory) / f'clip.{ext}', 4)
+                await _label_audio_tracks(path, rc)
+                meta = await probe_media(path)
+                self.assertEqual([t['title'] for t in meta['audio_tracks']], expected)
+                # A trim remuxes the clip, which drops an MP4 title.
+                subprocess.run(['ffmpeg', '-v', 'error', '-ss', '0.2', '-i', str(path),
+                                '-map', '0', '-c', 'copy', str(path.with_suffix(f'.t.{ext}'))],
+                               check=True, timeout=15)
+                meta = await probe_media(path.with_suffix(f'.t.{ext}'))
+                self.assertEqual([t['title'] for t in meta['audio_tracks']], expected)
+                self.assertEqual(sorted(p.name for p in Path(directory).iterdir()),
+                                 sorted([f'clip.{ext}', f'clip.t.{ext}']))
+
+    async def test_a_clip_that_does_not_match_the_tracks_is_left_alone(self):
+        from vice.recorder import _label_audio_tracks
+        with tempfile.TemporaryDirectory() as directory:
+            path = self._clip(Path(directory) / 'clip.mp4', 2)
+            before = path.read_bytes()
+            await _label_audio_tracks(path, _apps_rc(['everything_else', 'app:Spotify']))
+            await _label_audio_tracks(path, _apps_rc([]))
+            self.assertEqual(path.read_bytes(), before)
+
+    async def test_the_users_own_audio_flags_win(self):
+        from vice.recorder import _label_audio_tracks
+        rc = _apps_rc(['everything_else', 'app:Spotify'])
+        rc.gsr_args = '-a default_output -a default_output -a app:Spotify -a default_input'
+        with tempfile.TemporaryDirectory() as directory:
+            path = self._clip(Path(directory) / 'clip.mp4', 4)
+            before = path.read_bytes()
+            await _label_audio_tracks(path, rc)
+            self.assertEqual(path.read_bytes(), before)
+
+
+class AutoAppTracksTests(unittest.TestCase):
+    """Every app heard gets a track of its own, with nothing to list by hand."""
+
+    def setUp(self):
+        from vice import recorder
+        self.recorder = recorder
+        recorder.AUDIO_APPS_PATH.unlink(missing_ok=True)
+        self.addCleanup(recorder.AUDIO_APPS_PATH.unlink, missing_ok=True)
+
+    def _detect(self, listing):
+        from unittest import mock
+        with mock.patch.object(self.recorder, '_gsr_prefix', return_value=['gpu-screen-recorder']), \
+             mock.patch.object(self.recorder, '_run_command_capture', return_value=(0, listing)):
+            return self.recorder._detect_app_tracks()
+
+    def test_apps_playing_now_get_tracks_and_are_remembered(self):
+        self.assertEqual(self._detect('vesktop\nSpotify\npaplay\n'),
+                         ['everything_else', 'app:Spotify', 'app:vesktop'])
+        # Discord started after the recorder last did: still separated, and
+        # the apps heard before keep theirs.
+        self.assertEqual(self._detect('Garry\'s Mod\n'),
+                         ['everything_else', "app:Garry's Mod", 'app:Spotify', 'app:vesktop'])
+        self.assertEqual(self.recorder.remembered_audio_apps(), ["Garry's Mod", 'Spotify', 'vesktop'])
+
+    def test_one_track_per_app_whatever_the_case(self):
+        self._detect('Spotify\n')
+        self.assertEqual(self._detect('spotify\n'), ['everything_else', 'app:Spotify'])
+
+    def test_old_apps_are_forgotten_and_the_count_is_capped(self):
+        import json, time
+        now = time.time()
+        apps = {f'App{n:02d}': now - n for n in range(15)}
+        apps['Ancient'] = now - 31 * 24 * 3600
+        self.recorder.AUDIO_APPS_PATH.write_text(json.dumps({'version': 1, 'apps': apps}))
+        names = self.recorder.remembered_audio_apps()
+        self.assertEqual(len(names), self.recorder.AUTO_APP_LIMIT)
+        self.assertNotIn('Ancient', names)
+        self.assertIn('App00', names)
+        self.assertNotIn('App14', names)
+
+    def test_the_recorder_gets_every_app_a_combined_track_and_the_mic(self):
+        from vice.recorder import _effective_rc, _gsr_audio_args, _track_titles
+        rc = _apps_rc([])
+        rc.auto_app_tracks = True
+        eff = _effective_rc(rc, ['everything_else', 'app:Spotify', 'app:vesktop'])
+        self.assertEqual(_gsr_audio_args(eff), [
+            '-a', 'default_output|default_input',
+            '-a', 'app-inverse:Spotify|app-inverse:vesktop',
+            '-a', 'app:Spotify', '-a', 'app:vesktop', '-a', 'default_input'])
+        self.assertEqual(_track_titles(eff),
+                         ['All audio', 'Everything else', 'Spotify', 'vesktop', 'Microphone'])
+        # The user's own settings are left as they were.
+        self.assertEqual(rc.audio_tracks, [])
+        self.assertFalse(rc.audio_tracks_mix_first)
+
+    def test_hand_picked_tracks_are_untouched_when_it_is_off(self):
+        from vice.recorder import _effective_rc
+        rc = _apps_rc(['default_output'])
+        self.assertIs(_effective_rc(rc, ['everything_else', 'app:Spotify']), rc)
+
+
+class TrackMixStoreTests(unittest.TestCase):
+    """The viewer's track settings are kept beside the clip, not written into it."""
+
+    def setUp(self):
+        from vice import track_mix
+        self.tm = track_mix
+        for slug in ('clip', 'renamed', 'copy'):
+            track_mix.delete(slug)
+
+    def test_only_changed_tracks_are_kept_and_volumes_are_clamped(self):
+        self.tm.save('clip', {0: (True, 1.0), 2: (False, 1.0), 3: (True, 1.5)})
+        self.assertEqual(self.tm.load('clip'), {2: (False, 1.0), 3: (True, 1.5)})
+        self.tm.save('clip', {0: (True, 1.0)})
+        self.assertFalse(self.tm.sidecar_path('clip').exists())
+        self.tm.TRACK_MIX_DIR.mkdir(parents=True, exist_ok=True)
+        self.tm.sidecar_path('clip').write_text(
+            '{"tracks": {"1": {"enabled": true, "volume": 9}, "x": {}, "2": {"enabled": "no", "volume": 1}}}')
+        self.assertEqual(self.tm.load('clip'), {1: (True, 2.0)})
+
+    def test_settings_follow_the_clip(self):
+        self.tm.save('clip', {1: (False, 1.0)})
+        self.tm.copy('clip', 'copy')
+        self.tm.move('clip', 'renamed')
+        self.assertEqual(self.tm.load('renamed'), {1: (False, 1.0)})
+        self.assertEqual(self.tm.load('copy'), {1: (False, 1.0)})
+        self.assertEqual(self.tm.load('clip'), {})
+        self.tm.delete('renamed')
+        self.assertEqual(self.tm.load('renamed'), {})
+
+
+class SendLevelsTests(unittest.TestCase):
+    TITLES = ['All audio', 'Everything else', 'Spotify', 'vesktop', 'Microphone']
+    PARTS = [False, True, True, True, True]
+
+    def _levels(self, settings, titles=TITLES, parts=PARTS):
+        from vice.track_mix import send_levels
+        return send_levels(titles, parts, settings)
+
+    def test_a_clip_left_as_recorded_with_a_combined_track_goes_as_it_is(self):
+        self.assertIsNone(self._levels({}))
+        self.assertIsNone(self._levels({2: (True, 1.0)}))
+
+    def test_a_switched_off_source_is_left_out_and_levels_apply(self):
+        self.assertEqual(self._levels({2: (False, 1.0), 3: (True, 1.5)}),
+                         {1: 1.0, 3: 1.5, 4: 1.0})
+
+    def test_a_clip_without_the_combined_track_is_always_mixed(self):
+        """Its first track is only Everything else, which is all a player or
+        Discord plays."""
+        self.assertEqual(self._levels({}, self.TITLES[1:], self.PARTS[1:]),
+                         {0: 1.0, 1: 1.0, 2: 1.0, 3: 1.0})
+
+    def test_a_track_another_one_holds_is_not_mixed_in_twice(self):
+        self.assertEqual(self._levels({2: (False, 1.0)}, ['All audio', 'Desktop', 'Discord', 'Microphone'],
+                                      [False, True, False, True]), {1: 1.0, 3: 1.0})
+
+    def test_unknown_tracks_go_as_they_are_until_changed(self):
+        self.assertIsNone(self._levels({}, ['', ''], None))
+        self.assertEqual(self._levels({1: (False, 1.0)}, ['', ''], None), {0: 1.0})
+
+    def test_the_mix_has_one_audio_track_and_copies_the_video(self):
+        from vice.track_mix import mix_cmd
+        cmd = mix_cmd(Path('c.mp4'), Path('t.mp4'), {1: 1.0, 3: 1.5}, [('aac', 128000)] * 5)
+        graph = cmd[cmd.index('-filter_complex') + 1]
+        self.assertIn('[0:a:3]aformat=channel_layouts=stereo,volume=1.5[s3]', graph)
+        self.assertIn('[s1][s3]amix=inputs=2', graph)
+        self.assertNotIn('0:a:2', graph)
+        self.assertEqual([cmd[i + 1] for i, a in enumerate(cmd) if a == '-map'], ['0:v?', '[mix]'])
+        self.assertEqual(cmd[cmd.index('-c:v') + 1], 'copy')
+        self.assertIn('-an', mix_cmd(Path('c.mp4'), Path('t.mp4'), {}, [('aac', 0)]))
+
+
+@unittest.skipUnless(shutil.which('ffmpeg') and shutil.which('ffprobe'), 'ffmpeg not installed')
+@unittest.skipIf(_share is None, 'share server dependencies not installed')
+class SendWithTrackSettingsTests(unittest.IsolatedAsyncioTestCase):
+    """What is sent (share link, Discord, copied file) leaves out the tracks
+    switched off in the viewer, and the clip itself keeps them."""
+
+    async def asyncSetUp(self):
+        import socket
+        from aiohttp import ClientSession
+        from vice import track_mix
+        from vice.config import Config, OutputConfig, SharingConfig
+        from vice.recorder import _label_audio_tracks
+
+        def port():
+            with socket.socket() as sock:
+                sock.bind(('127.0.0.1', 0))
+                return sock.getsockname()[1]
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        clips = Path(self.tmp.name)
+        self.cfg = Config(output=OutputConfig(directory=str(clips)),
+                          sharing=SharingConfig(port=port(), public_port=port(), cloudflare_tunnel=False))
+        self.path = clips / 'clip.mp4'
+        exprs = ['0.1*sin(2*PI*440*t)+0.1*sin(2*PI*880*t)', '0.2*sin(2*PI*440*t)', '0.2*sin(2*PI*880*t)']
+        inputs, maps = [], ['-map', '0:v']
+        for n, expr in enumerate(exprs, start=1):
+            inputs += ['-f', 'lavfi', '-i', f'aevalsrc={expr}:s=48000:d=2,aformat=channel_layouts=stereo']
+            maps += ['-map', f'{n}:a']
+        subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'color=size=128x72:rate=10:duration=2',
+                        *inputs, *maps, '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '10',
+                        '-c:a', 'aac', '-b:a', '128k', '-shortest', str(self.path)], check=True, timeout=30)
+        await _label_audio_tracks(self.path, _apps_rc(['everything_else', 'app:Spotify'], True, mic=False))
+        track_mix.delete('clip')
+        self.addCleanup(track_mix.delete, 'clip')
+        self.server = _share.ShareServer(self.cfg)
+        await self.server.start()
+        self.server.add_clip(self.path)
+        self.client = ClientSession()
+        self.local = f'http://127.0.0.1:{self.cfg.sharing.port}'
+
+    async def asyncTearDown(self):
+        await self.client.close()
+        await self.server.stop()
+
+    async def _set(self, tracks):
+        async with self.client.post(f'{self.local}/api/clips/clip/track-mix', json={'tracks': tracks}) as resp:
+            return resp.status, await resp.json()
+
+    async def _public_video(self):
+        token = self.server.share_url('clip').rsplit('/', 1)[1]
+        out = Path(self.tmp.name) / 'downloaded.mp4'
+        url = f'http://127.0.0.1:{self.cfg.sharing.public_port}/v/{token}'
+        async with self.client.get(url) as resp:
+            self.assertEqual(resp.status, 200)
+            out.write_bytes(await resp.read())
+        return out
+
+    async def test_spotify_switched_off_is_not_in_what_gets_sent(self):
+        before = self.path.read_bytes()
+        status, body = await self._set([{'index': 2, 'enabled': False, 'volume': 1}])
+        self.assertEqual((status, body['track_mix']), (200, {'2': {'enabled': False, 'volume': 1.0}}))
+        async with self.client.get(f'{self.local}/api/clips/clip') as resp:
+            self.assertEqual((await resp.json())['track_mix'], {'2': {'enabled': False, 'volume': 1.0}})
+
+        sent = await self._public_video()
+        meta = await probe_media(sent)
+        self.assertEqual(meta['audio_streams'], 1)
+        self.assertGreater(_tone(sent, 0, 440), 0.02)
+        self.assertLess(_tone(sent, 0, 880), 0.002)
+        # Discord gets the same, and the clip itself keeps every track.
+        discord = await self.server._prepare_discord_copy('clip', self.path)
+        self.assertLess(_tone(discord, 0, 880), 0.002)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    async def test_switching_it_back_on_sends_everything_again(self):
+        await self._set([{'index': 2, 'enabled': False, 'volume': 1}])
+        await self._public_video()
+        await self._set([{'index': 2, 'enabled': True, 'volume': 1}])
+        sent = await self._public_video()
+        self.assertEqual(sent.read_bytes(), self.path.read_bytes())
+        # The copy made for the old settings is cleared away.
+        sends = self.path.parent / _share.SEND_SUBDIR
+        self.assertEqual(list(sends.iterdir()) if sends.exists() else [], [])
+
+    async def test_bad_settings_are_refused(self):
+        for tracks in ([{'index': 9, 'enabled': False, 'volume': 1}],
+                       [{'index': 1, 'enabled': 'no', 'volume': 1}],
+                       [{'index': 1, 'enabled': True, 'volume': 3}]):
+            status, _ = await self._set(tracks)
+            self.assertEqual(status, 400)

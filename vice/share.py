@@ -43,6 +43,7 @@ from aiohttp import WSMsgType, web
 
 from . import __version__
 from . import keys as keystore
+from . import track_mix
 from .editor import (DISCORD_MAX_BYTES, DiscordTooLarge, EditorProjectStore,
                      ExportBusy, ExportManager, KeyBurn, Source, build_export_cmd,
                      canvas_for,
@@ -52,8 +53,9 @@ from .editor import (DISCORD_MAX_BYTES, DiscordTooLarge, EditorProjectStore,
 from .media import communicate_with_timeout, probe_media, probe_media_detailed
 from .playlists import (IMAGE_PREFIX, PlaylistStore, build_tag_index,
                         image_slug)
-from .recorder import (IMAGE_EXTS, KEEP_ALL_STREAMS, _available_encoders,
-                       _is_nvidia, filename_tag, list_display_options,
+from .recorder import (IMAGE_EXTS, KEEP_ALL_STREAMS, _audio_stream_codecs,
+                       _available_encoders, _is_nvidia, MIX_TRACK_TITLE,
+                       audio_track_parts, filename_tag, list_display_options,
                        list_gsr_audio_sources, next_image_path,
                        slugify_clip_name)
 from .runtime import actual_home_dir, load_user_systemd_env, resolve_path
@@ -173,6 +175,9 @@ PROXY_DIR      = actual_home_dir() / ".cache" / "vice" / "proxies"
 # clip's own directory is the one place the user has already opened up, so a
 # copy there is readable wherever the original is.
 DISCORD_SUBDIR = ".discord"
+# The copies that get sent when a clip's audio tracks have been changed (see
+# track_mix), beside the clip for the same reason as the Discord copies.
+SEND_SUBDIR = ".sent"
 # Scratch space for editor export jobs (drawtext sidecar files).
 EXPORT_WORK_DIR = actual_home_dir() / ".cache" / "vice" / "exports"
 HIGHLIGHTS_DIR = actual_home_dir() / ".local" / "share" / "vice" / "highlights"
@@ -388,6 +393,42 @@ def _purge_clip_discord(path: Optional[Path]) -> None:
         return
     for p in folder.glob(f"{glob.escape(path.stem)}*.mp4"):
         p.unlink(missing_ok=True)
+
+
+def _send_path(path: Path, levels_key: str) -> Path:
+    """Where the copy of *path* mixed as *levels_key* goes: its own folder
+    per file version and mix, so the file inside keeps the clip's name for
+    whoever it is pasted to."""
+    try:
+        st = path.stat()
+        key = f"{path.stem}_{st.st_size}_{st.st_mtime_ns}_{levels_key}"
+    except OSError:
+        key = f"{path.stem}_{levels_key}"
+    return path.parent / SEND_SUBDIR / key / path.name
+
+
+_SEND_DIR_TAIL = re.compile(r"_\d+_\d+_[0-9a-f]{10}$")
+
+
+def _purge_clip_sends(path: Optional[Path], keep: Optional[Path] = None) -> None:
+    """Remove the sent copies of *path* (every file version and mix) except
+    the folder holding *keep*."""
+    if path is None:
+        return
+    folder = path.parent / SEND_SUBDIR
+    if not folder.is_dir():
+        return
+    prefix = f"{path.stem}_"
+    for entry in folder.iterdir():
+        name = entry.name
+        if (entry.is_dir() and name.startswith(prefix)
+                and _SEND_DIR_TAIL.fullmatch(name[len(path.stem):])
+                and (keep is None or entry != keep.parent)):
+            shutil.rmtree(entry, ignore_errors=True)
+
+
+class SendCopyFailed(Exception):
+    """The copy with the clip's track settings could not be made."""
 
 
 # WebEngine plays these without help; anything else gets an H.264 preview proxy.
@@ -1056,6 +1097,8 @@ class ShareServer:
         self._clips: dict[str, Path] = {}
         # slug → {width, height, duration}
         self._meta:  dict[str, dict] = {}
+        # Builds of the copy that gets sent, one at a time per clip.
+        self._send_locks: dict[str, asyncio.Lock] = {}
         # Screenshots, kept in their own index. Slugs are filename stems like a
         # clip's, and they can collide with one, so nothing may look an image
         # up in _clips or the other way round.
@@ -1127,6 +1170,7 @@ class ShareServer:
         r.add_get("/api/clips/{slug}",       self._api_clip_info)
         r.add_delete("/api/clips/{slug}",    self._api_delete)
         r.add_post("/api/clips/{slug}/trim",              self._api_trim)
+        r.add_post("/api/clips/{slug}/track-mix",         self._api_track_mix)
         r.add_post("/api/clips/{slug}/rename",            self._api_rename)
         r.add_post("/api/clips/{slug}/reveal",            self._api_reveal)
         r.add_post("/api/clips/{slug}/open",              self._api_open)
@@ -1442,6 +1486,116 @@ class ShareServer:
             self._meta[slug] = await _ffprobe(path)
         return self._meta[slug]
 
+    def _audio_parts(self, tracks: list[dict]) -> Optional[list[bool]]:
+        try:
+            return audio_track_parts(self.cfg.recording,
+                                     [str(t.get("title", "")) for t in tracks])
+        except Exception as exc:
+            log.debug("Could not tell what the audio tracks hold: %s", exc)
+            return None
+
+    def _audio_tracks_json(self, tracks: list[dict]) -> list[dict]:
+        """The clip's audio tracks, each marked with whether it is one part
+        of the whole recording when its titles say. The editor's Detach audio
+        turns the parts on and the rest off, so nothing plays twice, and the
+        viewer lists the parts and leaves out the combined track it rebuilds."""
+        parts = self._audio_parts(tracks)
+        if parts is None:
+            return tracks
+        return [{**track, "part": part,
+                 "combined": not part and track.get("title") == MIX_TRACK_TITLE}
+                for track, part in zip(tracks, parts)]
+
+    async def _api_track_mix(self, req: web.Request) -> web.Response:
+        """Keep a clip's audio track settings from the viewer: which sources
+        are on and how loud. The clip is not touched; what gets sent is mixed
+        from these (_send_copy), and a copy is started now so sharing does
+        not wait for it."""
+        slug = req.match_info["slug"]
+        path = self._clips.get(slug)
+        if not path or not path.exists():
+            raise web.HTTPNotFound()
+        try:
+            body = await req.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+        requested = body.get("tracks") if isinstance(body, dict) else None
+        if not isinstance(requested, list):
+            return web.json_response({"ok": False, "error": "tracks must be a list"}, status=400)
+        count = len((await self._get_meta(slug, path)).get("audio_tracks") or [])
+        settings: dict[int, track_mix.Setting] = {}
+        for entry in requested:
+            index = entry.get("index") if isinstance(entry, dict) else None
+            enabled = entry.get("enabled") if isinstance(entry, dict) else None
+            volume = entry.get("volume", 1) if isinstance(entry, dict) else None
+            if (type(index) is not int or not 0 <= index < count
+                    or type(enabled) is not bool
+                    or type(volume) not in (int, float)
+                    or not 0 <= volume <= track_mix.MAX_VOLUME):
+                return web.json_response(
+                    {"ok": False, "error": "each track needs an index, enabled and a volume from 0 to 2"},
+                    status=400)
+            settings[index] = (enabled, float(volume))
+        track_mix.save(slug, settings)
+        asyncio.create_task(self._prepare_send_copy(slug, path))
+        asyncio.create_task(self._broadcast_clip(slug, path))
+        return web.json_response({"ok": True, "track_mix": track_mix.to_json(track_mix.load(slug))})
+
+    async def _prepare_send_copy(self, slug: str, path: Path) -> None:
+        try:
+            await self._send_copy(slug, path)
+        except (SendCopyFailed, web.HTTPException) as exc:
+            log.warning("Could not prepare the copy of %s to send: %s", slug, exc)
+
+    async def _send_copy(self, slug: str, path: Path) -> Path:
+        """The file to send for this clip: the clip itself, or a copy with
+        one audio track mixed from its track settings (track_mix.send_levels).
+        Raises SendCopyFailed rather than fall back to the clip, which would
+        send the sources the user switched off."""
+        meta = await self._get_meta(slug, path)
+        tracks = meta.get("audio_tracks") or []
+        titles = [str(t.get("title", "")) for t in tracks]
+        levels = track_mix.send_levels(titles, self._audio_parts(tracks), track_mix.load(slug))
+        if levels is None:
+            # Back as recorded: copies mixed for earlier settings go.
+            _purge_clip_sends(path)
+            return path
+        out = _send_path(path, track_mix.levels_key(levels))
+        if out.exists() and out.stat().st_size > 0:
+            return out
+        if self._proxy_stopping:
+            raise web.HTTPServiceUnavailable()
+        lock = self._send_locks.setdefault(slug, asyncio.Lock())
+        task = asyncio.current_task()
+        self._proxy_tasks.add(task)
+        try:
+            async with lock:
+                if out.exists() and out.stat().st_size > 0:
+                    return out
+                codecs = await _audio_stream_codecs(path)
+                if len(codecs) != len(tracks):
+                    raise SendCopyFailed("could not read the clip's audio tracks")
+                out.parent.mkdir(parents=True, exist_ok=True)
+                tmp = out.with_name(f".{out.name}.tmp{out.suffix}")
+                cmd = track_mix.mix_cmd(path, tmp, levels, codecs)
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+                    _, stderr = await communicate_with_timeout(
+                        proc, timeout=120 + path.stat().st_size / 20_000_000)
+                except (asyncio.TimeoutError, OSError) as exc:
+                    tmp.unlink(missing_ok=True)
+                    raise SendCopyFailed(str(exc) or "ffmpeg timed out") from exc
+                if proc.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
+                    tmp.unlink(missing_ok=True)
+                    raise SendCopyFailed(
+                        (stderr or b"").decode(errors="replace").strip()[-300:] or "ffmpeg failed")
+                tmp.replace(out)
+                _purge_clip_sends(path, keep=out)
+                return out
+        finally:
+            self._proxy_tasks.discard(task)
+
     def _clip_json(self, slug: str, path: Path, meta: dict) -> dict:
         try:
             st = path.stat()
@@ -1471,7 +1625,9 @@ class ShareServer:
             # Lets the UI request an H.264 preview proxy for codecs the native
             # WebEngine can't decode (H.265).
             "vcodec":     meta.get("vcodec",   ""),
-            "audio_tracks": meta.get("audio_tracks", []),
+            "audio_tracks": self._audio_tracks_json(meta.get("audio_tracks", [])),
+            # The Audio tracks list's settings, applied to what gets sent.
+            "track_mix":  track_mix.to_json(track_mix.load(slug)),
             # ffmpeg cannot read this file. It is still listed, because it is
             # the user's recording and may be recoverable by hand, but the
             # card says so instead of showing a 0:00 clip that will not play.
@@ -1694,6 +1850,15 @@ class ShareServer:
             if served is not None:
                 return served
 
+        # What leaves the machine carries the user's audio track settings,
+        # never the sources they switched off.
+        if public:
+            try:
+                path = await self._send_copy(slug, path)
+            except SendCopyFailed as exc:
+                log.warning("Not sharing %s: its copy to send failed: %s", slug, exc)
+                raise web.HTTPServiceUnavailable()
+
         # no-cache = revalidate before reuse. Slugs are not stable identities
         # (clip numbers get reused after deletes, trims rewrite in place), so
         # a cached response may belong to a different video than the slug
@@ -1745,17 +1910,24 @@ class ShareServer:
         task = asyncio.current_task()
         self._proxy_tasks.add(task)
         try:
+            # Made from the copy that gets sent, so the Discord file has the
+            # clip's audio track settings too.
+            try:
+                source = await self._send_copy(slug, path)
+            except SendCopyFailed as exc:
+                log.warning("No Discord copy of %s: its copy to send failed: %s", slug, exc)
+                return None
             # A drag that is already encoded must not queue behind someone
             # else's encode: the whole library shares one encoder lock.
-            cached = _discord_path(path)
+            cached = _discord_path(source)
             if cached.exists() and 0 < cached.stat().st_size <= DISCORD_MAX_BYTES:
                 return cached
             async with self._proxy_lock:
                 meta = await self._get_meta(slug, path)
                 return await _make_discord_copy(
-                    path,
+                    source,
                     meta.get("duration", 0),
-                    meta.get("audio_streams", 1),
+                    1 if source != path else meta.get("audio_streams", 1),
                 )
         finally:
             self._proxy_tasks.discard(task)
@@ -1842,6 +2014,8 @@ class ShareServer:
         slug = req.match_info["slug"]
         path = self._clips.pop(slug, None)
         _purge_clip_discord(path)
+        _purge_clip_sends(path)
+        track_mix.delete(slug)
         if path and path.exists():
             path.unlink()
         _purge_slug_thumbs(slug)
@@ -1965,6 +2139,7 @@ class ShareServer:
             tmp.replace(target)
             if kept_keys is not None:
                 keystore.save_sidecar(target.stem, keystore.cut_intervals(kept_keys, start, end))
+            track_mix.copy(slug, target.stem)
             self.add_clip(target, self.playlists.game_for(slug))
             return web.json_response({"ok": True, "slug": target.stem, "copy": True})
 
@@ -1975,6 +2150,7 @@ class ShareServer:
         _purge_slug_thumbs(slug)
         _purge_slug_proxies(slug)
         _purge_clip_discord(path)
+        _purge_clip_sends(path)
         self._meta.pop(slug, None)
         asyncio.create_task(self._broadcast_clip(slug, path))
         return web.json_response({"ok": True, "slug": slug})
@@ -2016,6 +2192,7 @@ class ShareServer:
         _purge_slug_thumbs(slug, keep=cached)
         _purge_slug_proxies(slug, keep=cached)
         _purge_clip_discord(path)
+        _purge_clip_sends(path)
         for old in cached:
             try:
                 old.replace(old.with_name(new_slug + old.name[len(old_stem):]))
@@ -2029,6 +2206,7 @@ class ShareServer:
             HIGHLIGHTS_DIR.mkdir(parents=True, exist_ok=True)
             old_hl.rename(HIGHLIGHTS_DIR / f"{new_slug}.json")
         keystore.move_sidecar(slug, new_slug)
+        track_mix.move(slug, new_slug)
 
         # Playlist membership, the view counter and the editor project follow
         # the clip
@@ -2082,7 +2260,12 @@ class ShareServer:
         if not path or not path.exists():
             raise web.HTTPNotFound()
 
-        if req.query.get("discord") == "1":
+        if req.query.get("discord") != "1":
+            try:
+                path = await self._send_copy(slug, path)
+            except SendCopyFailed as exc:
+                return web.json_response({"ok": False, "error": f"Could not make the copy to send: {exc}"})
+        else:
             try:
                 copy_path = await self._prepare_discord_copy(slug, path)
             except DiscordTooLarge as exc:

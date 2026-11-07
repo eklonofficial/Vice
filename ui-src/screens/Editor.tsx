@@ -223,7 +223,11 @@ export function Editor() {
                 <Toggle label={t('editor.audioMuted')} checked={Boolean(selected.muted)}
                   onChange={v => engine.inspectorChange('muted', v)} />
               </label>
-              <p className="dim">{t('editor.detachedTracksHelp')}</p>
+              <p className="dim">
+                {clips.find(c => c.slug === selected.clipId)?.audio_tracks?.some(track => track.part)
+                  ? t('editor.detachedPartsHelp')
+                  : t('editor.detachedTracksHelp')}
+              </p>
             </div>
           ) : null}
 

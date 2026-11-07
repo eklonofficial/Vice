@@ -18,6 +18,7 @@ Environment detection
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -37,9 +38,10 @@ from typing import Callable, List, Optional
 
 from . import active_window
 from .config import Config
+from .media import communicate_with_timeout
 from .media import get_duration as _get_duration
 from .media import probe_media_detailed
-from .runtime import recover_wayland_display, resolve_path
+from .runtime import actual_home_dir, recover_wayland_display, resolve_path
 
 log = logging.getLogger("vice.recorder")
 
@@ -486,10 +488,19 @@ def _gsr_wants_disk_replay(rc) -> bool:
     return storage == "auto" and buffer_duration > 600
 
 
+# A track source of Vice's own, not a GSR -a value: every application that
+# has no track of its own. Recording "Desktop" next to an app's own track puts
+# that app on both, so muting its track in the editor leaves it playing on the
+# desktop one. This records the rest instead, so each sound is on one track.
+EVERYTHING_ELSE = "everything_else"
+
+
 def _classify_gsr_source(source: str) -> str:
     """Rough kind of a GSR -a value: "monitor" (desktop audio), "input"
-    (microphone), "app", or "unknown"."""
+    (microphone), "app", "others" (EVERYTHING_ELSE) or "unknown"."""
     value = (source or "").strip()
+    if value == EVERYTHING_ELSE:
+        return "others"
     if value == "default_output":
         return "monitor"
     if value == "default_input":
@@ -520,9 +531,19 @@ def _with_mic_and_mix(rc, tracks: list[str]) -> tuple[list[str], bool]:
         mic = _gsr_mic_source(rc)
         if not any(mic in track.split("|") for track in tracks):
             tracks.append(mic)
-    if getattr(rc, "audio_tracks_mix_first", False) and len(tracks) > 1:
+    parts = [part for track in tracks for part in track.split("|") if part]
+    # Everything else leaves out every app with a track of its own, so as
+    # track 1, which is all players, share links and Discord play, it would
+    # lose them. With it the combined track is always recorded.
+    wants_mix = getattr(rc, "audio_tracks_mix_first", False) or EVERYTHING_ELSE in parts
+    if wants_mix and len(tracks) > 1:
         mix: list[str] = []
-        parts = [part for track in tracks for part in track.split("|") if part]
+        if EVERYTHING_ELSE in parts:
+            # Everything else plus the apps with their own tracks is the whole
+            # desktop, and GSR cannot put app: and app-inverse: on one track,
+            # so the combined track records the desktop in their place.
+            desktop = _desktop_monitor_parts(rc)
+            parts = [q for p in parts for q in (desktop if p == EVERYTHING_ELSE else [p])]
         # GSR rejects one track that contains both app: and app-inverse:
         # sources. A monitor already contains application audio, so it is
         # also the correct combined source and avoids recording it twice.
@@ -547,6 +568,132 @@ def _with_mic_and_mix(rc, tracks: list[str]) -> tuple[list[str], bool]:
             tracks.insert(0, "|".join(mix))
             mixed = True
     return tracks, mixed
+
+
+def _desktop_monitor_parts(rc) -> list[str]:
+    """The desktop audio source as monitor parts, default_output when the
+    configured one has none."""
+    source = (getattr(rc, "gsr_audio_source", "") or "").strip()
+    parts = [p for p in source.split("|") if p and _classify_gsr_source(p) == "monitor"]
+    return parts or ["default_output"]
+
+
+def _expand_everything_else(rc, tracks: list[str]) -> list[str]:
+    """Turn EVERYTHING_ELSE into the GSR sources it stands for: every app
+    except the ones with a track of their own, or the desktop when no app has
+    one. Tracks without it pass through unchanged."""
+    apps: list[str] = []
+    for track in tracks:
+        for part in track.split("|"):
+            name = part[len("app:"):].strip() if part.startswith("app:") else ""
+            # GSR matches application names without regard to case.
+            if name and name.lower() not in {a.lower() for a in apps}:
+                apps.append(name)
+    others = [f"app-inverse:{name}" for name in apps] or _desktop_monitor_parts(rc)
+    out: list[str] = []
+    for track in tracks:
+        parts = [p for p in track.split("|") if p]
+        if EVERYTHING_ELSE not in parts:
+            out.append(track)
+            continue
+        merged: list[str] = []
+        for part in parts:
+            for q in (others if part == EVERYTHING_ELSE else [part]):
+                if q not in merged:
+                    merged.append(q)
+        out.append("|".join(merged))
+    return out
+
+
+# Apps heard playing sound, by name, with when each was last heard. With
+# auto_app_tracks each gets a track of its own, including when it starts
+# after the recorder: GSR links an app it was told about whenever it appears.
+AUDIO_APPS_PATH = actual_home_dir() / ".local" / "share" / "vice" / "audio_apps.json"
+# Enough for a game, a browser, music and a call, with room. Every track is
+# another encoder and another lane in the editor.
+AUTO_APP_LIMIT = 10
+AUTO_APP_FORGET_SECONDS = 30 * 24 * 3600
+# What Vice plays its own clip and session tones with (audio._find_player).
+_OWN_SOUND_PLAYERS = {"paplay", "aplay", "ffplay", "pw-play", "pw-cat"}
+
+
+def _load_heard_apps() -> dict[str, float]:
+    try:
+        data = json.loads(AUDIO_APPS_PATH.read_text())
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        log.warning("Cannot read the apps Vice has heard (%s): %s", AUDIO_APPS_PATH, exc)
+        return {}
+    apps = data.get("apps") if isinstance(data, dict) else None
+    if not isinstance(apps, dict):
+        return {}
+    return {str(k): float(v) for k, v in apps.items()
+            if isinstance(v, (int, float)) and str(k).strip()}
+
+
+def _save_heard_apps(apps: dict[str, float]) -> None:
+    try:
+        AUDIO_APPS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = AUDIO_APPS_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"version": 1, "apps": apps}))
+        tmp.replace(AUDIO_APPS_PATH)
+    except OSError as exc:
+        log.warning("Cannot save the apps Vice has heard: %s", exc)
+
+
+def _heard_app_names(apps: dict[str, float], now: float) -> list[str]:
+    """The apps that get a track: heard within AUTO_APP_FORGET_SECONDS, the
+    AUTO_APP_LIMIT most recent, in name order so track numbers stay put."""
+    recent = sorted(
+        ((name, at) for name, at in apps.items() if now - at <= AUTO_APP_FORGET_SECONDS),
+        key=lambda item: item[1], reverse=True,
+    )[:AUTO_APP_LIMIT]
+    return sorted((name for name, _ in recent), key=str.casefold)
+
+
+def remembered_audio_apps() -> list[str]:
+    """The apps that get a track of their own with auto_app_tracks."""
+    return _heard_app_names(_load_heard_apps(), time.time())
+
+
+def _detect_app_tracks() -> list[str]:
+    """The tracks auto_app_tracks records: everything else, then each app
+    heard recently. Asks GSR which apps are playing now and remembers them,
+    so an app started after the recorder gets a track from its next start."""
+    apps = _load_heard_apps()
+    prefix = _gsr_prefix()
+    if prefix is not None:
+        code, out = _run_command_capture([*prefix, "--list-application-audio"], timeout=3.0)
+        if code == 0:
+            now = time.time()
+            known = {name.casefold(): name for name in apps}
+            for entry in _parse_gsr_audio_lines(out, "app"):
+                name = entry["id"].split(":", 1)[1].strip()
+                # A "|" would split the -a value GSR is given.
+                if not name or "|" in name or name.casefold() in _OWN_SOUND_PLAYERS:
+                    continue
+                # GSR matches app names without regard to case, so one
+                # entry per name, spelled the way it was first heard.
+                apps[known.get(name.casefold(), name)] = now
+            _save_heard_apps(apps)
+        else:
+            log.info("Could not list the apps playing sound: %s", out.strip()[:200])
+    return [EVERYTHING_ELSE] + [f"app:{name}" for name in _heard_app_names(apps, time.time())]
+
+
+def _effective_rc(rc, auto_tracks: Optional[list[str]]):
+    """The recording settings with auto_app_tracks resolved into the tracks
+    the recorder was started with, so every save-time pass (volumes, track
+    names) describes the file GSR actually wrote. rc itself when the tracks
+    are chosen by hand."""
+    if not getattr(rc, "auto_app_tracks", False):
+        return rc
+    effective = copy.copy(rc)
+    effective.audio_tracks = list(auto_tracks or [EVERYTHING_ELSE])
+    # Players, share links and Discord only ever play track 1.
+    effective.audio_tracks_mix_first = True
+    return effective
 
 
 def _separate_track_layout(rc) -> tuple[list[str], bool]:
@@ -599,7 +746,7 @@ def _gsr_audio_args(rc, *, split_for_volume: bool = True) -> list[str]:
     if tracks:
         tracks, _ = _with_mic_and_mix(rc, tracks)
         args: list[str] = []
-        for track in tracks:
+        for track in _expand_everything_else(rc, tracks):
             args += ["-a", track]
         return args
     if (
@@ -883,11 +1030,14 @@ def list_gsr_audio_sources() -> dict:
     sources = [
         {"id": "default_output", "label": "Default output", "kind": "monitor"},
         {"id": "default_input", "label": "Default input", "kind": "input"},
+        {"id": EVERYTHING_ELSE, "label": "Everything else (apps without their own track)",
+         "kind": "others"},
     ]
     warning = None
     prefix = _gsr_prefix()
     if prefix is None:
-        return {"sources": sources, "warning": "gpu-screen-recorder is not installed."}
+        return {"sources": sources, "warning": "gpu-screen-recorder is not installed.",
+                "remembered_apps": remembered_audio_apps()}
 
     code, out = _run_command_capture([*prefix, "--list-audio-devices"], timeout=3.0)
     if code == 0:
@@ -913,7 +1063,8 @@ def list_gsr_audio_sources() -> dict:
             continue
         seen.add(source_id)
         deduped.append(source)
-    return {"sources": deduped, "warning": warning}
+    # The apps automatic app tracks gives a track of their own.
+    return {"sources": deduped, "warning": warning, "remembered_apps": remembered_audio_apps()}
 
 
 def _resolve_display_option(rc, backend: str, override: Optional[str] = None) -> Optional[dict]:
@@ -1612,6 +1763,11 @@ class Recorder(ABC):
         # focused (see games.json matching). Applied at start(), so the
         # daemon restarts the recorder after changing it.
         self.window_override: Optional[str] = None
+        # The tracks auto_app_tracks resolved to when the recorder (or a
+        # session) started, so clips are described by what was recorded
+        # rather than by apps heard since.
+        self._auto_tracks: Optional[list[str]] = None
+        self._session_tracks: Optional[list[str]] = None
         # Session recording state (shared across all backends)
         self._session_active = False
         self._session_proc: Optional[asyncio.subprocess.Process] = None
@@ -1698,6 +1854,9 @@ class Recorder(ABC):
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = _next_session_path(out_dir, _container(self.cfg.recording))
 
+        self._session_tracks = None
+        if getattr(self.cfg.recording, "auto_app_tracks", False):
+            self._session_tracks = await asyncio.to_thread(_detect_app_tracks)
         cmd = self._build_session_cmd(out_path)
         if cmd is None:
             log.error("Cannot build session recording command for this environment")
@@ -1769,6 +1928,11 @@ class Recorder(ABC):
             log.error("Session file not found after stop: %s (%s)", path, detail)
             return None
 
+        if program == "gpu-screen-recorder":
+            # Sessions are what lands in the editor most, so their tracks
+            # are named too. Only GSR records the separate tracks.
+            await _label_audio_tracks(path, _effective_rc(self.cfg.recording,
+                                                          self._session_tracks))
         if self.cfg.recording.apply_watermark:
             await _apply_watermark(path)
         log.info("Session clip saved: %s", path)
@@ -1783,7 +1947,8 @@ class Recorder(ABC):
         if _is_wayland():
             # Prefer gpu-screen-recorder on Wayland (especially smoother on NVIDIA).
             if gsr_source() is not None:
-                return self._gsr_session_cmd(out_path, rc, self.display_override, self.window_override)
+                return self._gsr_session_cmd(out_path, _effective_rc(rc, self._session_tracks),
+                                             self.display_override, self.window_override)
 
             # Fallback: wf-recorder direct-to-file on Wayland.
             if _has("wf-recorder"):
@@ -2429,6 +2594,24 @@ async def _audio_stream_codecs(path: Path) -> list[tuple[str, int]]:
 _AUDIO_ENCODERS = {"opus": "libopus", "aac": "aac", "mp3": "libmp3lame", "flac": "flac"}
 
 
+def _whole_parts(layout: list[str], mixed: bool) -> set[int]:
+    """The separate tracks that together carry the whole recording once.
+
+    App-only tracks are left out when a monitor is recorded, because the
+    monitor already carries that audio. Same rule GSR's combined track was
+    built with. EVERYTHING_ELSE is not a monitor: it leaves those apps out,
+    so their tracks are parts of the whole.
+    """
+    first = 1 if mixed else 0
+    parts = [p for t in layout[first:] for p in t.split("|") if p]
+    has_monitor = any(_classify_gsr_source(p) == "monitor" for p in parts)
+    return {
+        i for i in range(first, len(layout))
+        if not (has_monitor and all(
+            _classify_gsr_source(p) == "app" for p in layout[i].split("|") if p))
+    }
+
+
 def _track_volume_cmd(
     path: Path, tmp: Path, layout: list[str], mixed: bool,
     volumes: list[float], codecs: list[tuple[str, int]],
@@ -2441,16 +2624,7 @@ def _track_volume_cmd(
                for i, v in enumerate(volumes)]
     members: set[int] = set()
     if mixed and any(changed):
-        # The combined track leaves out app-only tracks when a monitor is
-        # recorded, because the monitor already carries that audio. Same rule
-        # GSR's combined track was built with.
-        parts = [p for t in layout[1:] for p in t.split("|") if p]
-        has_monitor = any(_classify_gsr_source(p) == "monitor" for p in parts)
-        members = {
-            i for i in range(1, len(layout))
-            if not (has_monitor and all(
-                _classify_gsr_source(p) == "app" for p in layout[i].split("|") if p))
-        }
+        members = _whole_parts(layout, mixed)
         if not any(changed[i] for i in members):
             members = set()
     graph: list[str] = []
@@ -2518,6 +2692,123 @@ async def _apply_track_volumes(path: Path, rc) -> None:
     if proc.returncode != 0:
         log.warning("Track volume pass failed, keeping %s as recorded: %s",
                     path.name, stderr.decode(errors="replace").strip()[:300])
+        tmp.unlink(missing_ok=True)
+        return
+    tmp.replace(path)
+
+
+# Title of the combined first track. Clips carry their track titles, and the
+# share server compares them with the titles the current settings would write
+# to tell which tracks are parts of the whole (audio_track_parts).
+MIX_TRACK_TITLE = "All audio"
+
+
+EVERYTHING_ELSE_TITLE = "Everything else"
+DESKTOP_TITLE = "Desktop"
+
+
+def _source_title(part: str, rc) -> str:
+    """A short name for one GSR source, as a track title."""
+    if part == EVERYTHING_ELSE:
+        return EVERYTHING_ELSE_TITLE
+    if part == "default_output" or part in _desktop_monitor_parts(rc):
+        return DESKTOP_TITLE
+    if part in {"default_input", _gsr_mic_source(rc)}:
+        return "Microphone"
+    kind, _, name = part.partition(":")
+    if kind == "app" and name:
+        return name
+    if kind == "app-inverse" and name:
+        return f"Everything except {name}"
+    if kind == "device" and name:
+        return name.removesuffix(".monitor")
+    return part
+
+
+def _track_titles(rc) -> list[str]:
+    """The title of each separate track the settings record, in order, or []
+    when the clip is recorded with a mixed track."""
+    layout, mixed = _separate_track_layout(rc)
+    return [
+        MIX_TRACK_TITLE if mixed and i == 0
+        else " + ".join(_source_title(p, rc) for p in track.split("|") if p)
+        for i, track in enumerate(layout)
+    ]
+
+
+def audio_track_parts(rc, titles: list[str]) -> Optional[list[bool]]:
+    """Which of a clip's audio tracks are parts of the whole recording (see
+    _whole_parts), so nothing plays twice when they are heard together and
+    switching one off takes just that source out. None when the titles do
+    not say what the tracks hold.
+
+    A clip carrying exactly the titles the current settings write is read
+    by those settings. Otherwise Everything else tells: it never shares a
+    sound with another track, so without a Desktop track (which holds every
+    app) each track but the combined one is a part. That covers automatic
+    app tracks, whose apps change from one start to the next, and a clip
+    saved from the viewer."""
+    titles = list(titles)
+    expected = _track_titles(rc)
+    if expected and titles == expected:
+        layout, mixed = _separate_track_layout(rc)
+        parts = _whole_parts(layout, mixed)
+        return [i in parts for i in range(len(layout))]
+    if EVERYTHING_ELSE_TITLE in titles and DESKTOP_TITLE not in titles:
+        return [title != MIX_TRACK_TITLE for title in titles]
+    return None
+
+
+def _label_tracks_cmd(path: Path, tmp: Path, titles: list[str]) -> list[str]:
+    args = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path),
+            *KEEP_ALL_STREAMS, "-c", "copy"]
+    for i, title in enumerate(titles):
+        # MP4 drops a track title at the next remux (a trim, say). The
+        # handler name survives it, and players show it when there is no
+        # title, so both are written.
+        args += [f"-metadata:s:a:{i}", f"title={title}",
+                 f"-metadata:s:a:{i}", f"handler_name={title}"]
+    if path.suffix.lower() == ".mp4":
+        args += ["-movflags", "+faststart"]
+    return args + ["-y", str(tmp)]
+
+
+async def _label_audio_tracks(path: Path, rc) -> None:
+    """Name each separate audio track after its source, so the editor (and
+    any other editor) shows Spotify or Microphone instead of Track 3. Stream
+    copy only. A clip whose tracks do not match the settings, or any
+    failure, keeps the clip as recorded."""
+    if _gsr_has_any_flag(_extra_gsr_args(getattr(rc, "gsr_args", "") or ""), "-a"):
+        return  # The user's own -a flags decide the tracks, not the settings.
+    titles = _track_titles(rc)
+    if not titles:
+        return
+    streams = await _count_audio_streams(path)
+    if streams != len(titles):
+        log.info("Not naming the audio tracks of %s: it has %d, the settings "
+                 "describe %d", path.name, streams, len(titles))
+        return
+    ext = path.suffix.lstrip(".") or "mp4"
+    tmp = path.with_suffix(f".labels.{ext}")
+    try:
+        size = path.stat().st_size
+        proc = await asyncio.create_subprocess_exec(
+            *_label_tracks_cmd(path, tmp, titles),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        # A copy, so it is bound by the disk. Session recordings can run to
+        # gigabytes, so the limit grows with the file.
+        _, stderr = await communicate_with_timeout(proc, 60 + size / 20_000_000)
+    except (asyncio.TimeoutError, OSError) as exc:
+        log.warning("Could not name the audio tracks of %s, keeping it as "
+                    "recorded: %s", path.name, str(exc) or "timed out")
+        tmp.unlink(missing_ok=True)
+        return
+    if proc.returncode != 0:
+        log.warning("Could not name the audio tracks of %s, keeping it as "
+                    "recorded: %s", path.name,
+                    (stderr or b"").decode(errors="replace").strip()[:300])
         tmp.unlink(missing_ok=True)
         return
     tmp.replace(path)
@@ -2595,7 +2886,7 @@ class GSRRecorder(Recorder):
             cmd += _gsr_codec_args(rc, extra, avoid_codec)
 
         if not _gsr_has_any_flag(extra, "-a"):
-            cmd += _gsr_audio_args(rc)
+            cmd += _gsr_audio_args(_effective_rc(rc, self._auto_tracks))
 
         if cpu_encoder and not _gsr_has_any_flag(extra, "-encoder"):
             cmd += ["-encoder", "cpu"]
@@ -2635,6 +2926,9 @@ class GSRRecorder(Recorder):
         self.cpu_fallback_reason = None
         self.codec_fallback = False
         self._stderr_info_budget = 40
+        self._auto_tracks = None
+        if getattr(self.cfg.recording, "auto_app_tracks", False):
+            self._auto_tracks = await asyncio.to_thread(_detect_app_tracks)
 
         rc = self.cfg.recording
         detail = await self._try_start(cpu_encoder=False)
@@ -2808,8 +3102,12 @@ class GSRRecorder(Recorder):
                 newest = seq_path
                 # GSR saves the entire buffer; trim to the requested clip duration.
                 trimmed = await _trim_to_last_n_seconds(newest, clip_duration)
-                await _apply_volume_mix(trimmed, self.cfg.recording)
-                await _apply_track_volumes(trimmed, self.cfg.recording)
+                # Built fresh for each clip: track volumes change without a
+                # restart, the tracks themselves only with one.
+                audio_rc = _effective_rc(self.cfg.recording, self._auto_tracks)
+                await _apply_volume_mix(trimmed, audio_rc)
+                await _apply_track_volumes(trimmed, audio_rc)
+                await _label_audio_tracks(trimmed, audio_rc)
                 if self.cfg.recording.apply_watermark:
                     await _apply_watermark(trimmed)
                 log.info("Clip saved: %s", trimmed)
@@ -3178,9 +3476,10 @@ def create_recorder(cfg: Config) -> Recorder:
                 "backend; %s clips stay mp4",
                 _container(cfg.recording), pref,
             )
-        if getattr(cfg.recording, "audio_tracks", None):
+        if getattr(cfg.recording, "audio_tracks", None) or getattr(
+                cfg.recording, "auto_app_tracks", False):
             log.warning(
-                "recording.audio_tracks applies to the gpu-screen-recorder "
+                "Separate audio tracks need the gpu-screen-recorder "
                 "backend; %s records a single mixed track", pref,
             )
 

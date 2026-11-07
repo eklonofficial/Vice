@@ -464,6 +464,12 @@ export function createEditorEngine(deps: EditorDeps): EditorEngine {
     if (!streams?.length) return;
     begin();
     it.muted = true;
+    // Known parts of the whole recording all start on, so muting one takes
+    // just that source out. Otherwise only track 1 does, which is the
+    // combined track when there is one, so nothing is mixed twice.
+    const knownParts = streams.some(stream => stream.part);
+    // A source switched off or turned down in the viewer starts that way.
+    const kept = clipOf(it)?.track_mix ?? {};
     let first: EdItem | null = null;
     for (const stream of streams) {
       // Keep detached streams aligned even when an existing lane is occupied.
@@ -476,7 +482,9 @@ export function createEditorEngine(deps: EditorDeps): EditorEngine {
       }
       const audio = insert({id: uid(), kind: 'audio', trackId: lane.id,
         clipId: it.clipId, start: it.start, dur: it.dur, offset: it.offset || 0,
-        audioStream: stream.index, volume: 1, muted: stream.index !== 0});
+        audioStream: stream.index,
+        volume: Math.min(1, kept[stream.index]?.volume ?? 1),
+        muted: (knownParts ? !stream.part : stream.index !== 0) || kept[stream.index]?.enabled === false});
       first ??= audio;
     }
     sel = first!.id;

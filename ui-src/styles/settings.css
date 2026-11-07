@@ -591,6 +591,17 @@ select option {
   line-height: 1.55;
 }
 
+.tracks-doubled {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+}
+
+.tracks-doubled p {
+  margin: 0;
+}
+
 /* ── hotkeys ────────────────────────────────────────────────────── */
 
 .key-capture {

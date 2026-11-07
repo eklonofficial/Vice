@@ -41,6 +41,8 @@ export interface Draft {
   sounds: Record<SoundKey, string>;
   audioTracks: string[];
   mixFirstTrack: boolean;
+  /** Every app heard gets its own track, in place of audioTracks. */
+  autoAppTracks: boolean;
   wfMicStrategy: string;
 
   clipKey: string;
@@ -155,6 +157,7 @@ export function draftFromConfig(config: Config): Draft {
       ).map(([id, v]) => [id, Math.round(num(v, 1) * 100)]),
     ),
     mixFirstTrack: Boolean(r.audio_tracks_mix_first),
+    autoAppTracks: Boolean(r.auto_app_tracks),
     wfMicStrategy: str(r.wf_microphone_strategy, 'prompt'),
 
     clipKey: str(h.clip, 'KEY_F9'),
@@ -251,6 +254,7 @@ export function patchFromDraft(draft: Draft): Record<string, Record<string, unkn
         draft.audioTracks.map(id => [id, (draft.audioTrackVolumes[id] ?? 100) / 100]),
       ),
       audio_tracks_mix_first: draft.mixFirstTrack,
+      auto_app_tracks: draft.autoAppTracks,
       gsr_args: draft.gsrArgs.trim(),
     },
     hotkeys: {
@@ -358,9 +362,14 @@ export function bufferNote(draft: Draft): {text: string; tone: 'plain' | 'warnin
   return {text: t('settings.bufferPlain'), tone: 'plain'};
 }
 
+/** Vice's own track source, EVERYTHING_ELSE in recorder.py: every app that
+ * has no track of its own. */
+export const EVERYTHING_ELSE = 'everything_else';
+
 /** Mirrors _classify_gsr_source in recorder.py. */
-export function trackPartKind(id: string): 'monitor' | 'input' | 'app' | 'unknown' {
+export function trackPartKind(id: string): 'monitor' | 'input' | 'app' | 'others' | 'unknown' {
   const value = (id || '').trim();
+  if (value === EVERYTHING_ELSE) return 'others';
   if (value === 'default_output') return 'monitor';
   if (value === 'default_input') return 'input';
   if (value.startsWith('app:') || value.startsWith('app-inverse:')) return 'app';
@@ -386,6 +395,48 @@ export function tracksLostWithoutDesktopAudio(tracks: string[]): {
     else if (kept.length !== parts.length) trimmed.push(id);
   }
   return {dropped, trimmed};
+}
+
+/**
+ * Apps with a track of their own that a desktop track records as well. Muting
+ * such an app's track in the editor leaves it playing on the desktop one, so
+ * it cannot be taken out of a clip.
+ */
+export function appsAlsoOnDesktop(tracks: string[]): string[] {
+  const parts = tracks.flatMap(id => String(id).split('|').filter(Boolean));
+  if (!parts.some(p => trackPartKind(p) === 'monitor')) return [];
+  const apps: string[] = [];
+  for (const p of parts) {
+    const name = p.startsWith('app:') ? p.slice(4) : '';
+    if (name && !apps.includes(name)) apps.push(name);
+  }
+  return apps;
+}
+
+/**
+ * The tracks with each desktop source swapped for Everything else, so every
+ * app is on one track only, and the volumes carried over to the new ids.
+ */
+export function recordEverythingElse(
+  tracks: string[],
+  volumes: Record<string, number>,
+): {tracks: string[]; volumes: Record<string, number>} {
+  const next: string[] = [];
+  const nextVolumes = {...volumes};
+  for (const id of tracks) {
+    const parts: string[] = [];
+    for (const p of String(id).split('|').filter(Boolean)) {
+      const swapped = trackPartKind(p) === 'monitor' ? EVERYTHING_ELSE : p;
+      if (!parts.includes(swapped)) parts.push(swapped);
+    }
+    const swappedId = parts.join('|');
+    if (next.includes(swappedId)) continue;
+    next.push(swappedId);
+    if (swappedId !== id && volumes[id] !== undefined && volumes[swappedId] === undefined) {
+      nextVolumes[swappedId] = volumes[id];
+    }
+  }
+  return {tracks: next, volumes: nextVolumes};
 }
 
 const splitLines = (text: string) =>

@@ -15,6 +15,7 @@ import {
 } from '../lib/effects';
 import {
   RESOLUTION_PRESETS,
+  EVERYTHING_ELSE,
   SOUND_FIELDS,
   bufferNote,
   draftFromConfig,
@@ -76,7 +77,11 @@ export function Settings() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [baseline, setBaseline] = useState<string>('');
   const [displays, setDisplays] = useState<DisplayInfo>({displays: [], warning: null});
-  const [sources, setSources] = useState<{sources: AudioSource[]; warning?: string | null}>({
+  const [sources, setSources] = useState<{
+    sources: AudioSource[];
+    warning?: string | null;
+    remembered_apps?: string[];
+  }>({
     sources: [],
   });
   const [trackPick, setTrackPick] = useState('');
@@ -133,7 +138,7 @@ export function Settings() {
   const loadSources = useCallback(async () => {
     try {
       const info = await api.audioSources();
-      setSources(info as unknown as {sources: AudioSource[]; warning?: string | null});
+      setSources(info as unknown as {sources: AudioSource[]; warning?: string | null; remembered_apps?: string[]});
       setTrackPick(prev => prev || (info.sources as AudioSource[])[0]?.id || '');
     } catch {
       setSources({
@@ -204,6 +209,11 @@ export function Settings() {
       </div>
     );
   }
+
+  // The recorder always adds the combined track next to Everything else.
+  const everythingElseListed = draft.audioTracks.some(track =>
+    track.split('|').includes(EVERYTHING_ELSE),
+  );
 
   const fail = (title: string, err: unknown) =>
     notify({
@@ -703,17 +713,38 @@ export function Settings() {
           </Row>
 
           <Row
+            label={t('settings.autoAppTracks')}
+            help={t('settings.autoAppTracksHelp')}>
+            <Toggle
+              label={t('settings.autoAppTracks')}
+              checked={draft.autoAppTracks}
+              onChange={autoAppTracks => update({autoAppTracks})}
+            />
+          </Row>
+
+          {draft.autoAppTracks ? (
+            <Row label={t('settings.autoAppsHeard')} stack help={t('settings.autoAppsHeardHelp')}>
+              <p className="tracks-empty">
+                {sources.remembered_apps?.length
+                  ? sources.remembered_apps.join(', ')
+                  : t('settings.autoAppsNone')}
+              </p>
+            </Row>
+          ) : (
+          <Row
             label={t('settings.audioTracks')}
             stack
             help={t('settings.audioTracksHelp')}>
             <AudioTracks
               tracks={draft.audioTracks}
               sources={sources.sources}
-              mixFirst={draft.mixFirstTrack}
+              mixFirst={draft.mixFirstTrack || everythingElseListed}
               desktopAudioOn={draft.captureAudio}
               pick={trackPick}
               onPickChange={setTrackPick}
-              onChange={audioTracks => update({audioTracks})}
+              onChange={(audioTracks, audioTrackVolumes) =>
+                update(audioTrackVolumes ? {audioTracks, audioTrackVolumes} : {audioTracks})
+              }
               volumes={draft.audioTrackVolumes}
               onVolumeChange={(id, percent) =>
                 update({audioTrackVolumes: {...draft.audioTrackVolumes, [id]: percent}})
@@ -743,16 +774,20 @@ export function Settings() {
               }}
             />
           </Row>
+          )}
 
+          {draft.autoAppTracks ? null : (
           <Row
             label={t('settings.mixFirstTrack')}
-            help={t('settings.mixFirstTrackHelp')}>
+            help={everythingElseListed ? t('settings.mixFirstTrackForced') : t('settings.mixFirstTrackHelp')}>
             <Toggle
               label={t('settings.mixFirstTrack')}
-              checked={draft.mixFirstTrack}
+              checked={draft.mixFirstTrack || everythingElseListed}
+              disabled={everythingElseListed}
               onChange={mixFirstTrack => update({mixFirstTrack})}
             />
           </Row>
+          )}
 
           <Row
             label={t('settings.wfMicMode')}
@@ -1461,7 +1496,10 @@ function sourceKind(source: AudioSource): string {
 }
 
 function groupedSourceOptions(selected: string, sources: AudioSource[]) {
-  const list = sources.length ? sources : [{id: 'default_output', label: t('settings.defaultOutput')}];
+  // Everything else only means something next to the apps that have tracks of
+  // their own; GSR has no source by that name to record the desktop from.
+  const usable = sources.filter(s => s.id !== EVERYTHING_ELSE);
+  const list = usable.length ? usable : [{id: 'default_output', label: t('settings.defaultOutput')}];
   const groups: Array<{group: string; options: Array<[string, string]>}> = [];
   const kinds: Array<[string, string]> = [
     ['monitor', t('settings.groupDesktopAudio')],
