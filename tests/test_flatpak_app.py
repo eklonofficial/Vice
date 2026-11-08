@@ -9,7 +9,6 @@ end, and check that nothing changes when Vice is not the Flatpak.
 import asyncio
 import json
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -151,19 +150,23 @@ class FlatpakRecorderTests(_FakeHost):
         self.assertEqual(recorder._gsr_args_after_prefix(cmd), ["-w", "screen"])
 
     def test_the_host_recorder_is_found_by_its_exact_command_line(self) -> None:
+        # A symlink, not a copy: the kernel names the process after the link
+        # (comm "gpu-screen-reco"), and a copied coreutils multi-call binary,
+        # as in the Nix sandbox, would not know what to run.
         fake = Path(self.tmp.name) / "gpu-screen-recorder"
-        shutil.copy(shutil.which("sleep"), fake)
-        proc = subprocess.Popen(["gpu-screen-recorder", "30"], executable=str(fake))
+        fake.symlink_to(sys.executable)
+        args = ["-c", "import time; time.sleep(30)"]
+        proc = subprocess.Popen(["gpu-screen-recorder", *args], executable=str(fake))
         self.addCleanup(proc.wait)
         self.addCleanup(proc.kill)
         found = None
-        for _ in range(50):
-            found = recorder._host_recorder_pid(["30"])
+        for _ in range(100):
+            found = recorder._host_recorder_pid(args)
             if found:
                 break
             time.sleep(0.05)
         self.assertEqual(found, proc.pid)
-        self.assertIsNone(recorder._host_recorder_pid(["31"]))
+        self.assertIsNone(recorder._host_recorder_pid(["-c", "something else"]))
 
     def test_signals_go_through_the_host(self) -> None:
         child = subprocess.Popen(["sleep", "30"])
