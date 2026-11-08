@@ -168,6 +168,7 @@ vice start --no-open-ui
                     Start the daemon without opening the browser UI
 vice stop           Stop the daemon
 vice clip           Save a clip right now
+vice clip 30        Save the last 30 seconds (for Stream Deck buttons and scripts)
 vice status         Show daemon status, backend, and share URL
 vice ui             Open the web UI in your browser
 vice clips          List saved clips

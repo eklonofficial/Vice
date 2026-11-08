@@ -4,7 +4,7 @@ Vice: Linux game clip recorder daemon + CLI.
 Commands:
   vice start          Start the daemon (recorder + hotkey listener + share server)
   vice ui             Open the web UI in the default browser
-  vice clip           Manually save a clip right now (daemon must be running)
+  vice clip [SECS]    Save a clip right now, optionally of SECS seconds
   vice stop           Stop the daemon
   vice status         Show daemon status and recent clips
   vice doctor         Print startup diagnostics for environment/package issues
@@ -38,6 +38,7 @@ import click
 from . import __version__
 from .active_window import steam_game_name
 from .config import (
+    CLIP_DURATION_MIN,
     Config,
     CONFIG_DIR,
     CONFIG_PATH,
@@ -1754,15 +1755,37 @@ class ViceDaemon:
             except Exception as exc:
                 log.error("Deferred recording config apply failed: %s", exc)
 
+    def _ipc_clip_duration(self, arg: str) -> tuple[Optional[int], str]:
+        """The duration asked for by `vice clip <seconds>` (#285), or a reason
+        to refuse it. No argument means the clip key's own duration. A request
+        longer than the buffer gets the whole buffer, which is all there is."""
+        if not arg:
+            return None, ""
+        if not arg.isdigit():
+            return None, f"{arg!r} is not a whole number of seconds"
+        seconds = int(arg)
+        if seconds < CLIP_DURATION_MIN:
+            return None, f"a clip is at least {CLIP_DURATION_MIN} seconds"
+        buffer = int(self.cfg.recording.buffer_duration)
+        if seconds > buffer:
+            log.info("Clip of %d s asked for, the buffer holds %d s; saving %d s",
+                     seconds, buffer, buffer)
+            seconds = buffer
+        return seconds, ""
+
     async def _handle_ipc(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
         try:
             raw = await asyncio.wait_for(reader.readline(), timeout=5)
             cmd = raw.decode().strip()
-            if cmd == "clip":
-                asyncio.create_task(self._handle_clip_hotkey())
-                writer.write(b"ok\n")
+            if cmd == "clip" or cmd.startswith("clip "):
+                duration, problem = self._ipc_clip_duration(cmd[len("clip"):].strip())
+                if problem:
+                    writer.write(f"error: {problem}\n".encode())
+                else:
+                    asyncio.create_task(self._handle_clip_hotkey(duration))
+                    writer.write(b"ok\n" if duration is None else f"ok {duration}\n".encode())
             elif cmd == "stop":
                 try:
                     writer.write(b"ok\n")
@@ -2149,13 +2172,32 @@ def ui() -> None:
 
 
 @cli.command()
-def clip() -> None:
-    """Save a clip right now (daemon must be running)."""
-    resp = asyncio.run(_ipc("clip"))
+@click.argument("seconds", required=False, type=click.IntRange(min=1))
+@click.option("--duration", "-d", "duration", type=click.IntRange(min=1),
+              help="Seconds to save, instead of the clip key's duration.")
+def clip(seconds: Optional[int], duration: Optional[int]) -> None:
+    """Save a clip right now (daemon must be running).
+
+    `vice clip 30` saves the last 30 seconds, for a Stream Deck button or a
+    script; without a number it saves what the clip key does.
+    """
+    if seconds is not None and duration is not None and seconds != duration:
+        raise click.UsageError("Give the duration once, as SECONDS or --duration.")
+    wanted = seconds if seconds is not None else duration
+    resp = asyncio.run(_ipc("clip" if wanted is None else f"clip {wanted}"))
     if resp is None:
         click.echo("Vice is not running. Start it with `vice start`.", err=True)
         sys.exit(1)
-    click.echo("Clip triggered!")
+    if resp.startswith("error:"):
+        click.echo(f"Clip not saved: {resp[len('error:'):].strip()}", err=True)
+        sys.exit(1)
+    if resp != "ok" and not resp.startswith("ok "):
+        # A daemon from before durations existed answers "unknown command".
+        click.echo("The running Vice is older than this command. Restart it with "
+                   "`vice stop` and `vice start`, or reopen the Vice app.", err=True)
+        sys.exit(1)
+    saved = resp[len("ok "):].strip()
+    click.echo(f"Clip of the last {saved} s triggered!" if saved else "Clip triggered!")
 
 
 @cli.command()
