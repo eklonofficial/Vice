@@ -1065,6 +1065,11 @@ class ShareServer:
         # clip's, and they can collide with one, so nothing may look an image
         # up in _clips or the other way round.
         self._images: dict[str, Path] = {}
+        # Slugs with a trim in flight. A trim can run for minutes when it has
+        # to re-encode, and a second one on the same clip would write the same
+        # .trimming file and read the original while the first replaces it,
+        # which leaves a corrupt clip (#281).
+        self._trimming: set[str] = set()
 
         self.playlists = PlaylistStore()
         self._views = _load_views()
@@ -1871,6 +1876,22 @@ class ShareServer:
         if not path or not path.exists():
             raise web.HTTPNotFound()
 
+        # No await between the check and the add, so two requests cannot both
+        # get past it. Refused rather than queued: the second cut was chosen
+        # against a file the first one is about to replace (#281).
+        if slug in self._trimming:
+            return web.json_response(
+                {"ok": False,
+                 "error": "A trim is already running on this clip. "
+                          "Wait for it to finish."},
+                status=409)
+        self._trimming.add(slug)
+        try:
+            return await self._trim_clip(req, slug, path)
+        finally:
+            self._trimming.discard(slug)
+
+    async def _trim_clip(self, req: web.Request, slug: str, path: Path) -> web.Response:
         body  = await req.json()
         start = float(body.get("start", 0))
         end   = float(body.get("end",   0))

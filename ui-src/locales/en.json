@@ -367,7 +367,8 @@
     "startOfSelection": "Start of the selection",
     "endOfSelection": "End of the selection",
     "trimAria": "Trim {name}",
-    "heading": "Trim"
+    "heading": "Trim",
+    "working": "Trimming. This can take a few minutes."
   },
   "images": {
     "heading": "Images",
