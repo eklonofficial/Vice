@@ -51,8 +51,11 @@ from .hotkey import HotkeyListener, can_access_hotkeys, list_available_keys
 from .keys import KeyRing, save_sidecar as save_key_sidecar
 from .media import cleanup_temp_files, probe_media
 from .overlay_host import KeyOverlayHost
+from .platform_info import detect_platform
+from . import gsr_install
 from .recorder import (GSR_WINDOW_CAPTURE_WAYLAND_ERROR, GSRRecorder, capture_screenshot,
                        create_recorder, filename_tag, gsr_flatpak_installed, gsr_source,
+                       refresh_gsr_probes,
                        gsr_window_capture_supported, reap_orphaned_captures)
 from .runtime import (
     actual_home_dir,
@@ -65,6 +68,8 @@ from .runtime import (
     load_user_systemd_env,
     runtime_env_snapshot,
     running_under_systemd,
+    in_vice_flatpak,
+    VICE_FLATPAK_ID,
     systemd_unit_loaded,
     user_systemd_env_snapshot,
     wait_for_display,
@@ -239,6 +244,7 @@ class ViceDaemon:
         # recognized game (games.json) is focused. None means full display.
         self._window_capture_id: Optional[str] = None
         self._window_capture_task: Optional[asyncio.Task] = None
+        self._gsr_install_task: Optional[asyncio.Task] = None
         # Window ids a pin already failed on. Every attempt restarts the
         # recorder and empties the buffer, so one is never tried twice.
         self._window_capture_failed: set[str] = set()
@@ -282,6 +288,7 @@ class ViceDaemon:
             self.share.get_status_cb   = self._get_status
             self.share.apply_config_cb = self._apply_live_config
             self.share.key_overlay_move_cb = self.key_overlay.set_moving
+            self.share.install_gsr_cb = self._install_gsr
             try:
                 await self.share.start()
             except Exception:
@@ -957,6 +964,49 @@ class ViceDaemon:
         except asyncio.CancelledError:
             pass
 
+    def _install_gsr(self) -> bool:
+        """Start installing the gpu-screen-recorder Flatpak, from the Vice
+        Flatpak's setup card. False when it cannot start here."""
+        if not in_vice_flatpak():
+            return False
+        if self._gsr_install_task and not self._gsr_install_task.done():
+            return True
+        self._gsr_install_task = asyncio.create_task(self._run_gsr_install())
+        return True
+
+    async def _run_gsr_install(self) -> None:
+        async def progress(phase: str, percent: Optional[int]) -> None:
+            if self.share:
+                await self.share.broadcast(
+                    {"type": "gsr_install", "phase": phase, "percent": percent})
+
+        try:
+            problem = await gsr_install.install_gsr_flatpak(progress)
+        except Exception as exc:
+            log.exception("Installing the gpu-screen-recorder Flatpak failed")
+            problem = str(exc) or "the install failed"
+        if problem is None:
+            refresh_gsr_probes()
+            try:
+                async with self._config_apply_lock:
+                    async with self._clip_lock:
+                        await self._restart_recorder_for_config()
+            except Exception as exc:
+                log.warning("gpu-screen-recorder is installed, but recording did not start: %s", exc)
+                problem = f"Installed, but recording did not start: {exc}"
+        if self.share:
+            await self.share.broadcast({
+                "type": "gsr_install",
+                "phase": "error" if problem else "done",
+                "percent": None if problem else 100,
+                "error": problem,
+                "command": gsr_install.MANUAL_COMMAND if problem else None,
+            })
+        self._broadcast_status(recording=self._ready)
+        if self.share:
+            await self.share.broadcast({"type": "status", "gsr": {
+                "source": gsr_source(), "flatpak": gsr_flatpak_installed()}})
+
     def _refuse_window_capture(self) -> None:
         """Stop pinning for the rest of this run. Retrying could only fail the
         same way, and each try empties the replay buffer (#261, #274)."""
@@ -1444,12 +1494,15 @@ class ViceDaemon:
             "gsr":              {"source": gsr_source(), "flatpak": gsr_flatpak_installed()},
             # Game Capture pins a window, which GSR only does on X11.
             "window_capture_unavailable": self._window_capture_unavailable(),
+            "platform":         detect_platform(_install_method),
         }
 
     # ── update check ─────────────────────────────────────────────────────────
 
     def _update_install_hint(self) -> dict:
         """How this machine should update, so the notice can say it exactly."""
+        if in_vice_flatpak():
+            return {"method": "flatpak", "command": f"flatpak update {VICE_FLATPAK_ID}"}
         if _installed_via_aur():
             return {"method": "aur", "command": "yay -Syu vice-clipper"}
         if _installed_via_nix():
@@ -1888,6 +1941,17 @@ def _installed_via_nix() -> bool:
     return vice_path is not None and str(vice_path).startswith("/nix/store/")
 
 
+def _install_method() -> str:
+    """aur, nix, script or unknown. The Flatpak is told apart before this."""
+    if _installed_via_aur():
+        return "aur"
+    if _installed_via_nix():
+        return "nix"
+    if _using_install_script_venv():
+        return "script"
+    return "unknown"
+
+
 def _using_install_script_venv() -> bool:
     for name in ("vice", "vice-app"):
         cmd = USER_BIN_DIR / name
@@ -2257,6 +2321,13 @@ def doctor() -> None:
     if cfg_error:
         click.echo(f"Config error    : {cfg_error}")
     click.echo(f"Daemon log      : {DAEMON_LOG_FILE}")
+    info = detect_platform(_install_method)
+    click.echo(f"Platform        : {info['os_id'] or '?'} ({info['device']}, "
+               f"{'immutable' if info['immutable'] else 'mutable'}, "
+               f"installed via {info['packaging']}, session {info['session'] or '?'})")
+    if in_vice_flatpak():
+        click.echo(f"Flatpak         : {VICE_FLATPAK_ID}; gpu-screen-recorder Flatpak "
+                   f"{'installed' if gsr_flatpak_installed() else 'NOT installed'}")
     click.echo("")
 
     click.echo("Environment")
@@ -2390,6 +2461,12 @@ def clips() -> None:
 def uninstall(yes: bool) -> None:
     """Remove Vice cleanly, config, service, and optionally clips."""
     click.echo("Vice uninstaller\n")
+
+    if in_vice_flatpak():
+        click.echo("Vice is installed as a Flatpak.")
+        click.echo(f"Run: flatpak uninstall {VICE_FLATPAK_ID}")
+        click.echo("Add --delete-data to also remove its settings. Clips stay where they are.")
+        return
 
     if _installed_via_aur():
         click.echo("Vice was installed via AUR.")

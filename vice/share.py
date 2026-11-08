@@ -1101,6 +1101,8 @@ class ShareServer:
         self.apply_config_cb: Optional[Callable[[], Coroutine]] = None
         # Injected so Settings can put the keyboard overlay into move mode.
         self.key_overlay_move_cb: Optional[Callable[[bool], None]] = None
+        # Starts installing the GSR Flatpak (Vice Flatpak only); False when it cannot.
+        self.install_gsr_cb: Optional[Callable[[], bool]] = None
 
         self._setup_local_routes()
         self._setup_public_routes()
@@ -1145,6 +1147,7 @@ class ShareServer:
         r.add_get("/api/clips/{slug}/highlights",         self._api_get_highlights)
         r.add_get("/api/clips/{slug}/keys",               self._api_get_keys)
         r.add_post("/api/overlay/move",                   self._api_overlay_move)
+        r.add_post("/api/recorder/install-gsr",           self._api_install_gsr)
         r.add_post("/api/clips/{slug}/highlights",        self._api_add_highlight)
         r.add_patch("/api/clips/{slug}/highlights/{hid}", self._api_patch_highlight)
         r.add_delete("/api/clips/{slug}/highlights/{hid}",self._api_del_highlight)
@@ -1421,6 +1424,15 @@ class ShareServer:
         if slug not in self._clips:
             raise web.HTTPNotFound()
         return web.json_response({"keys": keystore.load_sidecar(slug)})
+
+    async def _api_install_gsr(self, _: web.Request) -> web.Response:
+        """Install the gpu-screen-recorder Flatpak. Progress arrives as
+        gsr_install events over the WebSocket."""
+        if self.install_gsr_cb is None or not self.install_gsr_cb():
+            return web.json_response(
+                {"ok": False, "error": "Only the Vice Flatpak installs gpu-screen-recorder itself."},
+                status=409)
+        return web.json_response({"ok": True})
 
     async def _api_overlay_move(self, req: web.Request) -> web.Response:
         body = await req.json()

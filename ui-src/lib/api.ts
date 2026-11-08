@@ -124,6 +124,8 @@ export const api = {
   clipKeys: async (slug: string) =>
     (await request<{keys: [number, number, string][] | null}>(`/api/clips/${enc(slug)}/keys`)).keys,
   moveKeyOverlay: (on: boolean) => post<{ok: boolean}>('/api/overlay/move', {on}),
+  /** Vice Flatpak only. Progress arrives as gsr_install WebSocket events. */
+  installGsr: () => post<{ok: boolean; error?: string}>('/api/recorder/install-gsr'),
   highlights: async (slug: string) =>
     (await request<{highlights: Highlight[]}>(`/api/clips/${enc(slug)}/highlights`)).highlights ?? [],
   addHighlight: (slug: string, body: Omit<Highlight, 'id'>) =>

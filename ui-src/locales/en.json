@@ -470,6 +470,28 @@
     "shareDiscordTitle": "Share copies a Discord file",
     "shareDiscordHelp": "Off, the Share button copies a link. On, it copies the clip itself, shrunk to fit Discord's free upload limit. Right-click Share for the other one, and change it any time in Settings."
   },
+  "gsrSetup": {
+    "eyebrow": "One more step",
+    "title": "Vice needs gpu-screen-recorder to record",
+    "body": "Vice records your screen with gpu-screen-recorder, and it can't save a single clip until that's installed. It's free, comes from Flathub, and takes about a minute.",
+    "install": "Install gpu-screen-recorder",
+    "note": "Installs com.dec05eba.gpu_screen_recorder for every user on this computer.",
+    "installing": "Installing gpu-screen-recorder",
+    "phase": {
+      "preparing": "Getting ready",
+      "downloading": "Downloading",
+      "installing": "Installing"
+    },
+    "workingBody": "You can leave this open. Vice starts recording as soon as it's done.",
+    "doneTitle": "You're all set",
+    "doneBody": "gpu-screen-recorder is installed and Vice is recording.",
+    "failedTitle": "gpu-screen-recorder didn't install",
+    "failed": "The install did not finish.",
+    "manual": "You can try again, or run this in a terminal and then reopen Vice:",
+    "copyCommand": "Copy the command",
+    "copied": "Copied",
+    "retry": "Try again"
+  },
   "accents": {
     "blue": "Blue",
     "purple": "Purple",

@@ -19,6 +19,7 @@ import {clipTitle, imageSlug, imageTitle, type KeyOverlayState} from '../lib/typ
 import type {
   Clip,
   Config,
+  GsrInstall,
   Image,
   Playlist,
   Status,
@@ -73,6 +74,7 @@ interface State {
   dismissed: BannerId[];
   /** Bumped whenever the editor should reload its project from the daemon. */
   editorProjectRevision: number;
+  gsrInstall: GsrInstall | null;
 }
 
 const INITIAL_STATUS: Status = {
@@ -113,6 +115,7 @@ const initialState: State = {
   sessionStartedAt: null,
   dismissed: [],
   editorProjectRevision: 0,
+  gsrInstall: null,
 };
 
 type Action =
@@ -137,7 +140,8 @@ type Action =
   | {type: 'event'; event: Omit<IslandEvent, 'id'>}
   | {type: 'clearEvent'; id: number}
   | {type: 'dismiss'; banner: BannerId}
-  | {type: 'clearUpdate'};
+  | {type: 'clearUpdate'}
+  | {type: 'gsrInstall'; value: GsrInstall | null};
 
 let eventSeq = 0;
 
@@ -222,6 +226,9 @@ function reduce(state: State, action: Action): State {
 
     case 'clearUpdate':
       return {...state, update: null};
+
+    case 'gsrInstall':
+      return {...state, gsrInstall: action.value};
 
     case 'ws':
       return reduceWs(state, action.msg);
@@ -338,6 +345,11 @@ function reduceWs(state: State, msg: WsMessage): State {
         sessionStartedAt: merged.session_active ? state.sessionStartedAt ?? Date.now() : null,
         update: partial.update ?? state.update,
       };
+    }
+
+    case 'gsr_install': {
+      const {type: _ignored, ...progress} = msg;
+      return {...state, gsrInstall: progress as GsrInstall};
     }
 
     case 'key_overlay': {
