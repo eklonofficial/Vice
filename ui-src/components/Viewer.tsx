@@ -15,6 +15,8 @@ import {
 } from '../lib/playback';
 import {clipTitle, imageTitle, type Clip, type Highlight} from '../lib/types';
 import {IconClose, IconExpand} from './Icons';
+import {ContextMenu} from './ContextMenu';
+import {usePlaylistToggleItems} from '../state/playlistItems';
 import {KeyOverlay} from './KeyOverlay';
 import type {KeyInterval} from '../lib/keyLayout';
 import {InlineRename} from './InlineRename';
@@ -128,6 +130,11 @@ export function Viewer(props: ViewerProps) {
     null,
   );
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [playlistMenu, setPlaylistMenu] = useState<{x: number; y: number} | null>(null);
+  const playlistItems = usePlaylistToggleItems();
+  const closePlaylistMenu = useCallback(() => setPlaylistMenu(null), []);
+  // On top of the viewer's own Escape, so the first press closes the menu.
+  useEscape(playlistMenu !== null, closePlaylistMenu);
   const [renamingTitle, setRenamingTitle] = useState(false);
   const [volume, setVolume] = useState(storedVolume);
   const [muted, setMuted] = useState(storedMuted);
@@ -805,6 +812,16 @@ export function Viewer(props: ViewerProps) {
                     {t('viewer.keys')}
                   </button>
                 ) : null}
+                <button
+                  type="button"
+                  className="btn btn-quiet btn-sm"
+                  aria-haspopup="menu"
+                  onClick={e => {
+                    const r = e.currentTarget.getBoundingClientRect();
+                    setPlaylistMenu({x: r.left, y: r.bottom + 6});
+                  }}>
+                  {t('viewer.playlist')}
+                </button>
                 <button type="button" className="btn btn-quiet btn-sm" onClick={() => props.onTrim(clip)}>
                   {t('viewer.trim')}
                 </button>
@@ -852,6 +869,16 @@ export function Viewer(props: ViewerProps) {
           onClose={onClose}
         />
       </div>
+
+      {playlistMenu && clip ? (
+        <ContextMenu
+          at={playlistMenu}
+          heading={t('viewer.addToPlaylist')}
+          emptyLabel={t('viewer.noPlaylists')}
+          items={playlistItems(clip)}
+          onClose={closePlaylistMenu}
+        />
+      ) : null}
 
       {picker ? (
         <ColorPicker

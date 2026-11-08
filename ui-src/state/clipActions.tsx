@@ -8,6 +8,7 @@ import {ContextMenu} from '../components/ContextMenu';
 import {Modal} from '../components/Modal';
 import {useStore} from './store';
 import {usePlayback} from './playback';
+import {usePlaylistToggleItems} from './playlistItems';
 import {t} from '../lib/i18n';
 
 /**
@@ -57,9 +58,10 @@ export function useRenameClip(): (clip: Clip, name: string) => Promise<Clip | nu
 }
 
 export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
-  const {state, notify, refreshPlaylists} = useStore();
+  const {state, notify} = useStore();
   const {openViewer, openTrim, openShare} = usePlayback();
   const {playlists} = state;
+  const playlistItems = usePlaylistToggleItems();
 
   const [menu, setMenu] = useState<{clip: Clip; at: {x: number; y: number}} | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Clip | null>(null);
@@ -157,36 +159,7 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
             {id: 'copy-file', label: t('card.copyVideoShort'), onSelect: () => copyFile(menuClip)},
             {id: 'reveal', label: t('card.reveal'), onSelect: () => reveal(menuClip)},
             ...(playlists.length ? [{id: 'sep-playlists', separator: true} as const] : []),
-            // One row per playlist that toggles, so adding and removing are
-            // the same gesture in the same place.
-            ...playlists.map(playlist => {
-              const inIt = playlist.clip_slugs?.includes(menuClip.slug) ?? false;
-              return {
-                id: playlist.id,
-                label: inIt
-                  ? t('card.removeFrom', {playlist: playlist.name})
-                  : t('card.addTo', {playlist: playlist.name}),
-                mark: inIt ? '✓' : (playlist.emoji ?? undefined),
-                onSelect: () => {
-                  const call = inIt
-                    ? api.removeClipFromPlaylist(playlist.id, menuClip.slug)
-                    : api.addClipToPlaylist(playlist.id, menuClip.slug);
-                  void call
-                    .then(async result => {
-                      if (result?.ok === false) {
-                        throw new Error(result.error || t('card.playlistUnchanged'));
-                      }
-                      await refreshPlaylists();
-                      say(
-                        inIt
-                          ? t('card.removedFrom', {playlist: playlist.name})
-                          : t('card.addedTo', {playlist: playlist.name}),
-                      );
-                    })
-                    .catch(fail(t('clips.errUpdatePlaylist')));
-                },
-              };
-            }),
+            ...playlistItems(menuClip),
             {id: 'sep-delete', separator: true},
             {
               id: 'delete',
