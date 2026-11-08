@@ -15,6 +15,9 @@ export interface ReleaseNotes {
 }
 
 export const WHATS_NEW: Record<string, ReleaseNotes> = {
+  '2.17.0': {
+    items: ['flatpak'],
+  },
   '2.16.0': {
     items: ['clipDuration', 'viewerPlaylist', 'shareCopy', 'indonesian'],
     thanks: ['milan483'],
