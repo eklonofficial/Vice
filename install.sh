@@ -69,11 +69,13 @@ if is_rpm_ostree_system; then
     if [[ -n "$OS_PRETTY_NAME" ]]; then
         info "Detected distro: $OS_PRETTY_NAME"
     fi
-    error "Bazzite / Fedora Atomic (rpm-ostree) is not supported by install.sh yet."
+    error "Bazzite / Fedora Atomic (rpm-ostree) is not supported by install.sh."
     error "This installer uses distro package managers such as dnf to install host dependencies."
     error "On rpm-ostree systems, dnf is not the right install path and package layering can affect system updates."
-    error "For now, do not run Vice's install.sh on Bazzite, Silverblue, Kinoite, or other atomic desktops."
-    error "A Flatpak or atomic-safe install path is the intended future fix."
+    error "Do not run Vice's install.sh on Bazzite, Silverblue, Kinoite, or other atomic desktops."
+    info "Install the Vice Flatpak (beta) instead:"
+    info "  flatpak install --user https://splitshotz.github.io/vice-flatpak/vice.flatpakref"
+    info "Vice installs gpu-screen-recorder itself the first time it opens."
     exit 1
 fi
 

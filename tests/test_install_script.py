@@ -51,6 +51,7 @@ class InstallScriptTests(unittest.TestCase):
         self.assertIn("Bazzite / Fedora Atomic", script)
         self.assertIn("Silverblue", script)
         self.assertIn("dnf is not the right install path", script)
+        self.assertIn("vice.flatpakref", script)
         self.assertLess(script.index("if is_rpm_ostree_system; then"), script.index("detect_package_manager()"))
 
     def test_arch_qt_preflight_preserves_existing_install(self) -> None:

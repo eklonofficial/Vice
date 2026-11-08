@@ -82,10 +82,17 @@ The AUR package and the script install everything Vice needs, including the `gpu
 | AUR | `yay -Syu` | `sudo pacman -Rns vice-clipper` |
 | Git clone | `cd Vice && git pull && ./install.sh` | `vice uninstall && rm -rf Vice` |
 | NixOS | `nix flake update vice && sudo nixos-rebuild switch` | Remove `services.vice.enable` and rebuild |
+| Flatpak | `flatpak update` | `flatpak uninstall io.github.splitshotz.Vice` |
 
 > Don't mix the AUR package and `./install.sh` on the same machine. Uninstall one before switching.
 
-**Bazzite / Fedora Atomic:** not supported yet. rpm-ostree systems can't use `install.sh`, and the installer exits early on them rather than breaking your system. A Flatpak will fix this; follow [#97](https://github.com/splitshotz/Vice/issues/97).
+**Steam Deck / Bazzite / Fedora Atomic (Flatpak, beta):**
+
+```bash
+flatpak install --user https://splitshotz.github.io/vice-flatpak/vice.flatpakref
+```
+
+The first time Vice opens, it asks to install gpu-screen-recorder, which is what records your screen. One click installs it from Flathub. The first recording then asks for your password once, so gpu-screen-recorder can set up its screen capture helper; on a Steam Deck, open Vice once in Desktop Mode so that prompt can appear. Hotkeys read the keyboard directly, so your user has to be in the `input` group: run `sudo usermod -aG input $USER` and reboot (on a Steam Deck, set a password with `passwd` in Desktop Mode first). Each release also has a `Vice.flatpak` you can download and install with `flatpak install --user Vice.flatpak`. The Flatpak works on any distro with Flatpak, but it's new, so if something doesn't work, open an issue with the output of `flatpak run --command=vice io.github.splitshotz.Vice doctor`. Feedback from Steam Deck and Bazzite is especially welcome on [#97](https://github.com/splitshotz/Vice/issues/97).
 
 ---
 

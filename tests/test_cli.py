@@ -1,3 +1,4 @@
+import re
 import unittest
 import tempfile
 from pathlib import Path
@@ -65,6 +66,13 @@ class CliVersionTests(unittest.TestCase):
         # PKGBUILD/.SRCINFO are a separate ecosystem; this catches drift.
         self.assertIn(f"pkgver={__version__}", pkgbuild)
         self.assertIn(f"pkgver = {__version__}", srcinfo)
+        # The Flatpak's newest release entry is what Flatpak front ends show
+        # as its version, so it moves with every release too.
+        metainfo = (repo_root / "packaging" / "flatpak"
+                    / "io.github.splitshotz.Vice.metainfo.xml").read_text()
+        newest = re.search(r'<release version="([^"]+)"', metainfo)
+        self.assertIsNotNone(newest, "metainfo has no <release> entry")
+        self.assertEqual(newest.group(1), __version__)
 
 
 class StartCommandTests(unittest.TestCase):
