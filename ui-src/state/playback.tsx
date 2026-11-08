@@ -148,6 +148,15 @@ export function PlaybackProvider({children}: {children: ReactNode}) {
     [notify],
   );
 
+  const copyDiscordFile = useCallback(
+    (clip: Clip) =>
+      void api
+        .copyClipFile(clip.slug, {discord: true})
+        .then(() => say(t('card.discordCopied'), t('card.discordCopiedDetail')))
+        .catch(fail(t('card.errCopyVideo'))),
+    [fail, say],
+  );
+
   const value = useMemo<Playback>(
     () => ({openViewer, openTrim, openShare: setShareSlug}),
     [openViewer, openTrim],
@@ -176,7 +185,12 @@ export function PlaybackProvider({children}: {children: ReactNode}) {
         notify={say}
       />
 
-      <ShareModal clip={shareClip} onClose={() => setShareSlug(null)} onCopyLink={copyLink} />
+      <ShareModal
+        clip={shareClip}
+        onClose={() => setShareSlug(null)}
+        onCopyLink={copyLink}
+        onCopyFile={copyDiscordFile}
+      />
 
       <TrimModal
         clip={trimClip}

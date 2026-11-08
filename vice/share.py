@@ -737,17 +737,22 @@ _DISCORD_TIMEOUT = 600
 
 
 async def _make_discord_copy(path: Path, duration: float,
-                            audio_streams: int = 1) -> Optional[Path]:
+                            audio_streams: int = 1, vcodec: str = "") -> Optional[Path]:
     """Return a copy of *path* small enough to drop into a Discord chat.
 
-    The source itself when it already fits, a cached H.264 transcode when it
-    does not, and None when the transcode fails. Raises DiscordTooLarge when
-    no bitrate fits the clip under the cap. Same bitrate budget as the
-    editor's "optimize for Discord" export, so the two produce comparable
-    files.
+    The source itself when it is already an H.264 MP4 that fits, a cached
+    H.264 transcode otherwise, and None when the transcode fails. Raises
+    DiscordTooLarge when no bitrate fits the clip under the cap. Same bitrate
+    budget as the editor's "optimize for Discord" export, so the two produce
+    comparable files.
+
+    *vcodec* is the source's video codec as ffprobe names it. A small AV1 or
+    HEVC clip used to go out unconverted, and plenty of phones cannot play
+    either in Discord (#289), so only H.264 is passed through.
     """
     try:
         already_small = (path.suffix.lower() == ".mp4"
+                         and vcodec == "h264"
                          and path.stat().st_size <= DISCORD_MAX_BYTES)
     except OSError:
         return None
@@ -1756,6 +1761,7 @@ class ShareServer:
                     path,
                     meta.get("duration", 0),
                     meta.get("audio_streams", 1),
+                    meta.get("vcodec", ""),
                 )
         finally:
             self._proxy_tasks.discard(task)

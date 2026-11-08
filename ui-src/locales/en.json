@@ -322,6 +322,7 @@
     "shareDragHint": "Drag this clip into any Discord chat to upload it",
     "sharePreparing": "Sizing a copy for Discord…",
     "shareDragFailed": "Could not prepare the Discord copy",
+    "shareCopyFile": "Copy the file",
     "shareDiscordSize": "Discord ready · {size}",
     "reveal": "Reveal",
     "delete": "Delete",

@@ -893,9 +893,25 @@ class DiscordCopyTests(unittest.IsolatedAsyncioTestCase):
             root = Path(tmp)
             src = root / "Vice_Clip_1.mp4"
             src.write_bytes(b"small")
-            out = await share_mod._make_discord_copy(src, 10)
+            out = await share_mod._make_discord_copy(src, 10, vcodec="h264")
             self.assertEqual(out, src)
             self.assertFalse((root / share_mod.DISCORD_SUBDIR).exists())
+
+    async def test_a_small_clip_in_another_codec_is_converted(self) -> None:
+        """#289: a 10 MB AV1 clip went to Discord as AV1, which many phones
+        cannot play. Only H.264 goes out as it is."""
+        import vice.share as share_mod
+        for vcodec in ("av1", "hevc", ""):
+            with tempfile.TemporaryDirectory() as tmp:
+                src = Path(tmp) / "Vice_Clip_1.mp4"
+                src.write_bytes(b"small")
+                captured: list = []
+                with mock.patch("asyncio.create_subprocess_exec",
+                                self._recording_ffmpeg(captured)):
+                    out = await share_mod._make_discord_copy(src, 10, vcodec=vcodec)
+                self.assertNotEqual(out, src, vcodec)
+                self.assertEqual(len(captured), 1, vcodec)
+                self.assertIn("libx264", captured[0])
 
     async def test_the_copy_lands_beside_the_clip(self) -> None:
         """A sandboxed drop target (Discord ships as a Flatpak) can only read

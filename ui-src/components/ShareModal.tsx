@@ -28,10 +28,13 @@ export function ShareModal({
   clip,
   onClose,
   onCopyLink,
+  onCopyFile,
 }: {
   clip: Clip | null;
   onClose: () => void;
   onCopyLink: (clip: Clip) => void;
+  /** Puts the Discord-sized file on the clipboard, for where a drag does not land (#289). */
+  onCopyFile: (clip: Clip) => void;
 }) {
   const [copy, setCopy] = useState<DiscordCopy | null>(null);
   const [failed, setFailed] = useState('');
@@ -128,6 +131,14 @@ export function ShareModal({
                 : t('viewer.sharePreparing')}
           </span>
         </div>
+
+        <button
+          type="button"
+          className="btn btn-sm share-copy-file"
+          disabled={!copy}
+          onClick={() => onCopyFile(shown)}>
+          {t('viewer.shareCopyFile')}
+        </button>
       </div>
     </Modal>
   );

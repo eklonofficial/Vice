@@ -1064,6 +1064,10 @@ kbd {
   color: var(--color-text-secondary);
 }
 
+.share-copy-file {
+  align-self: center;
+}
+
 .trim-status[data-warning] {
   color: var(--color-error);
 }
