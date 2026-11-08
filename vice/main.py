@@ -1918,11 +1918,15 @@ def _installed_via_aur() -> bool:
     if not pacman or not vice_path:
         return False
 
-    query = subprocess.run(
-        [pacman, "-Q", "vice-clipper"],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        query = subprocess.run(
+            [pacman, "-Q", "vice-clipper"],
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        log.debug("Could not ask pacman about vice-clipper: %s", exc)
+        return False
     if query.returncode != 0:
         return False
 

@@ -351,3 +351,12 @@ class UninstallCommandTests(unittest.TestCase):
         rmtree_mock.assert_called_once_with(mock.ANY, ignore_errors=True)
         run_mock.assert_not_called()
         refresh_mock.assert_called_once_with()
+
+
+class InstallMethodTests(unittest.TestCase):
+    def test_a_pacman_that_cannot_run_is_not_the_aur(self) -> None:
+        # CI and the Nix sandbox have no pacman; a which() that claims one
+        # used to crash vice doctor there.
+        from vice import main as main_mod
+        with mock.patch("vice.main.shutil.which", side_effect=lambda cmd: f"/nonexistent/{cmd}"):
+            self.assertFalse(main_mod._installed_via_aur())
