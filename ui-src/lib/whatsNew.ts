@@ -15,6 +15,10 @@ export interface ReleaseNotes {
 }
 
 export const WHATS_NEW: Record<string, ReleaseNotes> = {
+  '2.16.0': {
+    items: ['clipDuration', 'viewerPlaylist', 'shareCopy', 'indonesian'],
+    thanks: ['milan483'],
+  },
   '2.15.1': {
     items: ['gameCaptureX11'],
   },
