@@ -107,6 +107,14 @@ export interface Status {
   key_overlay?: KeyOverlayState | null;
   /** Where Vice runs; nothing switches on it yet beyond the Flatpak setup. */
   platform?: PlatformInfo | null;
+  voice?: VoiceState | null;
+}
+
+export interface VoiceState {
+  enabled: boolean;
+  active: boolean;
+  error: string | null;
+  phrases: string[];
 }
 
 export interface PlatformInfo {
@@ -162,6 +170,12 @@ export interface Config {
   notifications: Record<string, unknown>;
   ui: Record<string, unknown>;
   overlay?: Record<string, unknown>;
+  voice?: Record<string, unknown> & {
+    enabled?: boolean;
+    custom_phrase?: string;
+    cooldown?: number;
+    min_confidence?: number;
+  };
 }
 
 /** Every message the daemon broadcasts. */

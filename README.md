@@ -149,6 +149,7 @@ The Flatpak also works on any other distro with Flatpak installed.
 | Key / Action | What happens |
 |---|---|
 | **F9** | Save the last 20 s |
+| **"Vice, clip that"** | Save a clip hands-free (Settings → Audio → Voice clipping) |
 | **Extra clip keys** | Save their own duration, e.g. F6 for 60 s (Settings → Hotkeys) |
 | **Key combos** | Rebind to a modifier combo like **Alt + F9** (Settings → Hotkeys) |
 | **F9 · F9** (double-tap) | Start / stop a session recording |
@@ -281,6 +282,28 @@ Notes:
 - `recording.microphone_source` picks which microphone the mic toggle captures. `default_input` follows the system default; `device:<name>` pins a specific input without changing your system setting.
 - `recording.gsr_args` supports environment/tilde expansion and a `{default_sink_monitor}` placeholder for desktop-audio capture.
 - With the gpu-screen-recorder backend, `recording.encoder` also accepts `h264_vulkan`, `hevc_vulkan`, and `av1_vulkan`. Auto uses an available Vulkan encoder when GSR reports none of its usual hardware codecs. Other systems keep GSR's normal selection. Vulkan encoding requires support from GSR, FFmpeg, and the GPU driver.
+
+### Voice clipping (optional)
+
+Voice clipping runs completely offline using [Vosk](https://alphacephei.com/vosk/). It is not available on Nix or the Flatpak yet. To use it:
+
+1. Install the `vosk` package for your install method:
+   - Script install:
+     ```bash
+     ~/.local/share/vice/venv/bin/pip install vosk
+     ```
+   - Arch Linux (AUR):
+     ```bash
+     yay -S python-vosk-git
+     ```
+2. Download a small English speech model (~40 MB) and unpack it to Vice's models folder:
+   ```bash
+   mkdir -p ~/.local/share/vice/models
+   curl -LO https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+   unzip vosk-model-small-en-us-0.15.zip -d ~/.local/share/vice/models/
+   rm vosk-model-small-en-us-0.15.zip
+   ```
+3. Enable **Voice clipping** in Settings under **Audio** (or in `~/.config/vice/config.toml`). Vice listens for **"Vice, clip that"** and **"Clip that"**, plus any custom trigger phrase you set.
 
 ## Troubleshooting
 

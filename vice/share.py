@@ -2765,8 +2765,9 @@ class ShareServer:
         from .config import (
             Config, RecordingConfig, HotkeyConfig, OutputConfig, SharingConfig,
             DiscordConfig, DiscordCustomGame, UpdatesConfig, NotificationsConfig,
-            UIConfig, OverlayConfig,
+            UIConfig, OverlayConfig, VoiceConfig,
             clamp_recording_limits, ensure_buffer_covers_clip_presets, normalize_overlay,
+            normalize_voice,
             normalize_clip_presets, normalize_combo, normalize_focus_blocklist,
             validate_hotkeys,
             load as load_cfg, save as save_cfg,
@@ -2858,6 +2859,10 @@ class ShareServer:
                 k: v for k, v in merged.get("overlay", {}).items()
                 if k in OverlayConfig.__dataclass_fields__
             }),
+            voice=VoiceConfig(**{
+                k: v for k, v in merged.get("voice", {}).items()
+                if k in VoiceConfig.__dataclass_fields__
+            }),
         )
         try:
             validate_hotkeys(new_cfg.hotkeys)
@@ -2866,6 +2871,7 @@ class ShareServer:
         ensure_buffer_covers_clip_presets(new_cfg)
         clamp_recording_limits(new_cfg)
         normalize_overlay(new_cfg)
+        normalize_voice(new_cfg)
 
         old_cfg = copy.deepcopy(self.cfg)
         image_dir_changed = (
@@ -2885,11 +2891,12 @@ class ShareServer:
         )
 
         # Apply live (some settings still require daemon restart, e.g. recorder
+        # Apply live (some settings still require daemon restart, e.g. recorder
         # backend). vice-app reads "ui" at startup and on close/minimize;
         # carry it across so self.cfg still matches what is on disk.
         # "notifications" is read each time a sound plays (#297).
         for field in ("recording", "hotkeys", "output", "sharing", "discord", "ui", "overlay",
-                      "notifications"):
+                      "notifications", "voice"):
             setattr(self.cfg, field, getattr(new_cfg, field))
 
         apply_error: str | None = None
