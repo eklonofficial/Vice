@@ -219,6 +219,21 @@ def _save_views(views: dict[str, int]) -> None:
     tmp.replace(VIEWS_PATH)
 
 
+SESSION_GAMES_PATH = actual_home_dir() / ".local" / "share" / "vice" / "session_games.json"
+
+
+def _load_session_games() -> dict[str, str]:
+    try:
+        data = json.loads(SESSION_GAMES_PATH.read_text())
+        return {slug: game for slug, game in data.items()
+                if isinstance(game, str) and game}
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError, AttributeError) as exc:
+        log.warning("Session games file %s is unreadable: %s", SESSION_GAMES_PATH, exc)
+        return {}
+
+
 # Public links name a clip by a random token rather than its filename. Clip
 # names are sequential, so anyone holding one link could reach every other
 # clip by editing the number (#222). A token is all it takes to fetch a clip,
@@ -1068,6 +1083,7 @@ class ShareServer:
 
         self.playlists = PlaylistStore()
         self._views = _load_views()
+        self._session_games = _load_session_games()
         self._share_tokens = _load_share_tokens()
         self._share_slugs = {token: slug for slug, token in self._share_tokens.items()}
         self.editor_project = EditorProjectStore()
@@ -1278,7 +1294,16 @@ class ShareServer:
 
     # ── public helpers (called by ViceDaemon) ─────────────────────────────────
 
-    def add_clip(self, path: Path, game: Optional[str] = None) -> str:
+    def _save_session_games(self) -> None:
+        SESSION_GAMES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = SESSION_GAMES_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(self._session_games))
+        tmp.replace(SESSION_GAMES_PATH)
+
+    def _clip_game(self, slug: str) -> Optional[str]:
+        return self._session_games.get(slug) or self.playlists.game_for(slug)
+
+    def add_clip(self, path: Path, game: Optional[str] = None, *, session: bool = False) -> str:
         """Register a new clip and return its share URL."""
         slug = path.stem
         self._clips[slug] = path
@@ -1288,6 +1313,11 @@ class ShareServer:
         # one would be shown the new recording.
         if self._views.pop(slug, None) is not None:
             _save_views(self._views)
+        old_game = self._session_games.pop(slug, None)
+        if session and game:
+            self._session_games[slug] = game
+        if self._session_games.get(slug) != old_game:
+            self._save_session_games()
         self._issue_share_token(slug)
         if (game and self.cfg.output.auto_playlist_by_game
                 and self.playlists.record_auto(game, slug)):
@@ -1478,7 +1508,7 @@ class ShareServer:
             "name":       path.name,
             "size":       size,
             "created_at": created_at,
-            "game":       self.playlists.game_for(slug),
+            "game":       self._clip_game(slug),
             "views":      self._views.get(slug, 0),
             # Keys were kept beside this clip for the viewer's overlay.
             "keys":       keystore.sidecar_path(slug).exists(),
@@ -1869,6 +1899,8 @@ class ShareServer:
         self._meta.pop(slug, None)
         if self._views.pop(slug, None) is not None:
             _save_views(self._views)
+        if self._session_games.pop(slug, None) is not None:
+            self._save_session_games()
         self._forget_share_token(slug)
         if self.playlists.on_clip_deleted(slug):
             await self._broadcast_playlists()
@@ -1983,7 +2015,7 @@ class ShareServer:
             tmp.replace(target)
             if kept_keys is not None:
                 keystore.save_sidecar(target.stem, keystore.cut_intervals(kept_keys, start, end))
-            self.add_clip(target, self.playlists.game_for(slug))
+            self.add_clip(target, self._clip_game(slug), session=slug in self._session_games)
             return web.json_response({"ok": True, "slug": target.stem, "copy": True})
 
         tmp.replace(path)
@@ -2047,6 +2079,13 @@ class ShareServer:
             HIGHLIGHTS_DIR.mkdir(parents=True, exist_ok=True)
             old_hl.rename(HIGHLIGHTS_DIR / f"{new_slug}.json")
         keystore.move_sidecar(slug, new_slug)
+        if slug != new_slug:
+            game = self._session_games.pop(slug, None)
+            stale_game = self._session_games.pop(new_slug, None)
+            if game is not None:
+                self._session_games[new_slug] = game
+            if game is not None or stale_game is not None:
+                self._save_session_games()
 
         # Playlist membership, the view counter and the editor project follow
         # the clip

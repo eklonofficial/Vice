@@ -32,6 +32,7 @@ class SessionGameTaggingTests(unittest.IsolatedAsyncioTestCase):
             ("vice.playlists.PLAYLISTS_PATH", self.root / "playlists.json"),
             ("vice.share.SHARE_TOKENS_PATH", self.root / "tokens.json"),
             ("vice.share.VIEWS_PATH", self.root / "views.json"),
+            ("vice.share.SESSION_GAMES_PATH", self.root / "session_games.json"),
             ("vice.share.HIGHLIGHTS_DIR", self.root / "highlights"),
         ):
             patcher = mock.patch(target, value)
@@ -46,6 +47,7 @@ class SessionGameTaggingTests(unittest.IsolatedAsyncioTestCase):
         cfg = Config(output=OutputConfig(directory=str(self.root),
                                          tag_clips_with_game=True))
         cfg.recording.apply_watermark = False
+        cfg.sharing.cloudflare_tunnel = False
         daemon = ViceDaemon.__new__(ViceDaemon)
         daemon.cfg = cfg
         daemon.recorder = GSRRecorder(cfg)
@@ -53,7 +55,6 @@ class SessionGameTaggingTests(unittest.IsolatedAsyncioTestCase):
         daemon.share.broadcast = mock.AsyncMock()
         daemon.share._broadcast_clip = mock.AsyncMock()
         daemon.share._broadcast_playlists = mock.AsyncMock()
-        daemon.share._clip_json = mock.Mock(return_value={})
         daemon._session_lock = asyncio.Lock()
         daemon._session_active = False
         daemon._session_game = None
@@ -102,6 +103,12 @@ class SessionGameTaggingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.daemon._session_path)
         self.assertEqual(self.daemon._session_highlights, [])
 
+    async def clip_game(self, server: ShareServer, slug: str) -> str | None:
+        req = mock.Mock(match_info={"slug": slug})
+        with mock.patch.object(server, "_get_meta", new=mock.AsyncMock(return_value={})):
+            response = await server._api_clip_info(req)
+        return json.loads(response.text)["game"]
+
     async def test_tag_and_playlist_toggles_are_independent(self) -> None:
         for tagged, playlist in ((True, True), (False, True), (True, False), (False, False)):
             with self.subTest(tagged=tagged, playlist=playlist):
@@ -116,13 +123,23 @@ class SessionGameTaggingTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(d._last_clip_game, "Earlier replay")
                 with mock.patch.object(d.share, "add_clip", wraps=d.share.add_clip) as add:
                     await d._stop_session()
-                add.assert_called_once_with(path, game="Counter-Strike 2")
+                add.assert_called_once_with(path, game="Counter-Strike 2", session=True)
                 auto = d.share.playlists.get("auto:counter-strike-2")
                 if playlist:
                     self.assertIn(path.stem, auto["clip_slugs"])
                 else:
                     self.assertIsNone(auto)
                 self.assertIn(path.stem, d.share._clips)
+                self.assertEqual(await self.clip_game(d.share, path.stem), "Counter-Strike 2")
+                restarted = ShareServer(d.cfg)
+                with mock.patch("vice.share.web.TCPSite.start", new=mock.AsyncMock()), \
+                     mock.patch("vice.share._local_ip", return_value="127.0.0.1"):
+                    try:
+                        await restarted.start()
+                        self.assertEqual(await self.clip_game(restarted, path.stem),
+                                         "Counter-Strike 2")
+                    finally:
+                        await restarted.stop()
                 self.assert_cleared()
                 await asyncio.sleep(0)
 
@@ -169,7 +186,34 @@ class SessionGameTaggingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(path.name, "Vice_Session_2.mp4")
         await d._stop_session()
         self.assertIsNone(d.share.playlists.game_for(path.stem))
+        self.assertIsNone(await self.clip_game(d.share, path.stem))
         self.assert_cleared()
+
+    async def test_rename_delete_and_reuse_session_slug(self) -> None:
+        d = self.daemon
+        d.cfg.output.auto_playlist_by_game = False
+        await d._start_session()
+        old_slug = d._session_path.stem
+        await d._stop_session()
+
+        rename = mock.Mock(match_info={"slug": old_slug},
+                           json=mock.AsyncMock(return_value={"name": "Renamed"}))
+        body = json.loads((await d.share._api_rename(rename)).text)
+        self.assertTrue(body["ok"])
+        slug = body["slug"]
+        self.assertEqual(await self.clip_game(d.share, slug), "Counter-Strike 2")
+
+        reused = self.root / f"{old_slug}.mp4"
+        reused.write_bytes(b"replacement replay")
+        d.share.add_clip(reused)
+        self.assertIsNone(await self.clip_game(d.share, old_slug))
+        renamed = d.share._clips[slug]
+        d.share.add_clip(renamed)
+        self.assertIsNone(await self.clip_game(d.share, slug))
+
+        d.share.add_clip(renamed, game="Counter-Strike 2", session=True)
+        await d.share._api_delete(mock.Mock(match_info={"slug": slug}))
+        self.assertEqual(json.loads((self.root / "session_games.json").read_text()), {})
 
     async def test_sessions_keep_custom_steam_and_visible_window_detection(self) -> None:
         d = self.daemon
@@ -309,7 +353,7 @@ class SessionGameTaggingTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(first, second)
             stamp.assert_awaited_once_with(old_path)
             emit.assert_called_once_with(old_path)
-            add.assert_called_once_with(old_path, game="Counter-Strike 2")
+            add.assert_called_once_with(old_path, game="Counter-Strike 2", session=True)
         self.assertEqual(d._session_game, "Overwatch 2")
         self.assertNotEqual(d._session_path, old_path)
         self.assertEqual(d._session_highlights, [])
@@ -392,7 +436,7 @@ class SessionGameTaggingTests(unittest.IsolatedAsyncioTestCase):
                             await watchdog
                     await d._stop_session()
                     stop_session.assert_awaited_once_with()
-                    add.assert_called_once_with(path, game="Counter-Strike 2")
+                    add.assert_called_once_with(path, game="Counter-Strike 2", session=True)
                 self.assertEqual(d.share.playlists.game_for(path.stem), "Counter-Strike 2")
                 highlights = json.loads((self.root / "highlights" / f"{path.stem}.json").read_text())
                 self.assertEqual(highlights[0]["time"], 7)
@@ -431,7 +475,7 @@ class SessionGameTaggingTests(unittest.IsolatedAsyncioTestCase):
             await shutdown
             stop.assert_awaited_once_with()
             apply_config.assert_not_called()
-            add.assert_called_once_with(path, game="Counter-Strike 2")
+            add.assert_called_once_with(path, game="Counter-Strike 2", session=True)
         self.assertTrue((self.root / "highlights" / f"{path.stem}.json").exists())
         self.assert_cleared()
 

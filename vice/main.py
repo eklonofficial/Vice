@@ -1828,7 +1828,7 @@ class ViceDaemon:
                                self.cfg.notifications.session_end_sound)
         if path and self.share:
             slug = path.stem
-            url  = self.share.add_clip(path, game=game)
+            url  = self.share.add_clip(path, game=game, session=True)
             click.echo(f"[Vice] Session clip saved: {path}", err=True)
             click.echo(f"[Vice] Share URL: {url}", err=True)
             # Persist the highlights that were collected during the session
