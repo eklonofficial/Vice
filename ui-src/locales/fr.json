@@ -2,6 +2,10 @@
   "app": {
     "name": "Vice"
   },
+  "tray": {
+    "openVice": "Ouvrir Vice",
+    "quitVice": "Quitter Vice"
+  },
   "common": {
     "delete": "Supprimer",
     "keepIt": "Le garder",
@@ -111,8 +115,9 @@
     "restartTitle": "Redémarre Vice pour terminer",
     "restartBody": "Ce réglage est enregistré, mais il ne prend effet qu'au redémarrage du daemon.",
     "gotIt": "Compris",
-    "gameCapture": "Game Capture",
+    "gameCapture": "Capture du jeu",
     "gameCaptureUnsupported": "Nécessite gpu-screen-recorder",
+    "gameCaptureNeedsX11": "Nécessite une session X11",
     "gameCaptureGame": "Fenêtre du jeu uniquement",
     "gameCaptureDesktop": "Écran entier",
     "gameCaptureOn": "Capture de jeu activée",
@@ -158,7 +163,7 @@
     "errAddClip": "Impossible d'ajouter le clip",
     "share": "Partager",
     "copyForDiscord": "Copier pour Discord",
-    "shareTitle": "{action}. Right-click for more ways to share",
+    "shareTitle": "{action}. Fais un clic droit pour voir d'autres options de partage",
     "discordPreparing": "Création d'une copie adaptée à Discord",
     "discordCopied": "Copié pour Discord",
     "discordCopiedDetail": "Colle-la dans un message Discord. Elle respecte la limite d'envoi gratuite.",
@@ -169,7 +174,7 @@
     "newTitle": "Nouvelle playlist",
     "nameRequired": "Donne un nom à la playlist",
     "name": "Nom",
-    "emoji": "Emoji",
+    "emoji": "Émoji",
     "emojiPlaceholder": "Facultatif",
     "colour": "Couleur de la playlist"
   },
@@ -186,7 +191,10 @@
     "notRecordingHelp": "Vice réessaie tout seul. Si c'est un problème d'encodeur, un redémarrage après une mise à jour du pilote suffit généralement, ou choisis un autre encodeur dans Réglages, Enregistrement.",
     "cpuFallbackHelp": "Ton encodeur GPU n'a pas voulu s'ouvrir, donc Vice est passé à l'encodage CPU pour continuer à faire des clips. Cela coûte des images par seconde en jeu. C'est généralement un pilote qui a besoin d'un redémarrage après une mise à jour. Vice essaie d'abord le GPU à chaque démarrage, donc une fois le problème réglé, ce message disparaît tout seul.",
     "codecFallbackHelp": "Ton GPU n'a pas voulu encoder le codec choisi dans Réglages, Enregistrement, donc gpu-screen-recorder en a choisi un qu'il sait gérer. L'enregistrement reste sur le GPU et les clips ne sont pas affectés. Choisir toi-même un autre encodeur fait disparaître cet avis. Le H.264 en particulier plafonne à 4096 pixels de large sur NVIDIA, donc HEVC ou AV1 est le bon choix sur un moniteur large.",
-    "cannotPlayHelp": "La version installée de Qt WebEngine n'a pas de décodeur H.264. L'enregistrement fonctionne toujours, et les clips s'ouvrent normalement dans ton lecteur système. Pour réparer la lecture dans l'application, installe le paquet WebEngine de ta distribution puis réinstalle Vice :"
+    "cannotPlayHelp": "La version installée de Qt WebEngine n'a pas de décodeur H.264. L'enregistrement fonctionne toujours, et les clips s'ouvrent normalement dans ton lecteur système. Pour réparer la lecture dans l'application, installe le paquet WebEngine de ta distribution puis réinstalle Vice :",
+    "cpuFallbackNvencApi": "Ton pilote NVIDIA prend en charge NVENC {driver}, mais la version de FFmpeg installée nécessite {required} : l'encodeur GPU ne peut donc pas démarrer. Cela peut faire baisser le nombre d'images par seconde en jeu, et redémarrer ne résoudra pas le problème. Pour réutiliser le GPU, il faut un pilote NVIDIA plus récent ou, si ta carte ne reçoit plus de nouveaux pilotes, une version de FFmpeg conçue pour NVENC {driver}.",
+    "nvencUseFlatpak": "La version Flatpak de gpu-screen-recorder est installée et fonctionne avec ce pilote : sélectionne-la dans Réglages, Enregistrement.",
+    "nvencGetFlatpak": "La version Flatpak de gpu-screen-recorder fonctionne avec ce pilote. Installe-la avec {command}, puis sélectionne-la dans Réglages, Enregistrement."
   },
   "island": {
     "cannotReach": "Impossible de joindre le daemon",
@@ -229,7 +237,11 @@
       "one": "{count} autre ne conservera que ses sources microphone.",
       "other": "{count} autres ne conserveront que leurs sources microphone."
     },
-    "turnBackOn": "Réactive l'audio du bureau ci-dessus pour les conserver."
+    "turnBackOn": "Réactive l'audio du bureau ci-dessus pour les conserver.",
+    "levelAria": "Volume de {name}",
+    "micTrack": "Microphone",
+    "levelsHelp": "Volume appliqué à chaque piste lors de l'enregistrement d'un clip.",
+    "levelsHelpMix": "Volume appliqué à chaque piste lors de l'enregistrement d'un clip. La piste 1 est recréée à partir de ces niveaux, sauf pour une application déjà capturée par la piste du bureau : son volume ne change que sur sa propre piste."
   },
   "keyCapture": {
     "pressKey": "Appuie sur une touche",
@@ -251,7 +263,7 @@
     "update": "Mise à jour",
     "open": "Ouvrir",
     "useEmoji": "Utiliser {emoji}",
-    "errSetEmoji": "Impossible de définir l'emoji",
+    "errSetEmoji": "Impossible de définir l'émoji",
     "main": "Principal",
     "whatsNew": "Nouveautés"
   },
@@ -319,11 +331,17 @@
     "shareTitle": "Partager ce clip",
     "shareHighQuality": "Haute qualité",
     "shareCopyHint": "Cliquer pour copier",
-    "shareNoLink": "No share link yet. Turn on sharing in Settings.",
-    "shareDragHeading": "Drag & drop",
+    "keys": "Touches",
+    "keysAria": "Touches utilisées pendant le clip",
+    "playlist": "Playlist",
+    "addToPlaylist": "Ajouter à une playlist",
+    "noPlaylists": "Aucune playlist pour l'instant. Crée-en une avec le + à côté de Playlists.",
+    "shareNoLink": "Aucun lien de partage pour l'instant. Active le partage dans les réglages.",
+    "shareDragHeading": "Glisser-déposer",
     "shareDragHint": "Glisse ce clip dans n'importe quelle conversation Discord pour l'envoyer",
     "sharePreparing": "Création d'une copie adaptée à Discord…",
     "shareDragFailed": "Impossible de préparer la copie pour Discord",
+    "shareCopyFile": "Copier le fichier",
     "shareDiscordSize": "Prêt pour Discord · {size}"
   },
   "trim": {
@@ -334,6 +352,11 @@
     "stop": "Arrêter",
     "loopHelp": "Lit la sélection en boucle. Les bornes de coupe sont sans perte.",
     "saving": "Enregistrement",
+    "saveCopy": "Enregistrer comme nouveau clip",
+    "savedCopy": "La découpe a été enregistrée comme nouveau clip",
+    "replaceOriginal": "Remplacer l'original",
+    "replaceConfirm": "Remplacer",
+    "replaceWarning": "L'original sera remplacé. Tout ce qui se trouve hors de la sélection sera perdu.",
     "preparingPreview": "Préparation de l'aperçu H.265",
     "openInPlayer": "Ouvrir dans le lecteur système",
     "showInFolder": "Afficher dans le dossier",
@@ -347,7 +370,7 @@
     "heading": "Découper"
   },
   "images": {
-    "heading": "Images",
+    "heading": "Captures d'écran",
     "countImages": {
       "one": "{count} capture d'écran",
       "other": "{count} captures d'écran"
@@ -436,7 +459,7 @@
     "tunnelTitle": "En local, ou accessible de partout",
     "tunnelHelp": "Tout seul, le lien ne fonctionne que sur cette machine. Active le tunnel Cloudflare dans Réglages et il fonctionne partout, jusqu'à ce que le daemon redémarre et que l'adresse change.",
     "badgeLink": "Lien",
-    "badgeTunnel": "Net",
+    "badgeTunnel": "Réseau",
     "moreTitle": "Le reste se trouve dans Réglages",
     "moreBody": "C'est tout ce dont tu as besoin. Réglages contient les options que tu ne touches qu'une fois.",
     "recTitle": "Enregistrement",
@@ -446,6 +469,28 @@
     "gameCaptureHelp": "La capture de jeu enregistre uniquement la fenêtre du jeu, afin que Discord et les autres fenêtres n'apparaissent pas dans tes clips. Désactivée, elle enregistre l'écran entier. Tu peux la modifier à tout moment depuis les réglages rapides.",
     "shareDiscordTitle": "Partager crée un fichier Discord",
     "shareDiscordHelp": "Désactivé, le bouton Partager copie un lien. Activé, il copie directement le clip, réduit pour respecter la limite d'envoi gratuite de Discord. Fais un clic droit sur Partager pour utiliser l'autre option, et change ce réglage à tout moment dans Réglages."
+  },
+  "gsrSetup": {
+    "eyebrow": "Encore une étape",
+    "title": "Vice a besoin de gpu-screen-recorder pour enregistrer",
+    "body": "Vice utilise gpu-screen-recorder pour capturer ton écran. Tant qu'il n'est pas installé, impossible d'enregistrer un clip. C'est gratuit, disponible sur Flathub et l'installation prend environ une minute.",
+    "install": "Installer gpu-screen-recorder",
+    "note": "Installe com.dec05eba.gpu_screen_recorder pour tous les utilisateurs de cet ordinateur.",
+    "installing": "Installation de gpu-screen-recorder",
+    "phase": {
+      "preparing": "Préparation",
+      "downloading": "Téléchargement",
+      "installing": "Installation"
+    },
+    "workingBody": "Tu peux laisser cette fenêtre ouverte. Vice commencera à enregistrer dès que l'installation sera terminée.",
+    "doneTitle": "Tout est prêt",
+    "doneBody": "gpu-screen-recorder est installé et Vice enregistre.",
+    "failedTitle": "L'installation de gpu-screen-recorder a échoué",
+    "failed": "L'installation n'est pas arrivée à son terme.",
+    "manual": "Tu peux réessayer ou exécuter cette commande dans un terminal, puis rouvrir Vice :",
+    "copyCommand": "Copier la commande",
+    "copied": "Copié",
+    "retry": "Réessayer"
   },
   "accents": {
     "blue": "Bleu",
@@ -532,6 +577,7 @@
     "customPath": "Chemin personnalisé",
     "alsoAddToLibrary": "Ajouter aussi à la bibliothèque Vice",
     "encoding": "Encodage en H.264. Tu peux laisser cette fenêtre ouverte ou continuer ailleurs dans Vice.",
+    "exportKeys": "Afficher les touches utilisées",
     "videoTrack": "Piste vidéo",
     "audioTrack": "Piste audio",
     "tabLibrary": "Bibliothèque",
@@ -645,7 +691,7 @@
     "discordOptimize": "Optimiser pour Discord (moins de 20 Mo)",
     "exportSummary": "{seconds}s · {format} vers {path}",
     "exportFormatDiscord": "Optimisé pour Discord (moins de 20 Mo)",
-    "exportFormatDefault": "H.264 and AAC",
+    "exportFormatDefault": "H.264 et AAC",
     "exportFolderUnpicked": "un dossier de ton choix"
   },
   "settings": {
@@ -673,12 +719,42 @@
     "replayDisk": "Disque",
     "clipDuration": "Durée du clip",
     "clipDurationHelp": "Secondes enregistrées quand tu appuies sur la touche de clip",
+    "gsrSource": "Version de gpu-screen-recorder",
+    "gsrSourceHelp": "La version Flatpak inclut son propre FFmpeg et peut continuer à enregistrer avec le GPU sur d'anciens pilotes NVIDIA que le FFmpeg du système ne prend plus en charge.",
+    "gsrSourceAuto": "Automatique (version système si disponible)",
+    "gsrSourceNative": "Version système",
+    "gsrSourceFlatpak": "Flatpak",
+    "secOverlay": "Superposition",
+    "keyOverlay": "Superposition du clavier",
+    "keyOverlayHelp": "Affiche les touches utilisées dans un petit panneau par-dessus le jeu, pour qu'elles apparaissent dans tes enregistrements et tes streams. Seules les touches du panneau sont détectées.",
+    "keyOverlayPosition": "Position de la superposition",
+    "keyOverlayPositionHelp": "Choisis un coin, ou clique sur Déplacer et fais glisser le panneau à l'endroit voulu.",
+    "overlayBottomLeft": "En bas à gauche",
+    "overlayBottomCenter": "En bas au centre",
+    "overlayBottomRight": "En bas à droite",
+    "overlayTopLeft": "En haut à gauche",
+    "overlayTopRight": "En haut à droite",
+    "overlayCustom": "Position choisie par glisser-déposer",
+    "overlayMove": "Déplacer",
+    "overlayDoneMoving": "Terminé",
+    "keyOverlaySize": "Taille de la superposition",
+    "keyOverlayKey": "Touche de la superposition",
+    "keyOverlayKeyHelp": "Affiche ou masque la superposition sans ouvrir Vice.",
+    "keyOverlayKeyNow": "La touche {key} affiche et masque maintenant la superposition",
+    "keyOverlayInClips": "Conserver les touches avec les clips",
+    "keyOverlayInClipsHelp": "Enregistre les touches du panneau utilisées pendant chaque clip, afin que la visionneuse puisse les afficher plus tard, même si la superposition était désactivée. Le reste de ta saisie n'est pas conservé.",
+    "errSaveOverlay": "Impossible d'enregistrer le réglage de la superposition",
+    "overlayNoLayerShell": "Ton bureau ne peut pas garder une fenêtre au-dessus des jeux. Cela fonctionne avec KDE Plasma, Hyprland, Sway, Niri et X11, mais pas avec GNOME sous Wayland.",
+    "overlayNoGtk": "La superposition nécessite GTK 3 et gtk-layer-shell pour Python. Sur Arch, installe gtk-layer-shell et python-gobject ; sur Debian et Ubuntu, installe gir1.2-gtklayershell-0.1 et python3-gi-cairo.",
+    "overlayNoDisplay": "Vice n'a pas trouvé ta session de bureau pour y afficher la superposition.",
+    "overlayCrashed": "La superposition se ferme sans cesse. Consulte le journal vice.log pour en connaître la raison.",
+    "typeExact": "{label} : clique pour saisir un nombre exact de secondes",
     "frameRate": "Fréquence d'images",
     "frameRateHelp": "Images capturées par seconde",
     "fpsOption": "{fps} i/s",
     "resolution": "Résolution",
     "resolutionHelp": "Auto s'adapte à ton écran",
-    "resolutionAuto": "Auto",
+    "resolutionAuto": "Automatique",
     "resolutionCustom": "Personnalisée",
     "customResolution": "Résolution personnalisée",
     "customResolutionHelp": "Largeur par hauteur, par exemple 1600x900",
@@ -740,7 +816,7 @@
     "defaultOutput": "Sortie par défaut",
     "defaultInput": "Entrée par défaut",
     "groupDesktopAudio": "Audio du bureau",
-    "groupMicrophones": "Microphones",
+    "groupMicrophones": "Micros",
     "groupApplications": "Applications",
     "groupOther": "Autres",
     "groupSaved": "Enregistrées",
@@ -816,7 +892,7 @@
     "accentAria": "Accent {name}",
     "effects": "Effets visuels",
     "effectsHelp": "Le mouvement et la profondeur coûtent du GPU. Auto mesure la vitesse d'arrivée des images dans cette fenêtre et les réduit quand elle n'arrive pas à suivre.",
-    "effectsAuto": "Auto",
+    "effectsAuto": "Automatique",
     "effectsFull": "Complets",
     "effectsReduced": "Réduits",
     "effectsSoftware": "Cette fenêtre fait son rendu en logiciel, donc les effets sont réduits.",
@@ -860,6 +936,7 @@
     "windowCapture": "Capture de jeu",
     "windowCaptureHelp": "Enregistre uniquement la fenêtre du jeu au premier plan plutôt que l'écran entier. Seules les fenêtres que Vice reconnaît comme des jeux sont prises en compte : passer sur Discord ou un navigateur ne change donc pas la capture. Passer à un autre jeu redémarre le tampon, donc un clip pris juste après sera court.",
     "windowCaptureUnsupported": "Nécessite le backend gpu-screen-recorder.",
+    "windowCaptureNeedsX11": "gpu-screen-recorder ne peut capturer qu'une seule fenêtre dans une session X11. Sous Wayland, Vice enregistre tout l'écran.",
     "discordGameIcons": "Afficher l'icône du jeu",
     "discordGameIconsHelp": "Affiche l'icône Discord du jeu sur ton profil, avec le logo de Vice comme petit badge. Vice recherche le jeu dans la liste publique des jeux détectables de Discord et met le résultat en cache. Si l'option est désactivée ou si la recherche échoue, le logo Vice classique est affiché.",
     "shareDiscordFile": "Partager copie un fichier Discord",
@@ -869,6 +946,36 @@
     "title": "Nouveautés de Vice {version}",
     "close": "Compris",
     "thanks": "Merci à {names} pour leur travail sur cette version.",
+    "v2_17_0": {
+      "flatpak": {
+        "title": "Vice en Flatpak (bêta)",
+        "body": "Vice est désormais disponible en Flatpak pour Steam Deck, Bazzite et Fedora Atomic, avec le même code que cette version. C'est encore récent : si tu l'essaies sur l'un de ces systèmes, dis-nous comment ça se passe sur GitHub."
+      }
+    },
+    "v2_16_0": {
+      "clipDuration": {
+        "title": "Enregistrer une durée précise en ligne de commande",
+        "body": "Lance vice clip 30 pour enregistrer les 30 dernières secondes. Un bouton Stream Deck ou OpenDeck peut désormais enregistrer n'importe quelle durée, sans raccourci clavier."
+      },
+      "viewerPlaylist": {
+        "title": "Gérer les playlists depuis la visionneuse",
+        "body": "Le bouton Playlist sous un clip permet de l'ajouter à une playlist ou de l'en retirer sans quitter la visionneuse."
+      },
+      "shareCopy": {
+        "title": "Copier pour Discord",
+        "body": "Fais un clic droit sur Partager, puis choisis Copier le fichier si le glisser-déposer dans Discord ne fonctionne pas. Les copies Discord sont toujours en H.264 : les clips AV1 et HEVC sont ainsi lisibles sur les téléphones."
+      },
+      "indonesian": {
+        "title": "Bahasa Indonesia",
+        "body": "Vice est désormais disponible en indonésien. Choisis cette langue dans Réglages, Apparence."
+      }
+    },
+    "v2_15_1": {
+      "gameCaptureX11": {
+        "title": "La capture de jeu nécessite X11",
+        "body": "gpu-screen-recorder ne peut capturer qu'une seule fenêtre dans une session X11. Sous Wayland, la capture de jeu reste désactivée et Vice enregistre tout l'écran. Avant, elle relançait sans cesse l'enregistrement et les clips ne duraient que quelques secondes."
+      }
+    },
     "v2_15_0": {
       "gameCapture": {
         "title": "Enregistrer uniquement le jeu",
@@ -883,8 +990,32 @@
         "body": "Ton profil Discord affiche maintenant l'icône du jeu auquel tu joues, avec le logo de Vice comme petit badge. Tu peux désactiver cette option dans Réglages > Discord."
       },
       "steamNames": {
-        "title": "More games recognized",
+        "title": "Davantage de jeux reconnus",
         "body": "Tous les jeux installés via Steam sont maintenant identifiés dans les clips et sur Discord, même s'ils ne figurent pas dans la propre liste de Vice."
+      },
+      "tray": {
+        "title": "Vice dans la zone de notification",
+        "body": "Sur les bureaux qui disposent d'une zone de notification, fermer la fenêtre y réduit désormais Vice. Clique sur son icône pour la rouvrir. Quitter Vice depuis le menu de l'icône arrête aussi l'enregistrement."
+      },
+      "keyOverlay": {
+        "title": "Afficher les touches à l'écran",
+        "body": "Une superposition de clavier affiche les touches utilisées par-dessus le jeu, dans tes streams et tes clips. Fais-la glisser à l'endroit voulu ou choisis un coin. Vice peut aussi conserver ces touches avec chaque clip pour les afficher dans la visionneuse ou les intégrer à un export de l'éditeur. Les deux options sont désactivées par défaut ; active-les dans Réglages, Superposition."
+      },
+      "trimCopy": {
+        "title": "Le découpage conserve l'original",
+        "body": "Le découpage enregistre désormais la sélection dans un nouveau clip sans modifier l'enregistrement d'origine. Le remplacement de l'original reste possible, avec une confirmation préalable."
+      },
+      "trackVolume": {
+        "title": "Un volume pour chaque piste audio",
+        "body": "Avec des pistes audio séparées, chacune dispose désormais de son propre réglage de volume dans Réglages, Audio. Tu peux ainsi entendre un appel ou ton micro par-dessus le jeu."
+      },
+      "niri": {
+        "title": "Prise en charge de Niri",
+        "body": "Vice détecte désormais le jeu auquel tu joues sous Niri pour nommer les clips, créer les playlists de jeu et mettre à jour Discord."
+      },
+      "flatpakGsr": {
+        "title": "gpu-screen-recorder en Flatpak",
+        "body": "Vice peut utiliser la version Flatpak de gpu-screen-recorder, qui continue d'enregistrer avec le GPU sur d'anciennes cartes NVIDIA que le FFmpeg du système ne prend plus en charge. Une fois installée, sélectionne-la dans Réglages, Enregistrement."
       },
       "languages": {
         "title": "Français et portugais brésilien",
