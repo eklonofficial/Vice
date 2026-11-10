@@ -344,7 +344,8 @@
     "startOfSelection": "Anfang der Auswahl",
     "endOfSelection": "Ende der Auswahl",
     "trimAria": "{name} kürzen",
-    "heading": "Kürzen"
+    "heading": "Kürzen",
+    "working": "Wird gekürzt. Das kann einige Minuten dauern."
   },
   "images": {
     "heading": "Bilder",

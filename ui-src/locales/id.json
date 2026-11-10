@@ -356,7 +356,8 @@
     "startOfSelection": "Awal bagian terpilih",
     "endOfSelection": "Akhir bagian terpilih",
     "trimAria": "Pangkas {name}",
-    "heading": "Pangkas"
+    "heading": "Pangkas",
+    "working": "Memangkas. Ini bisa memakan waktu beberapa menit."
   },
   "images": {
     "heading": "Gambar",

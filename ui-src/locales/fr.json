@@ -367,7 +367,8 @@
     "startOfSelection": "Début de la sélection",
     "endOfSelection": "Fin de la sélection",
     "trimAria": "Découper {name}",
-    "heading": "Découper"
+    "heading": "Découper",
+    "working": "Découpe en cours. Cela peut prendre quelques minutes."
   },
   "images": {
     "heading": "Captures d'écran",
