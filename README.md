@@ -42,16 +42,27 @@
 
 ## Install
 
-**Arch / Manjaro / CachyOS / any Arch-based distro:**
+Find your system, then jump to its section.
+
+| Your system | How to install | |
+|---|---|---|
+| Arch, Manjaro, CachyOS, EndeavourOS and other Arch-based distros | AUR package `vice-clipper` | [Jump](#arch-linux-aur) |
+| NixOS | Flake | [Jump](#nixos-flake) |
+| Ubuntu, Debian, Mint, Pop!_OS, Fedora Workstation, openSUSE | Install script | [Jump](#ubuntu-debian-fedora-opensuse-install-script) |
+| Steam Deck, Bazzite, Fedora Atomic (Silverblue, Kinoite) and other immutable distros | Flatpak (**beta**) | [Jump](#steam-deck-bazzite-fedora-atomic-flatpak-beta) |
+
+After installing, launch **Vice** from your app menu (or run `vice-app`) and press **F9** in a game.
+
+### Arch Linux (AUR)
 
 ```bash
 yay -S vice-clipper     # or: paru -S vice-clipper
 systemctl --user enable --now vice.service
 ```
 
-The package ships the service but does not enable it for you, so run that second line to have clipping start at login. `./install.sh` asks and does it for you.
+The package ships the service but does not enable it for you, so run that second line to have clipping start at login.
 
-**NixOS (flake):**
+### NixOS (flake)
 
 ```nix
 {
@@ -67,25 +78,41 @@ The package ships the service but does not enable it for you, so run that second
 
 The module installs the package, the `uaccess` udev rule for the hotkey listener, gpu-screen-recorder's capability wrapper so recording starts without a password prompt, and the user daemon, which starts with your graphical session. Set `services.vice.autoStart = false;` to only record while the window is open. Without flakes, `nix/package.nix` and `nix/module.nix` are plain callPackage/NixOS files you can import directly.
 
-**Ubuntu / Debian / Mint / Fedora / openSUSE / other:**
+### Ubuntu, Debian, Fedora, openSUSE (install script)
 
 ```bash
 git clone https://github.com/splitshotz/Vice && cd Vice && ./install.sh
 ```
 
-Launch **Vice** from your app menu (or run `vice-app`) and press **F9** in a game. If the terminal says `vice: command not found`, restart the terminal first.
+The script detects your package manager (`apt`, `dnf`, `pacman`, `zypper`) and installs everything Vice needs, including the `gpu-screen-recorder` capture backend and a systemd user service so clipping starts at login (it asks first). If the terminal says `vice: command not found` afterwards, open a new terminal.
 
-The AUR package and the script install everything Vice needs, including the `gpu-screen-recorder` capture backend and a systemd user service so clipping starts at login. The script detects your package manager (`apt`, `dnf`, `pacman`, `zypper`) automatically.
+> Don't mix the AUR package and `./install.sh` on the same machine. Uninstall one before switching.
+
+### Steam Deck, Bazzite, Fedora Atomic (Flatpak, BETA)
+
+> [!WARNING]
+> **The Flatpak is in BETA.** It's new, and so far it has only been tested on a regular desktop distro. I'm actively looking for feedback from **Steam Deck**, **Bazzite**, **Fedora Atomic** and other immutable systems. If you try it, please post how it went on [#97](https://github.com/splitshotz/Vice/issues/97), even if everything worked. If something breaks, include the output of `flatpak run --command=vice io.github.splitshotz.Vice doctor`.
+
+```bash
+flatpak install --user https://splitshotz.github.io/vice-flatpak/vice.flatpakref
+```
+
+Or download `Vice.flatpak` from the [latest release](https://github.com/splitshotz/Vice/releases/latest) and run `flatpak install --user Vice.flatpak`. Both get updates from the same place with `flatpak update`.
+
+The first time Vice opens, it asks to install gpu-screen-recorder, which is what records your screen. One click installs it from Flathub. The first recording then asks for your password once, so gpu-screen-recorder can set up its screen capture helper. On a Steam Deck, open Vice in Desktop Mode the first time so that prompt can appear.
+
+Hotkeys read the keyboard directly, so your user has to be in the `input` group: run `sudo usermod -aG input $USER` and reboot. On a Steam Deck, set a password with `passwd` in Desktop Mode first.
+
+The Flatpak also works on any other distro with Flatpak installed.
+
+### Updating and uninstalling
 
 | | Update | Uninstall |
 |---|---|---|
 | AUR | `yay -Syu` | `sudo pacman -Rns vice-clipper` |
-| Git clone | `cd Vice && git pull && ./install.sh` | `vice uninstall && rm -rf Vice` |
+| Install script | `cd Vice && git pull && ./install.sh` | `vice uninstall && rm -rf Vice` |
 | NixOS | `nix flake update vice && sudo nixos-rebuild switch` | Remove `services.vice.enable` and rebuild |
-
-> Don't mix the AUR package and `./install.sh` on the same machine. Uninstall one before switching.
-
-**Bazzite / Fedora Atomic:** not supported yet. rpm-ostree systems can't use `install.sh`, and the installer exits early on them rather than breaking your system. A Flatpak will fix this; follow [#97](https://github.com/splitshotz/Vice/issues/97).
+| Flatpak (beta) | `flatpak update` | `flatpak uninstall io.github.splitshotz.Vice` |
 
 ---
 
@@ -370,7 +397,7 @@ Vice is better because these people sent patches:
 - [@quadruplea0](https://github.com/quadruplea0), for making the resolution setting actually reach gpu-screen-recorder
 - [@DeveloperSpoot](https://github.com/DeveloperSpoot), for themed Discord embeds, their idea and their first implementation
 - [@jethrothelion](https://github.com/jethrothelion), for Chivalry 2 and Clone Drone in The Danger Zone
-- [@voltek-laruelle](https://github.com/voltek-laruelle), for the clip volume slider, the French translation, and for GeoGuessr Steam Edition, Forza Horizon 4, Big Walk, Supermarket Simulator, Sandustry, and OpenFront
+- [@voltek-laruelle](https://github.com/voltek-laruelle), for the clip volume slider, the French translation, support for GeoGuessr Steam Edition, Forza Horizon 4, Big Walk, Supermarket Simulator, Sandustry and OpenFront, and bug fixes (#283, #281).
 - [@20plays](https://github.com/20plays), for system tray support, preserving working Arch installations during installer dependency checks, and selecting the distro Python for QtWebEngine
 - [@KITE-Force](https://github.com/KITE-Force), for game detection on KDE Plasma Wayland through kdotool, and for fixing scroll dismissal in clip context menus
 - [@UMCEKO](https://github.com/UMCEKO), for the NixOS package and module
