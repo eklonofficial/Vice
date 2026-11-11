@@ -65,6 +65,10 @@ trap 'rm -rf "$GNUPGHOME"' EXIT
 gpg --batch --import <<<"$GPG_PRIVATE_KEY"
 
 REPO="$SITE_DIR/repo"
+# A repo checked out of git has lost its empty directories.
+if [[ -f "$REPO/config" ]]; then
+    mkdir -p "$REPO"/refs/{heads,remotes,mirrors} "$REPO"/tmp/cache "$REPO"/extensions "$REPO"/state
+fi
 build "$REPO" --gpg-sign="$GPG_KEY_ID"
 # Two releases back is enough to update from, and keeps the site well under
 # the GitHub Pages size limit.

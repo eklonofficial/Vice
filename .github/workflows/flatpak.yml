@@ -11,10 +11,17 @@ on:
   pull_request:
   release:
     types: [published]
+  # Publishes an existing release again, with this branch's workflow, when
+  # its own run failed for a reason outside the tagged source.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish, like v2.18.0
+        required: true
 
 jobs:
   build:
-    if: github.event_name != 'release'
+    if: github.event_name != 'release' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.11
@@ -32,7 +39,7 @@ jobs:
           retention-days: 7
 
   publish:
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.11
@@ -43,7 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
 
       - name: Check out the Flatpak repo site
         uses: actions/checkout@v4
@@ -51,6 +58,15 @@ jobs:
           repository: splitshotz/vice-flatpak
           ssh-key: ${{ secrets.FLATPAK_SITE_DEPLOY_KEY }}
           path: site
+
+      # Git does not keep empty directories, and OSTree refuses a repo
+      # without them.
+      - name: Restore the repo's empty directories
+        run: |
+          if [ -f site/repo/config ]; then
+            mkdir -p site/repo/refs/heads site/repo/refs/remotes site/repo/refs/mirrors \
+              site/repo/tmp/cache site/repo/extensions site/repo/state
+          fi
 
       - name: Build, sign and publish
         env:
@@ -66,7 +82,7 @@ jobs:
           git config user.name "Andrew Marin"
           git config user.email "andrewmarin367@gmail.com"
           git add -A
-          git commit -q -m "Vice ${{ github.event.release.tag_name }}"
+          git commit -q -m "Vice ${{ github.event.release.tag_name || inputs.tag }}"
           git push
 
       - uses: actions/upload-artifact@v4
@@ -89,4 +105,4 @@ jobs:
       - name: Attach Vice.flatpak to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" Vice.flatpak --clobber --repo "${{ github.repository }}"
+        run: gh release upload "${{ github.event.release.tag_name || inputs.tag }}" Vice.flatpak --clobber --repo "${{ github.repository }}"
