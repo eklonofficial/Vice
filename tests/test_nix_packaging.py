@@ -42,6 +42,11 @@ class NixPackageListsXdgUtils(unittest.TestCase):
         lines = [ln.split("#", 1)[0].strip() for ln in match.group(1).splitlines()]
         self.assertIn("xdg-utils", lines)
 
+    def test_the_check_flags_use_the_current_argument(self) -> None:
+        # nixos-unstable refuses to evaluate unittestFlagsArray (#299).
+        self.assertNotIn("unittestFlagsArray", self.text)
+        self.assertIn("unittestFlags = ", self.text)
+
     def test_runtime_deps_are_put_on_the_wrapper_path(self) -> None:
         self.assertRegex(self.text, r"wrapProgram .*--prefix PATH : \$\{lib\.makeBinPath runtimeDeps\}")
 
