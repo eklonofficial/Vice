@@ -27,6 +27,7 @@ export interface Draft {
   followMouse: boolean;
   windowCapture: boolean;
   hardwareDecode: boolean;
+  closeToTray: boolean;
 
   captureAudio: boolean;
   captureMic: boolean;
@@ -134,6 +135,7 @@ export function draftFromConfig(config: Config): Draft {
     followMouse: Boolean(r.follow_mouse_display),
     windowCapture: Boolean(r.window_capture),
     hardwareDecode: Boolean(ui.hardware_video_decode),
+    closeToTray: ui.close_to_tray === true,
 
     captureAudio: r.capture_audio !== false,
     captureMic: Boolean(r.capture_microphone),
@@ -289,7 +291,10 @@ export function patchFromDraft(draft: Draft): Record<string, Record<string, unkn
         SOUND_FIELDS.map(([key]) => [key, draft.sounds[key]?.trim() || null]),
       ),
     },
-    ui: {hardware_video_decode: draft.hardwareDecode},
+    ui: {
+      hardware_video_decode: draft.hardwareDecode,
+      close_to_tray: draft.closeToTray,
+    },
     discord: {
       enabled: draft.discordEnabled,
       game_icons: draft.discordGameIcons,

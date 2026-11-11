@@ -1790,6 +1790,55 @@ class ShareServerDisplayApiTests(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
 class ShareServerConfigApiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_close_policy_persists_and_changes_in_the_same_gui_session(self) -> None:
+        from vice import app as vice_app, config
+        from vice.tray import WindowTrayController
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch.object(config, "CONFIG_DIR", root), mock.patch.object(
+                config, "CONFIG_PATH", root / "config.toml"
+            ):
+                cfg = Config()
+                cfg.ui.hardware_video_decode = True
+                config.save(cfg)
+                server = ShareServer(cfg)
+                win = mock.Mock()
+                shutdown = mock.Mock()
+                controller = WindowTrayController(
+                    win=win,
+                    socket_path=root / "vice-app.sock",
+                    icon_paths=(),
+                    shutdown_daemon=shutdown,
+                    close_window=win.destroy,
+                    logger=mock.Mock(),
+                    close_to_tray=vice_app._close_to_tray_enabled,
+                )
+                controller._tray_available = True
+
+                # One controller sees both directions of the saved toggle.
+                for opt_in in (True, False, True):
+                    with self.subTest(close_to_tray=opt_in):
+                        response = await server._api_set_config(
+                            _JsonRequest({"ui": {"close_to_tray": opt_in}})
+                        )
+                        payload = json.loads(response.text)
+                        self.assertEqual(response.status, 200)
+                        self.assertTrue(payload["ok"], payload)
+                        self.assertFalse(payload["restart_required"])
+                        self.assertIs(config.load().ui.close_to_tray, opt_in)
+                        self.assertIs(server.cfg.ui.close_to_tray, opt_in)
+                        fetched = json.loads((await server._api_get_config(mock.Mock())).text)
+                        self.assertIs(fetched["ui"]["close_to_tray"], opt_in)
+                        self.assertTrue(fetched["ui"]["hardware_video_decode"])
+
+                        win.reset_mock()
+                        self.assertIs(controller._on_closing(), False if opt_in else None)
+                        controller.keep_running()
+                        self.assertEqual(win.hide.call_count, 2 if opt_in else 0)
+                        self.assertEqual(win.destroy.call_count, 0 if opt_in else 1)
+                        shutdown.assert_not_called()
+
     async def test_api_set_config_saves_clip_presets_and_grows_buffer(self) -> None:
         server = ShareServer(
             Config(

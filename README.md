@@ -266,6 +266,9 @@ check_on_start = true   # ask GitHub once a day whether a newer release exists
 
 [notifications]
 sound_volume = 1.0   # clip and session tones, 0.0 to 1.0. 0 plays nothing
+
+[ui]
+close_to_tray = false # X / in-app Minimize release the GUI, not the recorder
 ```
 
 Notes:

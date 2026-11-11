@@ -6,8 +6,9 @@ Run these tests with the Qt pywebview dependencies:
 
 They are opt-in because importing QtWebEngine can abort the interpreter when a
 host has no usable Qt platform plugin; that cannot be expressed as a normal
-unittest skip from inside the process. The child uses Qt's offscreen platform for a real native window and explicitly
-forces Qt's tray-host probe false so the fallback is deterministic everywhere.
+unittest skip from inside the process. The child uses Qt's offscreen platform
+for a real native window and controls the tray-host probe for deterministic
+default-close and no-tray fallback coverage.
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ from vice.tray import WindowTrayController
 
 
 root = Path(sys.argv[1])
+mode = sys.argv[2]
 lock_path = root / "vice-app.pid"
 lock_handle = lock_path.open("a+")
 fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -48,10 +50,13 @@ class API:
         self.controller = None
 
     def keep_running(self):
-        if self.controller._tray_available:
-            raise RuntimeError("the native test requires a desktop without a tray host")
-        print("NO_TRAY", flush=True)
-        self.controller.keep_running()
+        expected_tray = mode != "no-tray"
+        assert self.controller._tray_available == expected_tray
+        print("TRAY" if expected_tray else "NO_TRAY", flush=True)
+        if mode == "x-close":
+            _close_window_after_bridge(win)
+        else:
+            self.controller.keep_running()
 
 
 api = API()
@@ -72,14 +77,18 @@ controller = WindowTrayController(
     win=win,
     socket_path=root / "vice-app.sock",
     icon_paths=(),
-    shutdown_daemon=lambda: None,
+    shutdown_daemon=mock.Mock(side_effect=AssertionError("ordinary close stopped daemon")),
     close_window=lambda: _close_window_after_bridge(win),
     logger=logging.getLogger("vice-native-test"),
 )
 api.controller = controller
 controller.start()
-with mock.patch.object(QSystemTrayIcon, "isSystemTrayAvailable", return_value=False):
+with mock.patch.object(QSystemTrayIcon, "isSystemTrayAvailable", return_value=mode != "no-tray"):
     webview.start(gui="qt", debug=False, private_mode=True)
+controller._shutdown_daemon.assert_not_called()
+assert controller._closed
+assert controller._tray is None
+assert not (root / "vice-app.sock").exists()
 print("EXITED", flush=True)
 """
 
@@ -102,6 +111,15 @@ def _qt_test_available() -> bool:
 )
 class NativeQtLifecycleTests(unittest.TestCase):
     def test_keep_running_without_tray_returns_before_native_window_closes(self) -> None:
+        self._check_close("no-tray")
+
+    def test_default_keep_running_with_tray_exits_gui(self) -> None:
+        self._check_close("keep-running")
+
+    def test_default_x_close_with_tray_exits_gui(self) -> None:
+        self._check_close("x-close")
+
+    def _check_close(self, mode: str) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env = os.environ.copy()
             env.pop("DISPLAY", None)
@@ -110,7 +128,7 @@ class NativeQtLifecycleTests(unittest.TestCase):
             env["QT_QPA_PLATFORM"] = "offscreen"
             env["QTWEBENGINE_CHROMIUM_FLAGS"] = "--disable-gpu --no-sandbox"
             result = subprocess.run(
-                [sys.executable, "-c", textwrap.dedent(_NATIVE_QT_SCRIPT), tmp],
+                [sys.executable, "-c", textwrap.dedent(_NATIVE_QT_SCRIPT), tmp, mode],
                 cwd=Path(__file__).resolve().parents[1],
                 env=env,
                 capture_output=True,
@@ -124,7 +142,7 @@ class NativeQtLifecycleTests(unittest.TestCase):
                 0,
                 f"native Qt child failed\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}",
             )
-            self.assertIn("NO_TRAY", result.stdout)
+            self.assertIn("NO_TRAY" if mode == "no-tray" else "TRAY", result.stdout)
             self.assertIn("EXITED", result.stdout)
 
             lock_path = Path(tmp) / "vice-app.pid"

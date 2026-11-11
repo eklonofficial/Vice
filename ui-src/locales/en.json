@@ -707,6 +707,8 @@
     "secSharing": "Sharing",
     "secDiscord": "Discord",
     "secAppearance": "Appearance",
+    "closeToTray": "Close to tray",
+    "closeToTrayHelp": "Off: X and in-app Minimize close the window and release GUI memory while recording continues. On: keep the GUI loaded for reopening from the tray. Without a supported tray, the window closes instead. Takes effect after saving, without reopening Vice.",
     "secAdvanced": "Advanced",
     "cardDiscord": "Discord Rich Presence",
     "optAutoRecommended": "Auto (recommended)",

@@ -404,6 +404,7 @@ class SettingsCoverageTests(unittest.TestCase):
             "check_on_start",
             "sound_volume",
             "hardware_video_decode",
+            "close_to_tray",
             "client_id_override",
             "custom_games",
         ):
@@ -419,6 +420,16 @@ class SettingsCoverageTests(unittest.TestCase):
             "screenshot_sound",
         ):
             self.assertIn(key, self.draft)
+
+    def test_close_to_tray_uses_the_settings_draft_and_localized_copy(self) -> None:
+        self.assertIn("closeToTray: ui.close_to_tray === true", self.draft)
+        self.assertIn("close_to_tray: draft.closeToTray", self.draft)
+        self.assertIn("checked={draft.closeToTray}", self.settings)
+        self.assertIn("update({closeToTray})", self.settings)
+        self.assertIn("t('settings.closeToTrayHelp')", self.settings)
+        copy = english_copy()["settings"]
+        self.assertEqual(copy["closeToTray"], "Close to tray")
+        self.assertIn("recording continues", copy["closeToTrayHelp"])
 
     def test_the_screenshot_key_can_be_set_and_cleared(self) -> None:
         self.assertIn("screenshotKey", self.draft)
