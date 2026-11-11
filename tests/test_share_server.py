@@ -1412,16 +1412,17 @@ class TrimEncoderTests(unittest.IsolatedAsyncioTestCase):
             before = hashlib.sha256(src.read_bytes()).hexdigest()
             cfg = Config()
             cfg.output.directory = str(root)
-            server = ShareServer(cfg)
-            server._clips["Session"] = src
+            cfg.output.auto_playlist_by_game = False
+            with mock.patch.object(share_mod, "SESSION_GAMES_PATH", root / "session_games.json"):
+                server = ShareServer(cfg)
+                server.add_clip(src, game="Overwatch 2", session=True)
 
             req = mock.MagicMock()
             req.match_info = {"slug": "Session"}
             req.json = mock.AsyncMock(return_value={"start": 1.0, "end": 3.0, "copy": True})
             with mock.patch.object(share_mod, "_available_encoders", return_value={"libx264"}), \
                  mock.patch.object(share_mod, "_is_nvidia", return_value=False), \
-                 mock.patch.object(server.playlists, "game_for", return_value="Overwatch 2"), \
-                 mock.patch.object(server, "add_clip") as add_clip:
+                 mock.patch.object(share_mod, "SESSION_GAMES_PATH", root / "session_games.json"):
                 resp = await server._api_trim(req)
 
             body = json.loads(resp.text)
@@ -1429,14 +1430,17 @@ class TrimEncoderTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(body["slug"], "Session-trim-2")
             self.assertEqual(hashlib.sha256(src.read_bytes()).hexdigest(), before)
             copy = root / "Session-trim-2.mp4"
-            add_clip.assert_called_once_with(copy, "Overwatch 2")
+            self.assertEqual(server._clip_json(copy.stem, copy, {})["game"], "Overwatch 2")
+            self.assertIsNone(server.playlists.game_for(copy.stem))
             duration = float(subprocess.run(
                 ["ffprobe", "-v", "error", "-show_entries", "format=duration",
                  "-of", "csv=p=0", str(copy)], capture_output=True, text=True,
             ).stdout)
             self.assertAlmostEqual(duration, 2.0, delta=0.1)
-            self.assertEqual(sorted(p.name for p in root.iterdir()),
-                             ["Session-trim-2.mp4", "Session-trim.mp4", "Session.mp4"])
+            self.assertEqual(
+                sorted(p.name for p in root.iterdir()),
+                ["Session-trim-2.mp4", "Session-trim.mp4", "Session.mp4", "session_games.json"],
+            )
 
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg not installed")
     async def test_a_trim_keeps_the_clips_codec(self) -> None:

@@ -1629,6 +1629,22 @@ async def _terminate_group(proc: asyncio.subprocess.Process, timeout: float = 5.
     _unregister_capture(proc.pid)
 
 
+async def _terminate_session_capture(proc: asyncio.subprocess.Process) -> None:
+    """Finish reaping before propagating cancellation to the session owner."""
+    cleanup = asyncio.create_task(_terminate_group(proc, timeout=8))
+    cancelled = False
+    while not cleanup.done():
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            # A second stop/shutdown cancellation must not orphan cleanup or
+            # let the daemon release its session lock while capture is alive.
+            cancelled = True
+    cleanup.result()
+    if cancelled:
+        raise asyncio.CancelledError
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Encoder selection
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1781,7 +1797,7 @@ class Recorder(ABC):
             return 0.0
         return time.time() - self._session_start
 
-    async def start_session(self) -> Optional[Path]:
+    async def start_session(self, tag: Optional[str] = None) -> Optional[Path]:
         """
         Begin a continuous session recording directly to a file.
         Returns the output path, or None on failure.
@@ -1794,7 +1810,7 @@ class Recorder(ABC):
 
         out_dir = resolve_path(self.cfg.output.directory)
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = _next_session_path(out_dir, _container(self.cfg.recording))
+        out_path = _next_session_path(out_dir, _container(self.cfg.recording), tag)
 
         cmd = self._build_session_cmd(out_path)
         if cmd is None:
@@ -1815,7 +1831,13 @@ class Recorder(ABC):
 
         self._session_program = _program_name(cmd)
         try:
-            await asyncio.wait_for(self._session_proc.wait(), timeout=1.0)
+            try:
+                await asyncio.wait_for(self._session_proc.wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                self._session_active = True
+                self._session_path = out_path
+                self._session_start = time.time()
+                return out_path
             stderr_text = await _read_stream_text(self._session_proc.stderr)
             detail = _summarize_process_error(
                 self._session_program,
@@ -1823,20 +1845,15 @@ class Recorder(ABC):
                 stderr_text,
             )
             log.error("Session recorder failed to start: %s", detail)
-            # Session recording uses GSR on Wayland, so the same helper can
-            # be left behind here (#129).
-            _signal_group(self._session_proc, signal.SIGKILL)
-            _unregister_capture(self._session_proc.pid)
-            self._session_proc = None
-            self._session_program = ""
             return None
-        except asyncio.TimeoutError:
-            pass
-
-        self._session_active = True
-        self._session_path = out_path
-        self._session_start = time.time()
-        return out_path
+        finally:
+            if not self._session_active:
+                try:
+                    await _terminate_session_capture(self._session_proc)
+                finally:
+                    self._session_proc = None
+                    self._session_path = None
+                    self._session_program = ""
 
     async def stop_session(self) -> Optional[Path]:
         """
@@ -1852,14 +1869,16 @@ class Recorder(ABC):
         proc = self._session_proc
         program = self._session_program
         self._session_active = False
-        self._session_proc = None
-        self._session_path = None
-        self._session_program = ""
 
         # Ask the recorder to stop gracefully, then reap anything it forked.
         # The SIGKILL only lands after the leader has exited, so it can never
         # cut a container short.
-        await _terminate_group(proc, timeout=8)
+        try:
+            await _terminate_session_capture(proc)
+        finally:
+            self._session_proc = None
+            self._session_path = None
+            self._session_program = ""
 
         stderr_text = await _read_stream_text(proc.stderr)
         if not path or not path.exists():
@@ -2147,9 +2166,11 @@ def _next_clip_path(
     return _next_numbered_path(out_dir, "Vice_Clip", ext, tag)
 
 
-def _next_session_path(out_dir: Path, ext: str = "mp4") -> Path:
-    """Return the next available Vice_Session_N.<ext> path in out_dir."""
-    return _next_numbered_path(out_dir, "Vice_Session", ext)
+def _next_session_path(
+    out_dir: Path, ext: str = "mp4", tag: Optional[str] = None,
+) -> Path:
+    """Return the next available Vice_Session_N[_Game].<ext> path."""
+    return _next_numbered_path(out_dir, "Vice_Session", ext, filename_tag(tag))
 
 
 def next_image_path(out_dir: Path, tag: Optional[str] = None, ext: str = "png") -> Path:
