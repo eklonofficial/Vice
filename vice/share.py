@@ -35,7 +35,7 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Coroutine, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from importlib.resources import files as _pkg_files
 
@@ -1061,10 +1061,43 @@ def _quick_tunnel_url(line: str) -> Optional[str]:
 
 # ── share server ─────────────────────────────────────────────────────────────
 
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _is_loopback_authority(authority: str) -> bool:
+    try:
+        return urlsplit(f"//{authority}").hostname in _LOOPBACK_HOSTS
+    except ValueError:
+        return False
+
+
+@web.middleware
+async def _local_request_guard(req: web.Request, handler):
+    """Keep web pages out of the control server. Listening on loopback does
+    not: a page can send a plain POST here without any CORS approval and open
+    a WebSocket with no same-origin rule, and a hostname rebound to 127.0.0.1
+    makes this look like the page's own site. Requests with no Origin, which
+    is scripts and the CLI, are not a browser's and pass."""
+    host = req.headers.get("Host")
+    if host is not None and not _is_loopback_authority(host):
+        log.warning("Refused a request to the control server for host %r", host)
+        raise web.HTTPForbidden(text="This server only answers on localhost.")
+    origin = req.headers.get("Origin")
+    if origin is not None and (req.method not in ("GET", "HEAD", "OPTIONS") or req.path == "/ws"):
+        try:
+            same = host is not None and urlsplit(origin).netloc.lower() == host.lower()
+        except ValueError:
+            same = False
+        if not same:
+            log.warning("Refused %s %s from origin %r", req.method, req.path, origin)
+            raise web.HTTPForbidden(text="Request origin is not allowed.")
+    return await handler(req)
+
+
 class ShareServer:
     def __init__(self, cfg) -> None:
         self.cfg = cfg
-        self._local_app = web.Application()
+        self._local_app = web.Application(middlewares=[_local_request_guard])
         self._public_app = web.Application()
         self._local_runner: Optional[web.AppRunner] = None
         self._local_site: Optional[web.TCPSite] = None

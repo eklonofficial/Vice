@@ -1195,6 +1195,79 @@ class TrimKeyframeTests(unittest.IsolatedAsyncioTestCase):
 
 
 @unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
+class LocalRequestGuardTests(unittest.IsolatedAsyncioTestCase):
+    """The control server listens on loopback, which a web page can still
+    reach: a plain cross-site POST needs no CORS approval, and a WebSocket
+    has no same-origin rule at all."""
+
+    async def asyncSetUp(self) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        cfg = Config()
+        cfg.output.directory = self.tmp.name
+        self.server = ShareServer(cfg)
+        self.client = TestClient(TestServer(self.server._local_app))
+        await self.client.start_server()
+        self.addAsyncCleanup(self.client.close)
+        self.authority = f"127.0.0.1:{self.client.port}"
+
+    async def _state(self, headers: dict) -> int:
+        resp = await self.client.post(
+            "/api/app-state", data=json.dumps({"seen": 1}),
+            headers={"Content-Type": "text/plain", **headers})
+        return resp.status
+
+    async def test_a_cross_site_post_is_refused(self) -> None:
+        for origin in ("https://evil.example", "http://127.0.0.1:1", "null"):
+            with self.subTest(origin=origin):
+                self.assertEqual(await self._state({"Origin": origin}), 403)
+
+    async def test_the_app_itself_is_allowed(self) -> None:
+        self.assertEqual(await self._state({"Origin": f"http://{self.authority}"}), 200)
+
+    async def test_localhost_is_the_same_app(self) -> None:
+        # `vice open` uses localhost, the window uses 127.0.0.1.
+        authority = f"localhost:{self.client.port}"
+        self.assertEqual(
+            await self._state({"Host": authority, "Origin": f"http://{authority}"}), 200)
+
+    async def test_scripts_without_an_origin_keep_working(self) -> None:
+        self.assertEqual(await self._state({}), 200)
+
+    async def test_a_rebound_hostname_is_refused(self) -> None:
+        # DNS rebinding: the browser thinks this is the attacker's own site.
+        resp = await self.client.get("/api/status", headers={"Host": "evil.example:8765"})
+        self.assertEqual(resp.status, 403)
+
+    async def test_a_cross_site_websocket_is_refused(self) -> None:
+        from aiohttp import WSServerHandshakeError
+
+        with self.assertRaises(WSServerHandshakeError) as caught:
+            await self.client.ws_connect("/ws", headers={"Origin": "https://evil.example"})
+        self.assertEqual(caught.exception.status, 403)
+
+    async def test_the_apps_own_websocket_connects(self) -> None:
+        ws = await self.client.ws_connect("/ws", headers={"Origin": f"http://{self.authority}"})
+        await ws.close()
+
+    async def test_a_cross_site_read_is_still_served(self) -> None:
+        # An <img> or <video> may embed; CORS keeps the response from the page.
+        resp = await self.client.get("/api/status", headers={"Origin": "https://evil.example"})
+        self.assertEqual(resp.status, 200)
+
+    async def test_the_public_server_is_not_restricted_by_host(self) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        public = TestClient(TestServer(self.server._public_app))
+        await public.start_server()
+        self.addAsyncCleanup(public.close)
+        resp = await public.get("/c/nope", headers={"Host": "abc.trycloudflare.com"})
+        self.assertEqual(resp.status, 404)
+
+
+@unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
 class TrimOverlapTests(unittest.IsolatedAsyncioTestCase):
     """#281: a second trim started while the first was still running wrote the
     same .trimming file and corrupted the clip."""
