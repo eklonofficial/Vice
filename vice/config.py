@@ -20,7 +20,7 @@ else:
 
 import tomli_w
 
-from .keys import LAYOUT_KEYS
+from .keys import DEFAULT_KEY_LAYOUT, KEY_LAYOUTS, LAYOUT_KEYS
 from .runtime import actual_home_dir, resolve_path
 
 CONFIG_DIR = actual_home_dir() / ".config" / "vice"
@@ -315,6 +315,10 @@ class OverlayConfig:
     # Keys left off the panel, by the ids in keys.LAYOUT. A key here is not
     # shown, read or kept with clips (#258).
     keys_hidden: list[str] = field(default_factory=list)
+    # Which keyboard the panel's labels are for: qwerty | azerty. The keys
+    # stay where they are and the same physical key lights up either way; only
+    # what is printed on them changes.
+    keys_layout: str = DEFAULT_KEY_LAYOUT
 
 
 @dataclass
@@ -496,6 +500,11 @@ def normalize_overlay(cfg: "Config") -> None:
     hidden = sorted({k for k in raw if k in LAYOUT_KEYS})
     # A panel with nothing on it is never what was meant.
     ov.keys_hidden = [] if len(hidden) == len(LAYOUT_KEYS) else hidden
+    layout = str(ov.keys_layout or "").strip().lower()
+    if layout not in KEY_LAYOUTS:
+        log.warning("overlay.keys_layout=%r is unknown, using %s", ov.keys_layout, DEFAULT_KEY_LAYOUT)
+        layout = DEFAULT_KEY_LAYOUT
+    ov.keys_layout = layout
 
 
 def normalize_voice(cfg: Config) -> None:
