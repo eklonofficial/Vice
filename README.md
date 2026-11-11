@@ -130,7 +130,7 @@ The Flatpak also works on any other distro with Flatpak installed.
 
 **Discord Rich Presence.** Shows what game you're clipping right in your Discord status, on by default for known games.
 
-**Clips titled for you.** Vice recognizes the game you're playing from a curated list and names the file accordingly, no guessing from window titles.
+**Clips titled for you.** Vice recognizes the game you're playing from a curated list and names the file accordingly, no guessing from window titles. If it missed one, right-click the clip and set the game yourself.
 
 **Hotkeys per clip.** Add your own rename-able, color-coded hotkeys to any clip for quick recall later.
 
@@ -138,7 +138,7 @@ The Flatpak also works on any other distro with Flatpak installed.
 
 **Clips the screen you're on.** Turn on Follow my mouse and Vice records whichever monitor the pointer is sitting on, instead of one you picked in advance. Works on X11, Hyprland and Sway.
 
-**Your keys on screen.** A keyboard overlay shows the keys you press over your game, for streams and clips, in your theme colour. Drag it anywhere or pick a corner. Vice can also keep the keys with each clip to show in the viewer or burn into an editor export. Off until you turn it on; only the overlay's own keys are ever read. Needs X11, or a Wayland desktop with layer-shell (KDE Plasma, Hyprland, Sway, Niri).
+**Your keys on screen.** A keyboard overlay shows the keys you press over your game, for streams and clips, in your theme colour. Drag it anywhere or pick a corner. Pick which keys are on it in Settings. Vice can also keep the keys with each clip to show in the viewer or burn into an editor export. Off until you turn it on; only the overlay's own keys are ever read. Needs X11, or a Wayland desktop with layer-shell (KDE Plasma, Hyprland, Sway, Niri).
 
 **Stays out of the way.** List the apps that clip on their own keys and Vice ignores its hotkeys while they are focused.
 

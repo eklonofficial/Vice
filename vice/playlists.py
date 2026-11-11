@@ -269,6 +269,25 @@ class PlaylistStore:
         self.save()
         return True
 
+    def set_auto(self, slug: str, game: str) -> bool:
+        """Put a clip in *game*'s auto playlist and no other, for a game set by
+        hand (#187). An empty *game* just takes it out of them. Returns True
+        when anything changed."""
+        pid = f"auto:{game_key(game)}" if game else ""
+        changed = False
+        for p in list(self._playlists):
+            if p.get("kind") != "auto" or p.get("id") == pid or slug not in p.get("clip_slugs", []):
+                continue
+            p["clip_slugs"].remove(slug)
+            if self._prunable_when_empty(p):
+                self._playlists.remove(p)
+            changed = True
+        if changed:
+            self.save()
+        if game and self.record_auto(game, slug):
+            changed = True
+        return changed
+
     # ── clip lifecycle hooks (called by the share server) ────────────────────
 
     def on_clip_renamed(self, old_slug: str, new_slug: str) -> bool:
@@ -296,11 +315,12 @@ class PlaylistStore:
         return changed
 
     def backfill(self, slugs: set[str], tag_index: dict[str, str],
-                 seed_auto: bool = True) -> bool:
+                 seed_auto: bool = True, pinned: Optional[set[str]] = None) -> bool:
         """Sync membership with the clips found on disk at startup: drop slugs
         whose files vanished while the daemon was down, then (when seed_auto)
         seed auto playlists from filename game tags. The vanished-slug cleanup
-        always runs; seed_auto=False just skips creating per-game playlists."""
+        always runs; seed_auto=False just skips creating per-game playlists.
+        A clip in *pinned* has a game of its own, whatever its filename says."""
         changed = False
         for p in list(self._playlists):
             kept = [s for s in p.get("clip_slugs", []) if s in slugs]
@@ -313,7 +333,7 @@ class PlaylistStore:
             if changed:
                 self.save()
             return changed
-        for slug in sorted(slugs):
+        for slug in sorted(slugs - (pinned or set())):
             m = _TAGGED_CLIP_RE.match(slug)
             if not m:
                 continue

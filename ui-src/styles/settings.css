@@ -54,6 +54,12 @@
     color var(--duration-fast) var(--ease-standard);
 }
 
+@media (max-width: 1000px) {
+  .rail-chip {
+    padding: 8px 11px;
+  }
+}
+
 .rail-chip:hover {
   color: var(--color-text-primary);
   background: var(--color-overlay-hover);
@@ -918,4 +924,42 @@ select option {
   font-size: 12px;
   line-height: 1.55;
   color: var(--color-error);
+}
+
+/* Which keys are on the keyboard overlay (#258): the panel itself, clickable. */
+.key-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: min(300px, 100%);
+}
+
+.key-picker-row {
+  display: grid;
+  grid-template-columns: repeat(11, 1fr);
+  gap: 5px;
+}
+
+.key-picker-key {
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: var(--vice-surface-low);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-medium) var(--ease-standard),
+    color var(--duration-medium) var(--ease-standard);
+}
+
+.key-picker-key[aria-pressed='true'] {
+  background: var(--vice-secondary-container);
+  color: var(--vice-on-secondary-container);
+}
+
+.key-picker-key:disabled {
+  cursor: default;
 }

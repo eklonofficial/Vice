@@ -262,6 +262,7 @@ kbd {
   border-radius: var(--radius-container);
   overflow: hidden;
   background: var(--raised);
+  position: relative;
   /* The whole card opens the clip, so the whole card has to look like it does. */
   cursor: pointer;
   transition:
@@ -357,6 +358,68 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 
+/* A clip whose preview is not ready (#241). Quiet until the card is hovered,
+   and absent once it is ready. */
+.clip-preview-status {
+  position: absolute;
+  top: var(--spacing-2);
+  right: var(--spacing-2);
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: rgba(0, 0, 0, 0.72);
+  transition: opacity var(--duration-medium) var(--ease-standard);
+}
+
+.clip-preview-status[data-idle] {
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.clip-card:hover .clip-preview-status[data-idle],
+.clip-preview-status[data-idle]:focus-visible {
+  opacity: 1;
+}
+
+.clip-preview-ring,
+.clip-preview-spinner {
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.clip-preview-ring {
+  border: 2px solid #fff;
+}
+
+.clip-preview-spinner {
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  animation: clip-preview-spin 0.8s linear infinite;
+}
+
+@keyframes clip-preview-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clip-preview-spinner {
+    animation-duration: 2.4s;
+  }
+}
+
+.game-tag-help {
+  margin-top: var(--spacing-2);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
 .clip-body {
   display: flex;
   flex-direction: column;
@@ -392,10 +455,26 @@ kbd {
   color: var(--color-error);
 }
 
-.clip-game {
+.clip-tagline {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--spacing-2);
   margin-top: 2px;
+}
+
+.clip-game {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11px;
   color: var(--color-text-accent);
+}
+
+.clip-views {
+  flex: none;
+  font-size: 11px;
+  color: var(--color-text-disabled);
 }
 
 /* Says the same thing the empty space used to, but out loud. */
@@ -862,7 +941,7 @@ kbd {
   color: var(--color-text-secondary);
 }
 
-.credit-avatar {
+.credit .credit-avatar {
   flex: none;
   width: 34px;
   height: 34px;
@@ -875,7 +954,7 @@ kbd {
   font-weight: 700;
 }
 
-.credit-avatar-dim {
+.credit .credit-avatar-dim {
   background: var(--recessed);
   color: var(--color-text-secondary);
 }

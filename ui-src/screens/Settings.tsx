@@ -34,6 +34,7 @@ import {AccentPicker} from '../components/AccentPicker';
 import {useAccentChoice} from '../lib/accentChoice';
 import {customAccent as deriveCustom} from '../theme/viceTheme';
 import {AudioTracks, type AudioSource} from '../components/settings/AudioTracks';
+import {KeyPicker} from '../components/settings/KeyPicker';
 import {KeyCapture} from '../components/settings/KeyCapture';
 import {
   Row,
@@ -1195,6 +1196,16 @@ export function Settings() {
                 </button>
               ) : null}
             </div>
+          </Row>
+
+          <Row label={t('settings.keyOverlayKeys')} stack help={t('settings.keyOverlayKeysHelp')}>
+            <KeyPicker
+              hidden={draft.keyOverlayHidden}
+              onChange={keyOverlayHidden => {
+                update({keyOverlayHidden});
+                void persistNow({overlay: {keys_hidden: keyOverlayHidden}}, () => undefined, t('settings.errSaveOverlay'));
+              }}
+            />
           </Row>
 
           <Row label={t('settings.keyOverlayInClips')} help={t('settings.keyOverlayInClipsHelp')}>

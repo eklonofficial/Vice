@@ -1195,6 +1195,135 @@ class TrimKeyframeTests(unittest.IsolatedAsyncioTestCase):
 
 
 @unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
+class ClipGameByHandTests(unittest.IsolatedAsyncioTestCase):
+    """#187: a clip's game can be set when detection missed it."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        for target, value in (
+            ("vice.share.CLIP_GAMES_PATH", self.root / "clip_games.json"),
+            ("vice.playlists.PLAYLISTS_PATH", self.root / "playlists.json"),
+        ):
+            patcher = mock.patch(target, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _server(self, name: str = "Vice_Clip_1.mp4", auto: bool = True) -> "ShareServer":
+        cfg = Config()
+        cfg.output.directory = str(self.root)
+        cfg.output.auto_playlist_by_game = auto
+        (self.root / name).write_bytes(b"x")
+        server = ShareServer(cfg)
+        server.playlists.path = self.root / "playlists.json"
+        server.playlists.load()
+        server._clips[Path(name).stem] = self.root / name
+        server.broadcast = mock.AsyncMock()
+        return server
+
+    def _req(self, slug: str, game) -> mock.MagicMock:
+        req = mock.MagicMock()
+        req.match_info = {"slug": slug}
+        req.json = mock.AsyncMock(return_value={"game": game})
+        return req
+
+    async def test_setting_a_game_labels_the_clip_and_files_it(self) -> None:
+        server = self._server()
+        resp = await server._api_clip_game(self._req("Vice_Clip_1", "  Genshin   Impact "))
+        self.assertEqual(json.loads(resp.text)["game"], "Genshin Impact")
+        self.assertEqual(server._clip_game("Vice_Clip_1"), "Genshin Impact")
+        self.assertEqual(server.playlists.game_for("Vice_Clip_1"), "Genshin Impact")
+
+    async def test_changing_a_game_moves_it_between_playlists(self) -> None:
+        server = self._server()
+        await server._api_clip_game(self._req("Vice_Clip_1", "Halo"))
+        await server._api_clip_game(self._req("Vice_Clip_1", "Doom"))
+        self.assertEqual(server.playlists.game_for("Vice_Clip_1"), "Doom")
+        self.assertIsNone(server.playlists.get("auto:halo"))
+
+    async def test_clearing_beats_the_filename_after_a_restart(self) -> None:
+        server = self._server("Vice_Clip_1_Halo.mp4")
+        server.playlists.record_auto("Halo", "Vice_Clip_1_Halo")
+        await server._api_clip_game(self._req("Vice_Clip_1_Halo", ""))
+        self.assertIsNone(server._clip_game("Vice_Clip_1_Halo"))
+        server.playlists.backfill({"Vice_Clip_1_Halo"}, {}, pinned=set(server._clip_games))
+        self.assertIsNone(server.playlists.game_for("Vice_Clip_1_Halo"))
+
+    async def test_no_playlist_when_auto_playlists_are_off(self) -> None:
+        server = self._server(auto=False)
+        await server._api_clip_game(self._req("Vice_Clip_1", "Halo"))
+        self.assertEqual(server._clip_game("Vice_Clip_1"), "Halo")
+        self.assertIsNone(server.playlists.game_for("Vice_Clip_1"))
+
+    async def test_a_bad_body_is_refused(self) -> None:
+        server = self._server()
+        resp = await server._api_clip_game(self._req("Vice_Clip_1", 3))
+        self.assertEqual(resp.status, 400)
+
+    async def test_the_filename_is_left_alone(self) -> None:
+        server = self._server()
+        await server._api_clip_game(self._req("Vice_Clip_1", "Halo"))
+        self.assertTrue((self.root / "Vice_Clip_1.mp4").exists())
+
+
+@unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
+class PreviewStatusTests(unittest.IsolatedAsyncioTestCase):
+    """#241: whether a clip's preview is ready, and starting one from the card."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        patcher = mock.patch("vice.share.PROXY_DIR", self.root / "proxies")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        (self.root / "proxies").mkdir()
+        cfg = Config()
+        cfg.output.directory = str(self.root)
+        self.clip = self.root / "Vice_Clip_1.mp4"
+        self.clip.write_bytes(b"x")
+        self.server = ShareServer(cfg)
+        self.server._clips["Vice_Clip_1"] = self.clip
+        self.server._broadcast_clip = mock.AsyncMock()
+
+    async def test_states(self) -> None:
+        state = lambda: self.server._preview_state("Vice_Clip_1", self.clip)  # noqa: E731
+        self.assertEqual(state(), "none")
+        release = asyncio.Event()
+        seen = []
+
+        async def make(path, vcodec):
+            seen.append(state())
+            await release.wait()
+            proxy = _share._proxy_path(path)
+            proxy.write_bytes(b"proxy")
+            return proxy
+
+        with mock.patch.object(_share, "_make_preview_proxy", new=make), \
+                mock.patch.object(self.server, "_get_meta", new=mock.AsyncMock(return_value={})):
+            req = mock.MagicMock()
+            req.match_info = {"slug": "Vice_Clip_1"}
+            resp = await self.server._api_prepare_preview(req)
+            self.assertTrue(json.loads(resp.text)["ok"])
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            self.assertEqual(state(), "working")
+            release.set()
+            for _ in range(5):
+                await asyncio.sleep(0)
+        self.assertEqual(seen, ["working"])
+        self.assertEqual(state(), "ready")
+        self.assertEqual(self.server._broadcast_clip.await_count, 2)
+
+    async def test_a_failed_build_goes_back_to_none(self) -> None:
+        with mock.patch.object(_share, "_make_preview_proxy", new=mock.AsyncMock(return_value=None)), \
+                mock.patch.object(self.server, "_get_meta", new=mock.AsyncMock(return_value={})):
+            self.assertIsNone(await self.server._ensure_preview("Vice_Clip_1", self.clip))
+        self.assertEqual(self.server._preview_state("Vice_Clip_1", self.clip), "none")
+
+
+@unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
 class LocalRequestGuardTests(unittest.IsolatedAsyncioTestCase):
     """The control server listens on loopback, which a web page can still
     reach: a plain cross-site POST needs no CORS approval, and a WebSocket
@@ -1501,7 +1630,7 @@ class TrimEncoderTests(unittest.IsolatedAsyncioTestCase):
             cfg = Config()
             cfg.output.directory = str(root)
             cfg.output.auto_playlist_by_game = False
-            with mock.patch.object(share_mod, "SESSION_GAMES_PATH", root / "session_games.json"):
+            with mock.patch.object(share_mod, "CLIP_GAMES_PATH", root / "clip_games.json"):
                 server = ShareServer(cfg)
                 server.add_clip(src, game="Overwatch 2", session=True)
 
@@ -1510,7 +1639,7 @@ class TrimEncoderTests(unittest.IsolatedAsyncioTestCase):
             req.json = mock.AsyncMock(return_value={"start": 1.0, "end": 3.0, "copy": True})
             with mock.patch.object(share_mod, "_available_encoders", return_value={"libx264"}), \
                  mock.patch.object(share_mod, "_is_nvidia", return_value=False), \
-                 mock.patch.object(share_mod, "SESSION_GAMES_PATH", root / "session_games.json"):
+                 mock.patch.object(share_mod, "CLIP_GAMES_PATH", root / "clip_games.json"):
                 resp = await server._api_trim(req)
 
             body = json.loads(resp.text)
@@ -1527,7 +1656,7 @@ class TrimEncoderTests(unittest.IsolatedAsyncioTestCase):
             self.assertAlmostEqual(duration, 2.0, delta=0.1)
             self.assertEqual(
                 sorted(p.name for p in root.iterdir()),
-                ["Session-trim-2.mp4", "Session-trim.mp4", "Session.mp4", "session_games.json"],
+                ["Session-trim-2.mp4", "Session-trim.mp4", "Session.mp4", "clip_games.json"],
             )
 
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg not installed")

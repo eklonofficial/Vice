@@ -5,6 +5,7 @@ import {copyShareLink, shareButtonLabel, shareClip} from '../lib/share';
 import {clipTitle, type Clip} from '../lib/types';
 import type {ClipActions} from '../components/ClipCard';
 import {ContextMenu} from '../components/ContextMenu';
+import {GameTagModal} from '../components/GameTagModal';
 import {Modal} from '../components/Modal';
 import {useStore} from './store';
 import {usePlayback} from './playback';
@@ -67,6 +68,7 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
   const [confirmDelete, setConfirmDelete] = useState<Clip | null>(null);
   const [manualCopy, setManualCopy] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [tagging, setTagging] = useState<Clip | null>(null);
 
   const fail = useCallback(
     (title: string) => (err: Error) =>
@@ -150,6 +152,7 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
             {id: 'open', label: t('card.open'), onSelect: () => openViewer(menuClip.slug)},
             {id: 'trim', label: t('card.trim'), onSelect: () => openTrim(menuClip.slug)},
             {id: 'rename', label: t('card.rename'), onSelect: () => setRenaming(menuClip.slug)},
+            {id: 'game', label: t('card.setGame'), onSelect: () => setTagging(menuClip)},
             {
               id: 'copy-link',
               label: menuClip.share_url ? t('card.copyShareLink') : t('card.noShareLink'),
@@ -202,6 +205,8 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
           })}
         </p>
       </Modal>
+
+      <GameTagModal clip={tagging} onClose={() => setTagging(null)} />
 
       <Modal open={manualCopy !== null} title={t('viewer.copyLinkTitle')} onClose={() => setManualCopy(null)}>
         <p>{t('viewer.copyLinkBody')}</p>

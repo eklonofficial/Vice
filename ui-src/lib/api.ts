@@ -63,6 +63,8 @@ export const api = {
   clips: async () => (await request<{clips: Clip[]}>('/api/clips')).clips,
   deleteClip: (slug: string) => request<void>(`/api/clips/${enc(slug)}`, {method: 'DELETE'}),
   renameClip: (slug: string, name: string) => post<Clip>(`/api/clips/${enc(slug)}/rename`, {name}),
+  setClipGame: (slug: string, game: string) => post<{ok: boolean}>(`/api/clips/${enc(slug)}/game`, {game}),
+  prepareClipPreview: (slug: string) => post<{ok: boolean}>(`/api/clips/${enc(slug)}/prepare-preview`),
   revealClip: (slug: string) => post<void>(`/api/clips/${enc(slug)}/reveal`),
   openClip: (slug: string) => post<void>(`/api/clips/${enc(slug)}/open`),
   /**

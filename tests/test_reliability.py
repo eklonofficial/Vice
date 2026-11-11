@@ -201,6 +201,8 @@ class PreviewLifecycleTests(unittest.IsolatedAsyncioTestCase):
             server._proxy_lock = asyncio.Lock()
             server._proxy_tasks = set()
             server._proxy_stopping = False
+            server._previews_building = {}
+            server._broadcast_clip = mock.AsyncMock()
             server._get_meta = mock.AsyncMock(return_value={"vcodec": "hevc"})
             entered = asyncio.Event()
             release = asyncio.Event()
@@ -242,6 +244,8 @@ class PreviewLifecycleTests(unittest.IsolatedAsyncioTestCase):
             server._proxy_lock = asyncio.Lock()
             server._proxy_tasks = set()
             server._proxy_stopping = False
+            server._previews_building = {}
+            server._broadcast_clip = mock.AsyncMock()
             server._ws_clients = set()
             server._exports = mock.Mock(stop=mock.AsyncMock())
             server._tunnel_proc = server._local_runner = server._public_runner = None
@@ -275,6 +279,8 @@ class PreviewLifecycleTests(unittest.IsolatedAsyncioTestCase):
             server._proxy_lock = asyncio.Lock()
             server._proxy_tasks = set()
             server._proxy_stopping = False
+            server._previews_building = {}
+            server._broadcast_clip = mock.AsyncMock()
             server._get_meta = mock.AsyncMock()
             with mock.patch.object(share, "PROXY_DIR", root):
                 source = root / "clip.mkv"

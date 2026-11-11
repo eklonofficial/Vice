@@ -3,8 +3,9 @@ import {useEffect, useRef, useState} from 'react';
 import {endClipDrag, startClipDrag} from '../lib/clipDrag';
 import {formatBytes, formatDuration} from '../lib/format';
 import {clipTitle, type Clip} from '../lib/types';
+import {api} from '../lib/api';
 import {H264_SUPPORTED} from '../lib/env';
-import {playbackUrl} from '../lib/playback';
+import {clipNeedsProxy, playbackUrl} from '../lib/playback';
 import {t} from '../lib/i18n';
 import {InlineRename} from './InlineRename';
 
@@ -102,7 +103,6 @@ export function ClipCard({
       : '',
     !broken && clip.width ? `${clip.width}x${clip.height}` : '',
     clip.size ? formatBytes(clip.size) : '',
-    clip.views ? t('card.views', {count: clip.views}) : '',
   ]
     .filter(Boolean)
     .join(' · ');
@@ -167,6 +167,8 @@ export function ClipCard({
         ) : null}
       </button>
 
+      <PreviewStatus clip={clip} />
+
       <div className="clip-body">
         {renaming ? (
           <InlineRename
@@ -196,9 +198,12 @@ export function ClipCard({
             })}
           </p>
         ) : null}
-        <span className="clip-game" data-untagged={clip.game ? undefined : true}>
-          {clip.game || t('common.untagged')}
-        </span>
+        <div className="clip-tagline">
+          <span className="clip-game" data-untagged={clip.game ? undefined : true}>
+            {clip.game || t('common.untagged')}
+          </span>
+          {clip.views ? <span className="clip-views">{t('card.views', {count: clip.views})}</span> : null}
+        </div>
 
         {hasActions(actions) ? (
           <div className="clip-actions">
@@ -234,6 +239,36 @@ export function ClipCard({
         ) : null}
       </div>
     </article>
+  );
+}
+
+/**
+ * Whether a clip this window cannot play has its preview yet (#241). Nothing at
+ * all once it is ready, and nothing for a clip that never needs one, so most
+ * people never see it.
+ */
+function PreviewStatus({clip}: {clip: Clip}) {
+  if (clip.unreadable || !clipNeedsProxy(clip) || !clip.preview || clip.preview === 'ready') return null;
+  if (clip.preview === 'working') {
+    return (
+      <span className="clip-preview-status" role="status" title={t('card.previewWorking')}>
+        <span className="clip-preview-spinner" aria-label={t('card.previewWorking')} />
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="clip-preview-status"
+      data-idle
+      title={t('card.previewPrepare')}
+      aria-label={t('card.previewPrepare')}
+      onClick={e => {
+        e.stopPropagation();
+        void api.prepareClipPreview(clip.slug).catch(err => console.debug('Preparing the preview failed', err));
+      }}>
+      <span className="clip-preview-ring" aria-hidden="true" />
+    </button>
   );
 }
 

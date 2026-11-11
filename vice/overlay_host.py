@@ -13,7 +13,7 @@ import logging
 import sys
 import os
 import time
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
 from .runtime import has_display, in_vice_flatpak
 
@@ -35,6 +35,7 @@ class KeyOverlayHost:
         self._wanted = False
         self._place: dict = {}
         self._accent = ""
+        self._hidden: list[str] = []
         self._moving = False
         self._starts: list[float] = []
         self.error: Optional[str] = None
@@ -48,12 +49,13 @@ class KeyOverlayHost:
     def state(self) -> dict:
         return {"running": self.running, "error": self.error, "moving": self._moving}
 
-    async def sync(self, enabled: bool, place: dict, accent: str) -> None:
+    async def sync(self, enabled: bool, place: dict, accent: str, hidden: Iterable[str] = ()) -> None:
         """Bring the overlay in line with the settings."""
         self._wanted = enabled
         changed_place = place != self._place
         changed_accent = accent != self._accent
-        self._place, self._accent = dict(place), accent
+        changed_hidden = sorted(hidden) != self._hidden
+        self._place, self._accent, self._hidden = dict(place), accent, sorted(hidden)
         if not enabled:
             self._moving = False
             await self.stop()
@@ -65,6 +67,8 @@ class KeyOverlayHost:
             self._send({"t": "place", **self._place})
         if changed_accent:
             self._send({"t": "style", "accent": self._accent})
+        if changed_hidden:
+            self._send({"t": "hide", "keys": self._hidden})
 
     def key(self, key: str, down: bool) -> None:
         if self.running:
@@ -109,6 +113,8 @@ class KeyOverlayHost:
         self.error = None
         self._send({"t": "style", "accent": self._accent})
         self._send({"t": "place", **self._place})
+        if self._hidden:
+            self._send({"t": "hide", "keys": self._hidden})
         self._reader = asyncio.create_task(self._read(self._proc))
         self._on_state()
 

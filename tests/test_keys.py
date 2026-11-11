@@ -337,3 +337,50 @@ class KeyOverlayHostTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch("vice.overlay_host.has_display", return_value=False):
             await self.host.sync(True, {"position": "bottom-left"}, "")
         self.assertEqual(self.host.state(), {"running": False, "error": "no-display", "moving": False})
+
+
+class HiddenKeysTests(unittest.TestCase):
+    """#258: a key taken off the panel is not shown, read or kept."""
+
+    def test_a_hidden_key_is_not_recorded(self) -> None:
+        ring = keys.KeyRing(60)
+        ring.hide(["W"])
+        self.assertIsNone(ring.record("KEY_W", True, at=1.0))
+        self.assertEqual(ring.record("KEY_A", True, at=1.0), ("A", True))
+        self.assertEqual([k for _, _, k in ring.intervals(0.0, 2.0)], ["A"])
+
+    def test_hiding_forgets_what_was_already_kept(self) -> None:
+        ring = keys.KeyRing(60)
+        ring.record("KEY_W", True, at=1.0)
+        ring.record("KEY_W", False, at=2.0)
+        ring.hide(["W"])
+        self.assertEqual(ring.intervals(0.0, 3.0), [])
+
+    def test_showing_it_again_records_it(self) -> None:
+        ring = keys.KeyRing(60)
+        ring.hide(["W"])
+        ring.hide([])
+        self.assertEqual(ring.record("KEY_W", True, at=1.0), ("W", True))
+
+    def test_a_hidden_key_is_not_drawn_and_the_rest_stay_put(self) -> None:
+        from vice.key_overlay import key_rects
+
+        full = {key: (x, y) for key, _, x, y, _, _ in key_rects(1.0)}
+        kept = {key: (x, y) for key, _, x, y, _, _ in key_rects(1.0, {"W"})}
+        self.assertNotIn("W", kept)
+        self.assertEqual(kept, {k: v for k, v in full.items() if k != "W"})
+
+    def test_unknown_ids_are_dropped_and_an_empty_panel_is_refused(self) -> None:
+        from vice.config import Config, normalize_overlay
+        from vice.keys import LAYOUT_KEYS
+
+        cfg = Config()
+        cfg.overlay.keys_hidden = ["W", "NOPE", "W"]
+        normalize_overlay(cfg)
+        self.assertEqual(cfg.overlay.keys_hidden, ["W"])
+        cfg.overlay.keys_hidden = sorted(LAYOUT_KEYS)
+        normalize_overlay(cfg)
+        self.assertEqual(cfg.overlay.keys_hidden, [])
+
+
+

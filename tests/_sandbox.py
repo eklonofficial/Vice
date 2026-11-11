@@ -35,7 +35,7 @@ SHARE_REDIRECTS = {
     "EXPORT_WORK_DIR": ROOT / "exports",
     "HIGHLIGHTS_DIR": ROOT / "highlights",
     "VIEWS_PATH": ROOT / "views.json",
-    "SESSION_GAMES_PATH": ROOT / "session_games.json",
+    "CLIP_GAMES_PATH": ROOT / "clip_games.json",
     "SHARE_TOKENS_PATH": ROOT / "share_tokens.json",
     "APP_STATE_PATH": ROOT / "ui_state.json",
 }

@@ -2,6 +2,7 @@ import {useEffect, useRef, type RefObject} from 'react';
 
 import {t} from '../lib/i18n';
 import {KEY_LAYOUT, keysAt, type KeyInterval} from '../lib/keyLayout';
+import {useStore} from '../state/store';
 
 /**
  * The keys kept beside a clip, drawn over the video in time with it (#209).
@@ -18,6 +19,8 @@ export function KeyOverlay({
   intervals: KeyInterval[];
 }) {
   const root = useRef<HTMLDivElement>(null);
+  const {state} = useStore();
+  const hidden = (state.config?.overlay?.keys_hidden ?? []) as string[];
 
   useEffect(() => {
     let frame = 0;
@@ -42,7 +45,7 @@ export function KeyOverlay({
       {KEY_LAYOUT.map((row, r) => (
         <div className="key-overlay-row" key={r}>
           {row.map(([id, label, span], k) =>
-            id === null ? (
+            id === null || hidden.includes(id) ? (
               <span key={k} style={{gridColumn: `span ${span * 2}`}} />
             ) : (
               <span key={k} className="key-cap" data-key={id} style={{gridColumn: `span ${span * 2}`}}>

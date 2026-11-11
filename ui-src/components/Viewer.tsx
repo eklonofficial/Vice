@@ -17,6 +17,7 @@ import {clipTitle, imageTitle, type Clip, type Highlight} from '../lib/types';
 import {IconClose, IconExpand} from './Icons';
 import {ContextMenu} from './ContextMenu';
 import {usePlaylistToggleItems} from '../state/playlistItems';
+import {GameTagModal} from './GameTagModal';
 import {KeyOverlay} from './KeyOverlay';
 import type {KeyInterval} from '../lib/keyLayout';
 import {InlineRename} from './InlineRename';
@@ -131,6 +132,7 @@ export function Viewer(props: ViewerProps) {
   );
   const [renaming, setRenaming] = useState<string | null>(null);
   const [playlistMenu, setPlaylistMenu] = useState<{x: number; y: number} | null>(null);
+  const [tagging, setTagging] = useState<Clip | null>(null);
   const playlistItems = usePlaylistToggleItems();
   const closePlaylistMenu = useCallback(() => setPlaylistMenu(null), []);
   // On top of the viewer's own Escape, so the first press closes the menu.
@@ -822,6 +824,9 @@ export function Viewer(props: ViewerProps) {
                   }}>
                   {t('viewer.playlist')}
                 </button>
+                <button type="button" className="btn btn-quiet btn-sm" onClick={() => setTagging(clip)}>
+                  {t('viewer.game')}
+                </button>
                 <button type="button" className="btn btn-quiet btn-sm" onClick={() => props.onTrim(clip)}>
                   {t('viewer.trim')}
                 </button>
@@ -869,6 +874,8 @@ export function Viewer(props: ViewerProps) {
           onClose={onClose}
         />
       </div>
+
+      <GameTagModal clip={tagging} onClose={() => setTagging(null)} />
 
       {playlistMenu && clip ? (
         <ContextMenu

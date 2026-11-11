@@ -34,7 +34,7 @@ import tempfile
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Coroutine, Optional
+from typing import Callable, Coroutine, Iterable, Optional
 from urllib.parse import quote, urlsplit
 
 from importlib.resources import files as _pkg_files
@@ -219,18 +219,19 @@ def _save_views(views: dict[str, int]) -> None:
     tmp.replace(VIEWS_PATH)
 
 
-SESSION_GAMES_PATH = actual_home_dir() / ".local" / "share" / "vice" / "session_games.json"
+# A clip's game when it is not simply its auto playlist's: captured when a
+# session started, or set by hand. An empty string is a game cleared by hand.
+CLIP_GAMES_PATH = actual_home_dir() / ".local" / "share" / "vice" / "clip_games.json"
 
 
-def _load_session_games() -> dict[str, str]:
+def _load_clip_games() -> dict[str, str]:
     try:
-        data = json.loads(SESSION_GAMES_PATH.read_text())
-        return {slug: game for slug, game in data.items()
-                if isinstance(game, str) and game}
+        data = json.loads(CLIP_GAMES_PATH.read_text())
+        return {slug: game for slug, game in data.items() if isinstance(game, str)}
     except FileNotFoundError:
         return {}
     except (OSError, ValueError, AttributeError) as exc:
-        log.warning("Session games file %s is unreadable: %s", SESSION_GAMES_PATH, exc)
+        log.warning("Clip games file %s is unreadable: %s", CLIP_GAMES_PATH, exc)
         return {}
 
 
@@ -537,7 +538,8 @@ def _trimmed_copy_path(path: Path) -> Path:
     return candidate
 
 
-def _key_burn_for(project: dict, sources: dict, work: Path, accent: str) -> Optional[KeyBurn]:
+def _key_burn_for(project: dict, sources: dict, work: Path, accent: str,
+                  hidden: Iterable[str] = ()) -> Optional[KeyBurn]:
     """The keyboard panel for an export, or None when no clip in it has keys
     or the panel cannot be drawn here."""
     intervals = {}
@@ -550,7 +552,7 @@ def _key_burn_for(project: dict, sources: dict, work: Path, accent: str) -> Opti
     _, height, _ = canvas_for(project, sources)
     try:
         from .key_overlay import render_burn_assets
-        assets = render_burn_assets(work, accent, max(0.5, height / 1080))
+        assets = render_burn_assets(work, accent, max(0.5, height / 1080), hidden)
     except Exception as exc:  # pycairo missing, or a drawing failure
         log.warning("Exporting without the keyboard panel: %s", exc)
         return None
@@ -1121,7 +1123,7 @@ class ShareServer:
 
         self.playlists = PlaylistStore()
         self._views = _load_views()
-        self._session_games = _load_session_games()
+        self._clip_games = _load_clip_games()
         self._share_tokens = _load_share_tokens()
         self._share_slugs = {token: slug for slug, token in self._share_tokens.items()}
         self.editor_project = EditorProjectStore()
@@ -1133,6 +1135,8 @@ class ShareServer:
         self._proxy_lock = asyncio.Lock()
         self._proxy_tasks: set[asyncio.Task] = set()
         self._proxy_stopping = False
+        # Slug to how many requests are waiting on its preview being built.
+        self._previews_building: dict[str, int] = {}
 
         self._tunnel_proc: Optional[asyncio.subprocess.Process] = None
         self._tunnel_task: Optional[asyncio.Task] = None
@@ -1189,6 +1193,8 @@ class ShareServer:
         r.add_delete("/api/clips/{slug}",    self._api_delete)
         r.add_post("/api/clips/{slug}/trim",              self._api_trim)
         r.add_post("/api/clips/{slug}/rename",            self._api_rename)
+        r.add_post("/api/clips/{slug}/game",              self._api_clip_game)
+        r.add_post("/api/clips/{slug}/prepare-preview",   self._api_prepare_preview)
         r.add_post("/api/clips/{slug}/reveal",            self._api_reveal)
         r.add_post("/api/clips/{slug}/open",              self._api_open)
         r.add_post("/api/clips/{slug}/copy-file",         self._api_copy_file)
@@ -1259,6 +1265,7 @@ class ShareServer:
             set(self._clips) | {image_slug(s) for s in self._images},
             build_tag_index(self.cfg.discord.custom_games),
             seed_auto=self.cfg.output.auto_playlist_by_game,
+            pinned=set(self._clip_games),
         )
         # View counts persist like highlights: they are only dropped when a
         # clip is deleted (in _api_delete) or its number is reused by a new
@@ -1332,14 +1339,16 @@ class ShareServer:
 
     # ── public helpers (called by ViceDaemon) ─────────────────────────────────
 
-    def _save_session_games(self) -> None:
-        SESSION_GAMES_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp = SESSION_GAMES_PATH.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(self._session_games))
-        tmp.replace(SESSION_GAMES_PATH)
+    def _save_clip_games(self) -> None:
+        CLIP_GAMES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = CLIP_GAMES_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(self._clip_games))
+        tmp.replace(CLIP_GAMES_PATH)
 
     def _clip_game(self, slug: str) -> Optional[str]:
-        return self._session_games.get(slug) or self.playlists.game_for(slug)
+        if slug in self._clip_games:
+            return self._clip_games[slug] or None
+        return self.playlists.game_for(slug)
 
     def add_clip(self, path: Path, game: Optional[str] = None, *, session: bool = False) -> str:
         """Register a new clip and return its share URL."""
@@ -1351,11 +1360,11 @@ class ShareServer:
         # one would be shown the new recording.
         if self._views.pop(slug, None) is not None:
             _save_views(self._views)
-        old_game = self._session_games.pop(slug, None)
+        old_game = self._clip_games.pop(slug, None)
         if session and game:
-            self._session_games[slug] = game
-        if self._session_games.get(slug) != old_game:
-            self._save_session_games()
+            self._clip_games[slug] = game
+        if self._clip_games.get(slug) != old_game:
+            self._save_clip_games()
         self._issue_share_token(slug)
         if (game and self.cfg.output.auto_playlist_by_game
                 and self.playlists.record_auto(game, slug)):
@@ -1547,6 +1556,7 @@ class ShareServer:
             "size":       size,
             "created_at": created_at,
             "game":       self._clip_game(slug),
+            "preview":    self._preview_state(slug, path),
             "views":      self._views.get(slug, 0),
             # Keys were kept beside this clip for the viewer's overlay.
             "keys":       keystore.sidecar_path(slug).exists(),
@@ -1794,21 +1804,57 @@ class ShareServer:
             },
         )
 
+    async def _ensure_preview(self, slug: str, path: Path) -> Optional[Path]:
+        """The clip's H.264 preview proxy, building it if needed and telling
+        the UI while it does, so a card can say so (#241)."""
+        proxy = _proxy_path(path)
+        if proxy.exists() and proxy.stat().st_size > 0:
+            return proxy
+        task = asyncio.current_task()
+        self._proxy_tasks.add(task)
+        self._previews_building[slug] = self._previews_building.get(slug, 0) + 1
+        if self._previews_building[slug] == 1:
+            asyncio.create_task(self._broadcast_clip(slug, path))
+        try:
+            async with self._proxy_lock:
+                meta = await self._get_meta(slug, path)
+                return await _make_preview_proxy(path, meta.get("vcodec", ""))
+        finally:
+            self._proxy_tasks.discard(task)
+            left = self._previews_building[slug] - 1
+            if left:
+                self._previews_building[slug] = left
+            else:
+                del self._previews_building[slug]
+                asyncio.create_task(self._broadcast_clip(slug, path))
+
+    def _preview_state(self, slug: str, path: Path) -> str:
+        """none, working or ready. Only clips this window cannot play need a
+        preview, and the UI is what knows which those are."""
+        if slug in self._previews_building:
+            return "working"
+        try:
+            return "ready" if _proxy_path(path).stat().st_size > 0 else "none"
+        except OSError:
+            return "none"
+
+    async def _api_prepare_preview(self, req: web.Request) -> web.Response:
+        """Start a clip's preview without opening it (#241)."""
+        slug = req.match_info["slug"]
+        path = self._clips.get(slug)
+        if not path or not path.exists():
+            raise web.HTTPNotFound()
+        if self._proxy_stopping:
+            raise web.HTTPServiceUnavailable()
+        asyncio.create_task(self._ensure_preview(slug, path))
+        return web.json_response({"ok": True})
+
     async def _serve_preview_proxy(self, slug: str, path: Path):
         """Return a FileResponse for the clip's H.264 preview proxy, or None to
         fall back to serving the original."""
         if self._proxy_stopping:
             raise web.HTTPServiceUnavailable()
-        task = asyncio.current_task()
-        self._proxy_tasks.add(task)
-        try:
-            proxy = _proxy_path(path)
-            if not proxy.exists() or proxy.stat().st_size == 0:
-                async with self._proxy_lock:
-                    meta = await self._get_meta(slug, path)
-                    proxy = await _make_preview_proxy(path, meta.get("vcodec", ""))
-        finally:
-            self._proxy_tasks.discard(task)
+        proxy = await self._ensure_preview(slug, path)
         if proxy is None or not proxy.exists():
             return None
         return web.FileResponse(
@@ -1939,8 +1985,8 @@ class ShareServer:
         self._meta.pop(slug, None)
         if self._views.pop(slug, None) is not None:
             _save_views(self._views)
-        if self._session_games.pop(slug, None) is not None:
-            self._save_session_games()
+        if self._clip_games.pop(slug, None) is not None:
+            self._save_clip_games()
         self._forget_share_token(slug)
         if self.playlists.on_clip_deleted(slug):
             await self._broadcast_playlists()
@@ -2074,7 +2120,7 @@ class ShareServer:
             tmp.replace(target)
             if kept_keys is not None:
                 keystore.save_sidecar(target.stem, keystore.cut_intervals(kept_keys, start, end))
-            self.add_clip(target, self._clip_game(slug), session=slug in self._session_games)
+            self.add_clip(target, self._clip_game(slug), session=slug in self._clip_games)
             return web.json_response({"ok": True, "slug": target.stem, "copy": True})
 
         tmp.replace(path)
@@ -2087,6 +2133,30 @@ class ShareServer:
         self._meta.pop(slug, None)
         asyncio.create_task(self._broadcast_clip(slug, path))
         return web.json_response({"ok": True, "slug": slug})
+
+    async def _api_clip_game(self, req: web.Request) -> web.Response:
+        """Set a clip's game by hand, for when detection missed it (#187). An
+        empty name clears it. Set here rather than in the filename, so the
+        clip's name and its share link stay as they are."""
+        slug = req.match_info["slug"]
+        path = self._clips.get(slug)
+        if not path or not path.exists():
+            raise web.HTTPNotFound()
+        try:
+            body = await req.json()
+        except ValueError:
+            return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+        requested = body.get("game") if isinstance(body, dict) else None
+        if not isinstance(requested, str):
+            return web.json_response({"ok": False, "error": "game must be a string"}, status=400)
+        game = " ".join(requested.split())[:80]
+        self._clip_games[slug] = game
+        self._save_clip_games()
+        wanted = game if self.cfg.output.auto_playlist_by_game else ""
+        if self.playlists.set_auto(slug, wanted):
+            await self._broadcast_playlists()
+        await self._broadcast_clip(slug, path)
+        return web.json_response({"ok": True, "game": game or None})
 
     async def _api_rename(self, req: web.Request) -> web.Response:
         slug = req.match_info["slug"]
@@ -2143,12 +2213,12 @@ class ShareServer:
             old_hl.rename(HIGHLIGHTS_DIR / f"{new_slug}.json")
         keystore.move_sidecar(slug, new_slug)
         if slug != new_slug:
-            game = self._session_games.pop(slug, None)
-            stale_game = self._session_games.pop(new_slug, None)
+            game = self._clip_games.pop(slug, None)
+            stale_game = self._clip_games.pop(new_slug, None)
             if game is not None:
-                self._session_games[new_slug] = game
+                self._clip_games[new_slug] = game
             if game is not None or stale_game is not None:
-                self._save_session_games()
+                self._save_clip_games()
 
         # Playlist membership, the view counter and the editor project follow
         # the clip
@@ -2705,7 +2775,8 @@ class ShareServer:
         key_burn = None
         if body.get("keys"):
             key_burn = await asyncio.to_thread(
-                _key_burn_for, project, sources, work / "keys", accent)
+                _key_burn_for, project, sources, work / "keys", accent,
+                self.cfg.overlay.keys_hidden)
         try:
             cmd = build_export_cmd(project, sources, tmp,
                                    accent=accent,

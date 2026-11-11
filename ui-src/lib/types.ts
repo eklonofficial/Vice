@@ -19,6 +19,8 @@ export interface Clip {
   width: number | null;
   height: number | null;
   vcodec: string | null;
+  /** The H.264 preview used when this window cannot play the clip's codec. */
+  preview?: 'none' | 'working' | 'ready';
   audio_tracks?: Array<{index: number; title: string; language: string; channels: number}>;
   /** Set when ffprobe could not read the file. The clip is left on disk. */
   unreadable: boolean;

@@ -20,6 +20,7 @@ else:
 
 import tomli_w
 
+from .keys import LAYOUT_KEYS
 from .runtime import actual_home_dir, resolve_path
 
 CONFIG_DIR = actual_home_dir() / ".config" / "vice"
@@ -311,6 +312,9 @@ class OverlayConfig:
     # Also keep the keys pressed during each saved clip beside it, so the
     # viewer can show them afterwards. Only the overlay's keys are stored.
     keys_in_clips: bool = False
+    # Keys left off the panel, by the ids in keys.LAYOUT. A key here is not
+    # shown, read or kept with clips (#258).
+    keys_hidden: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -488,6 +492,10 @@ def normalize_overlay(cfg: "Config") -> None:
         ov.keys_scale = 1.0
     ov.keys = bool(ov.keys)
     ov.keys_in_clips = bool(ov.keys_in_clips)
+    raw = ov.keys_hidden if isinstance(ov.keys_hidden, (list, tuple)) else []
+    hidden = sorted({k for k in raw if k in LAYOUT_KEYS})
+    # A panel with nothing on it is never what was meant.
+    ov.keys_hidden = [] if len(hidden) == len(LAYOUT_KEYS) else hidden
 
 
 def normalize_voice(cfg: Config) -> None:

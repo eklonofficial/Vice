@@ -167,7 +167,16 @@
     "discordPreparing": "Making a Discord-sized copy",
     "discordCopied": "Copied for Discord",
     "discordCopiedDetail": "Paste it into a Discord message. It fits the free upload limit.",
-    "errDiscordCopy": "Could not copy the clip for Discord"
+    "errDiscordCopy": "Could not copy the clip for Discord",
+    "setGame": "Set game",
+    "previewPrepare": "Prepare preview",
+    "previewWorking": "Preparing preview"
+  },
+  "gameTag": {
+    "title": "Game for {name}",
+    "label": "Game",
+    "help": "Pick one from your library or type any name. Leave it empty to remove the tag.",
+    "errSave": "Could not set the game"
   },
   "playlistModal": {
     "editTitle": "Edit playlist",
@@ -342,7 +351,8 @@
     "expand": "Fill the window",
     "shrink": "Back to normal size",
     "expandHint": "Fill the window (F, or double-click)",
-    "shrinkHint": "Back to normal size (F, or Esc)"
+    "shrinkHint": "Back to normal size (F, or Esc)",
+    "game": "Game"
   },
   "trim": {
     "saved": "Clip trimmed and saved",
@@ -958,7 +968,10 @@
     "imageDirectoryHelp": "Where screenshots are written. Kept apart from clips so an image viewer is not indexing a folder of video files.",
     "soundScreenshot": "Screenshot",
     "shareDiscordFile": "Share copies a Discord file",
-    "shareDiscordFileHelp": "On: the Share button copies the clip itself, shrunk to fit Discord's free upload limit, ready to paste into a message. Off: it copies the share link. Right-click Share for the other one either way."
+    "shareDiscordFileHelp": "On: the Share button copies the clip itself, shrunk to fit Discord's free upload limit, ready to paste into a message. Off: it copies the share link. Right-click Share for the other one either way.",
+    "keyOverlayKeys": "Keys on the panel",
+    "keyOverlayKeysHelp": "Click a key to take it off the panel. A key that's off isn't shown, read or kept with your clips.",
+    "keySpace": "Space"
   },
   "whatsNew": {
     "title": "What's new in Vice {version}",

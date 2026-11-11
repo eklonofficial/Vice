@@ -32,7 +32,7 @@ class SessionGameTaggingTests(unittest.IsolatedAsyncioTestCase):
             ("vice.playlists.PLAYLISTS_PATH", self.root / "playlists.json"),
             ("vice.share.SHARE_TOKENS_PATH", self.root / "tokens.json"),
             ("vice.share.VIEWS_PATH", self.root / "views.json"),
-            ("vice.share.SESSION_GAMES_PATH", self.root / "session_games.json"),
+            ("vice.share.CLIP_GAMES_PATH", self.root / "clip_games.json"),
             ("vice.share.HIGHLIGHTS_DIR", self.root / "highlights"),
         ):
             patcher = mock.patch(target, value)
@@ -213,7 +213,7 @@ class SessionGameTaggingTests(unittest.IsolatedAsyncioTestCase):
 
         d.share.add_clip(renamed, game="Counter-Strike 2", session=True)
         await d.share._api_delete(mock.Mock(match_info={"slug": slug}))
-        self.assertEqual(json.loads((self.root / "session_games.json").read_text()), {})
+        self.assertEqual(json.loads((self.root / "clip_games.json").read_text()), {})
 
     async def test_sessions_keep_custom_steam_and_visible_window_detection(self) -> None:
         d = self.daemon

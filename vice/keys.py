@@ -51,6 +51,8 @@ class KeyRing:
 
     def __init__(self, horizon: float) -> None:
         self.horizon = horizon
+        # Keys the user took off the panel: never recorded (#258).
+        self.hidden: frozenset[str] = frozenset()
         self._events: deque[tuple[float, str, bool]] = deque()
         # Several physical keys can share one layout key (both shifts), so a
         # key is up only when every one of them is.
@@ -60,7 +62,7 @@ class KeyRing:
         """Note one key event. Returns (layout key, now down) when what the
         layout shows changed, None otherwise."""
         key = EVDEV_TO_KEY.get(evdev_name)
-        if key is None:
+        if key is None or key in self.hidden:
             return None
         now = time.monotonic() if at is None else at
         held = self._held.setdefault(key, set())
@@ -74,6 +76,13 @@ class KeyRing:
         self._events.append((now, key, bool(held)))
         self._trim(now)
         return key, bool(held)
+
+    def hide(self, keys: Iterable[str]) -> None:
+        """Stop recording *keys*, and forget what was already kept of them."""
+        self.hidden = frozenset(keys)
+        for key in self.hidden:
+            self._held.pop(key, None)
+        self._events = deque(e for e in self._events if e[1] not in self.hidden)
 
     def _trim(self, now: float) -> None:
         cutoff = now - self.horizon
