@@ -319,7 +319,8 @@
     "startOfSelection": "Início da seleção",
     "endOfSelection": "Fim da seleção",
     "trimAria": "Recortar {name}",
-    "heading": "Recortar"
+    "heading": "Recortar",
+    "working": "Recortando. Isso pode levar alguns minutos."
   },
   "images": {
     "heading": "Imagens",

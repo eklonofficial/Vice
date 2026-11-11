@@ -1195,6 +1195,70 @@ class TrimKeyframeTests(unittest.IsolatedAsyncioTestCase):
 
 
 @unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
+class TrimOverlapTests(unittest.IsolatedAsyncioTestCase):
+    """#281: a second trim started while the first was still running wrote the
+    same .trimming file and corrupted the clip."""
+
+    def _server(self, root: Path) -> "ShareServer":
+        cfg = Config()
+        cfg.output.directory = str(root)
+        server = ShareServer(cfg)
+        src = root / "Vice_Clip_1.mp4"
+        src.write_bytes(b"original")
+        server._clips["Vice_Clip_1"] = src
+        return server
+
+    def _req(self) -> mock.MagicMock:
+        req = mock.MagicMock()
+        req.match_info = {"slug": "Vice_Clip_1"}
+        req.json = mock.AsyncMock(return_value={"start": 1.0, "end": 3.0})
+        return req
+
+    async def test_a_second_trim_on_the_same_clip_is_refused_while_one_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._server(Path(tmp))
+            started = asyncio.Event()
+            release = asyncio.Event()
+            calls = []
+
+            async def slow_trim(req, slug, path):
+                calls.append(slug)
+                started.set()
+                await release.wait()
+                return mock.MagicMock(status=200)
+
+            with mock.patch.object(server, "_trim_clip", new=slow_trim):
+                first = asyncio.ensure_future(server._api_trim(self._req()))
+                await started.wait()
+
+                second = await server._api_trim(self._req())
+                self.assertEqual(second.status, 409)
+                self.assertFalse(json.loads(second.text)["ok"])
+                self.assertEqual(calls, ["Vice_Clip_1"], "the second trim must not start")
+
+                release.set()
+                await first
+
+    async def test_the_clip_can_be_trimmed_again_once_the_first_trim_ends(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._server(Path(tmp))
+            ok = mock.MagicMock(status=200)
+            with mock.patch.object(server, "_trim_clip", new=mock.AsyncMock(return_value=ok)):
+                await server._api_trim(self._req())
+                self.assertNotIn("Vice_Clip_1", server._trimming)
+                await server._api_trim(self._req())
+
+    async def test_a_failed_trim_releases_the_clip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._server(Path(tmp))
+            boom = mock.AsyncMock(side_effect=RuntimeError("ffmpeg died"))
+            with mock.patch.object(server, "_trim_clip", new=boom):
+                with self.assertRaises(RuntimeError):
+                    await server._api_trim(self._req())
+            self.assertNotIn("Vice_Clip_1", server._trimming)
+
+
+@unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
 class TrimEncoderTests(unittest.IsolatedAsyncioTestCase):
     """#172: a trim that has to re-encode used to hardcode libx264, so every
     H.265 recording came back as H.264 whatever the user set Video codec to."""
