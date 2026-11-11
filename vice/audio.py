@@ -28,6 +28,7 @@ import struct
 import wave
 from pathlib import Path
 from typing import Optional
+from urllib.parse import unquote, urlsplit
 
 log = logging.getLogger("vice.audio")
 
@@ -156,6 +157,17 @@ def _player_cmd(player: str, wav_path: Path) -> list[str]:
     return [player, str(wav_path)]
 
 
+def _pasted_path(value: str) -> str:
+    """The path in a settings value, which is usually pasted: file managers
+    copy a location quoted or as a file:// URI (#297)."""
+    text = value.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"":
+        text = text[1:-1].strip()
+    if text.lower().startswith("file://"):
+        text = unquote(urlsplit(text).path)
+    return text
+
+
 def resolve_custom_sound(custom: Optional[str]) -> Optional[Path]:
     """A usable path for a user-supplied sound, or None to use the tone.
 
@@ -165,7 +177,7 @@ def resolve_custom_sound(custom: Optional[str]) -> Optional[Path]:
     """
     if not custom or not str(custom).strip():
         return None
-    path = Path(os.path.expanduser(str(custom).strip()))
+    path = Path(os.path.expanduser(_pasted_path(str(custom))))
     try:
         if not path.is_file():
             missing = "does not exist" if not path.exists() else "is not a file"
@@ -183,6 +195,31 @@ def resolve_custom_sound(custom: Optional[str]) -> Optional[Path]:
     return path
 
 
+async def _run_player(player: str, sound: Path) -> Optional[str]:
+    """Play *sound*. None when it played, otherwise why it did not."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *_player_cmd(player, sound),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except OSError as exc:
+        return str(exc)
+    try:
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+    except asyncio.TimeoutError:
+        # A custom file can legitimately be longer than a tone, but not so
+        # long that it stacks up player processes.
+        try:
+            proc.kill()
+        except ProcessLookupError as exc:
+            log.debug("Notification player had already exited: %s", exc)
+        return None
+    if proc.returncode == 0:
+        return None
+    return (stderr or b"").decode(errors="replace").strip()[:200] or f"exit code {proc.returncode}"
+
+
 async def _play(name: str, volume: float, custom: Optional[str] = None) -> None:
     player = _find_player()
     if not player:
@@ -190,37 +227,30 @@ async def _play(name: str, volume: float, custom: Optional[str] = None) -> None:
         return
 
     sound = resolve_custom_sound(custom)
-    if sound is None:
-        wav_data = _wav_for(name, volume)
-        # One file per sound and volume, written only when it is not already
-        # there: two clips in quick succession used to rewrite a single shared
-        # path while the previous player still had it open.
-        level = int(round(_clamp_volume(volume) * 100))
-        sound = _TMP_DIR / f"snd_{name}_{level}.wav"
-        try:
-            _TMP_DIR.mkdir(parents=True, exist_ok=True)
-            if not sound.exists() or sound.stat().st_size != len(wav_data):
-                sound.write_bytes(wav_data)
-        except OSError as exc:
-            log.debug("Failed to write notification WAV: %s", exc)
+    if sound is not None:
+        problem = await _run_player(player, sound)
+        if problem is None:
             return
+        log.warning("Notification sound %s would not play (%s), using the built-in tone",
+                    sound, problem)
 
+    wav_data = _wav_for(name, volume)
+    # One file per sound and volume, written only when it is not already
+    # there: two clips in quick succession used to rewrite a single shared
+    # path while the previous player still had it open.
+    level = int(round(_clamp_volume(volume) * 100))
+    tone = _TMP_DIR / f"snd_{name}_{level}.wav"
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *_player_cmd(player, sound),
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        await asyncio.wait_for(proc.wait(), timeout=10)
-    except asyncio.TimeoutError:
-        # A custom file can legitimately be longer than a tone, but not so
-        # long that it stacks up player processes.
-        try:
-            proc.kill()
-        except Exception as exc:
-            log.debug("Notification player had already exited: %s", exc)
-    except Exception as exc:
-        log.debug("Audio playback error: %s", exc)
+        _TMP_DIR.mkdir(parents=True, exist_ok=True)
+        if not tone.exists() or tone.stat().st_size != len(wav_data):
+            tone.write_bytes(wav_data)
+    except OSError as exc:
+        log.debug("Failed to write notification WAV: %s", exc)
+        return
+
+    problem = await _run_player(player, tone)
+    if problem is not None:
+        log.debug("Audio playback error: %s", problem)
 
 
 # ── Public helpers (fire-and-forget, safe to call from any async context) ──────

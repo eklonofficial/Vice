@@ -2887,7 +2887,9 @@ class ShareServer:
         # Apply live (some settings still require daemon restart, e.g. recorder
         # backend). vice-app reads "ui" at startup and on close/minimize;
         # carry it across so self.cfg still matches what is on disk.
-        for field in ("recording", "hotkeys", "output", "sharing", "discord", "ui", "overlay"):
+        # "notifications" is read each time a sound plays (#297).
+        for field in ("recording", "hotkeys", "output", "sharing", "discord", "ui", "overlay",
+                      "notifications"):
             setattr(self.cfg, field, getattr(new_cfg, field))
 
         apply_error: str | None = None

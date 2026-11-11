@@ -1843,6 +1843,26 @@ class ShareServerConfigApiTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(win.destroy.call_count, 0 if opt_in else 1)
                         shutdown.assert_not_called()
 
+    async def test_notification_settings_apply_without_a_restart(self) -> None:
+        # #297: the daemon reads self.cfg when it plays a sound, so a section
+        # left out of the live copy only changes after a restart.
+        from vice import config
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch.object(config, "CONFIG_DIR", root), mock.patch.object(
+                config, "CONFIG_PATH", root / "config.toml"
+            ):
+                cfg = Config()
+                config.save(cfg)
+                server = ShareServer(cfg)
+                response = await server._api_set_config(_JsonRequest({
+                    "notifications": {"clip_sound": "~/ping.wav", "sound_volume": 0.4},
+                }))
+                self.assertTrue(json.loads(response.text)["ok"])
+                self.assertEqual(cfg.notifications.clip_sound, "~/ping.wav")
+                self.assertEqual(cfg.notifications.sound_volume, 0.4)
+
     async def test_api_set_config_saves_clip_presets_and_grows_buffer(self) -> None:
         server = ShareServer(
             Config(
