@@ -39,6 +39,7 @@ optdepends=(
     'python-gobject: keyboard overlay'
     'python-cairo: keyboard overlay'
     'gtk-layer-shell: keyboard overlay on Wayland'
+    'python-vosk-git: voice clipping'
 )
 makedepends=(
     'python-build'

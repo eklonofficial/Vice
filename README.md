@@ -432,6 +432,7 @@ Vice is better because these people sent patches:
 - [@suriyahs](https://github.com/suriyahs), for game icons in Discord presence and naming any installed Steam game
 - [@MLG993](https://github.com/MLG993), for the German translation
 - [@milan483](https://github.com/milan483), for the Indonesian translation, freeing the window's memory on close, and keeping a session's game
+- [@Cryptorial0](https://github.com/Cryptorial0), for voice clipping
 
 And to everyone who has opened an issue with a log attached: that is most of how the hard bugs get found.
 
