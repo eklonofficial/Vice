@@ -53,6 +53,7 @@ from .media import cleanup_temp_files, probe_media
 from .overlay_host import KeyOverlayHost
 from .platform_info import detect_platform
 from . import gsr_install
+from .voice import VoiceListener, get_model_path, is_vosk_available
 from .recorder import (GSR_WINDOW_CAPTURE_WAYLAND_ERROR, GSRRecorder, capture_screenshot,
                        create_recorder, filename_tag, gsr_flatpak_installed, gsr_source,
                        refresh_gsr_probes,
@@ -200,6 +201,7 @@ class ViceDaemon:
         # clips, the host runs the on-screen panel. Both idle until enabled.
         self.key_ring: Optional[KeyRing] = None
         self.key_overlay = KeyOverlayHost(self._on_key_overlay_moved, self._on_key_overlay_state)
+        self.voice = VoiceListener(on_trigger=self._handle_clip_hotkey)
         self.hotkeys_available = can_access_hotkeys()
         self._clip_lock  = asyncio.Lock()
         self._clip_count = 0
@@ -452,6 +454,8 @@ class ViceDaemon:
         self._sync_follow_mouse_task()
         self._sync_window_capture_task()
         await self._sync_key_overlay()
+        if self.voice:
+            await self.voice.sync(self.cfg.voice, self.cfg.recording.microphone_source)
 
         if self.cfg.updates.check_on_start:
             self._update_task = asyncio.create_task(self._update_check_soon())
@@ -1098,6 +1102,8 @@ class ViceDaemon:
 
             await self._sync_discord_presence_task()
             await self._sync_key_overlay()
+            if self.voice:
+                await self.voice.sync(self.cfg.voice, self.cfg.recording.microphone_source)
 
             if self.share:
                 await self.share.broadcast({
@@ -1499,6 +1505,7 @@ class ViceDaemon:
             # the check still learns about it.
             "update":           self._update,
             "key_overlay":      self.key_overlay.state() if hasattr(self, "key_overlay") else None,
+            "voice":            self.voice.state() if hasattr(self, "voice") and self.voice else None,
             # Which gpu-screen-recorder runs, and whether the Flatpak one is
             # there to choose in Settings.
             "gsr":              {"source": gsr_source(), "flatpak": gsr_flatpak_installed()},
@@ -1558,6 +1565,11 @@ class ViceDaemon:
             await self.key_overlay.stop()
         except Exception:
             log.exception("Stopping the keyboard overlay failed")
+        if hasattr(self, "voice") and self.voice:
+            try:
+                await self.voice.stop()
+            except Exception:
+                log.exception("Stopping voice clipping failed")
         if self._watchdog_task and not self._watchdog_task.done():
             self._watchdog_task.cancel()
             try:
@@ -2439,6 +2451,13 @@ def doctor() -> None:
                f"{'installed' if gsr_flatpak_installed() else '(not installed)'}")
     click.echo(f"  gpu-screen-recorder in use: {gsr_source() or '(none)'} "
                f"(recording.gsr_source = {cfg.recording.gsr_source})")
+    click.echo(f"  vosk (offline speech): {'installed' if is_vosk_available() else '(not installed)'}")
+    voice_cfg = getattr(cfg, "voice", None)
+    raw_model_path = getattr(voice_cfg, "model_path", "") if voice_cfg else ""
+    model_path = get_model_path(raw_model_path)
+    click.echo(f"  vosk model: {model_path or '(not found - see README)'}")
+    voice_enabled = getattr(voice_cfg, "enabled", False) is True
+    click.echo(f"  voice clipping: {'enabled' if voice_enabled else 'disabled'}")
     click.echo("")
 
     # From this shell, which is not necessarily what the daemon's environment
