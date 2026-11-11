@@ -39,6 +39,7 @@ export interface Draft {
   /** Percent per separate track, keyed by source id. Missing means 100. */
   audioTrackVolumes: Record<string, number>;
   micVolume: number;
+  soundPack: string;
   notifyVolume: number;
   sounds: Record<SoundKey, string>;
   audioTracks: string[];
@@ -153,6 +154,7 @@ export function draftFromConfig(config: Config): Draft {
     desktopVolume: Math.round(num(r.desktop_volume, 1) * 100),
     micVolume: Math.round(num(r.microphone_volume, 1) * 100),
     notifyVolume: Math.round(num(n.sound_volume, 1) * 100),
+    soundPack: str(n.sound_pack, 'classic'),
     sounds: Object.fromEntries(
       SOUND_FIELDS.map(([key]) => [key, str(n[key], '')]),
     ) as Record<SoundKey, string>,
@@ -303,6 +305,7 @@ export function patchFromDraft(draft: Draft): Record<string, Record<string, unkn
     updates: {check_on_start: draft.checkForUpdates},
     notifications: {
       sound_volume: draft.notifyVolume / 100,
+      sound_pack: draft.soundPack,
       ...Object.fromEntries(
         SOUND_FIELDS.map(([key]) => [key, draft.sounds[key]?.trim() || null]),
       ),

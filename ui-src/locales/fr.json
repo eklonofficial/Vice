@@ -500,7 +500,6 @@
     "red": "Rouge",
     "orange": "Orange",
     "customTitle": "Couleur personnalisée",
-    "customBody": "Choisis n'importe quelle couleur et Vice construit un schéma Material 3 complet à partir de celle-ci. Seule la teinte est conservée : les surfaces, les boutons et les tons du texte en sont déduits, de la même façon que pour les cinq préréglages.",
     "useThis": "Utiliser cette couleur",
     "hue": "Teinte",
     "saturation": "Saturation et luminosité",

@@ -465,7 +465,6 @@
     "red": "Merah",
     "orange": "Jingga",
     "customTitle": "Warna khusus",
-    "customBody": "Pilih warna apa saja dan Vice akan membuat skema Material 3 lengkap dari warna itu. Hanya rona yang diambil: warna permukaan, tombol, dan teks dihitung darinya, sama seperti lima preset yang tersedia.",
     "useThis": "Gunakan warna ini",
     "hue": "Rona",
     "saturation": "Saturasi dan kecerahan",

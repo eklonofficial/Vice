@@ -426,7 +426,6 @@
     "red": "Vermelho",
     "orange": "Laranja",
     "customTitle": "Cor personalizada",
-    "customBody": "Escolha qualquer cor e o Vice fará um esquema Material 3 completo a partir dela. Somente a matiz é necessária: as superfícies, os botões e os tons de texto são criados para funcionar com ela, da mesma forma como já é feito com as cinco cores padrão.",
     "useThis": "Usar esta cor",
     "hue": "Matiz",
     "saturation": "Saturação e brilho",

@@ -455,7 +455,6 @@
     "red": "Rot",
     "orange": "Orange",
     "customTitle": "Eigene Farbe",
-    "customBody": "Such dir eine beliebige Farbe aus, und Vice baut daraus ein komplettes Material-3-Schema. Übernommen wird nur der Farbton: Flächen, Buttons und Textfarben werden daraus abgeleitet, genau wie bei den fünf Vorgaben.",
     "useThis": "Diese Farbe verwenden",
     "hue": "Farbton",
     "saturation": "Sättigung und Helligkeit",

@@ -64,6 +64,7 @@ export const api = {
   deleteClip: (slug: string) => request<void>(`/api/clips/${enc(slug)}`, {method: 'DELETE'}),
   renameClip: (slug: string, name: string) => post<Clip>(`/api/clips/${enc(slug)}/rename`, {name}),
   setClipGame: (slug: string, game: string) => post<{ok: boolean}>(`/api/clips/${enc(slug)}/game`, {game}),
+  previewSound: (pack: string, sound = 'clip') => post<{ok: boolean}>('/api/sounds/preview', {pack, sound}),
   prepareClipPreview: (slug: string) => post<{ok: boolean}>(`/api/clips/${enc(slug)}/prepare-preview`),
   revealClip: (slug: string) => post<void>(`/api/clips/${enc(slug)}/reveal`),
   openClip: (slug: string) => post<void>(`/api/clips/${enc(slug)}/open`),

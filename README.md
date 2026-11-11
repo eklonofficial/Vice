@@ -140,6 +140,8 @@ The Flatpak also works on any other distro with Flatpak installed.
 
 **Your keys on screen.** A keyboard overlay shows the keys you press over your game, for streams and clips, in your theme colour. Drag it anywhere or pick a corner, and label the keys for AZERTY or QWERTY. Pick which keys are on it in Settings. Vice can also keep the keys with each clip to show in the viewer or burn into an editor export. Off until you turn it on; only the overlay's own keys are ever read. Needs X11, or a Wayland desktop with layer-shell (KDE Plasma, Hyprland, Sway, Niri).
 
+**Two sets of sounds.** The clip and session sounds come as Classic tones or a Futuristic pack. Pick one in Settings, or use your own files.
+
 **Stays out of the way.** List the apps that clip on their own keys and Vice ignores its hotkeys while they are focused.
 
 **Tune it to taste.** Custom `gpu-screen-recorder` flags and arguments, 8-bit or 10-bit colour, color themes, and fully rebindable hotkeys, all from Settings.
@@ -433,6 +435,7 @@ Vice is better because these people sent patches:
 - [@MLG993](https://github.com/MLG993), for the German translation
 - [@milan483](https://github.com/milan483), for the Indonesian translation, freeing the window's memory on close, and keeping a session's game
 - [@Cryptorial0](https://github.com/Cryptorial0), for voice clipping
+- [@LeonnJD](https://github.com/LeonnJD), for the Futuristic sound pack
 
 And to everyone who has opened an issue with a log attached: that is most of how the hard bugs get found.
 

@@ -35,6 +35,7 @@ import {useAccentChoice} from '../lib/accentChoice';
 import {customAccent as deriveCustom} from '../theme/viceTheme';
 import {AudioTracks, type AudioSource} from '../components/settings/AudioTracks';
 import {KeyPicker} from '../components/settings/KeyPicker';
+import {SoundPackPicker} from '../components/settings/SoundPackPicker';
 import {KeyCapture} from '../components/settings/KeyCapture';
 import {
   Row,
@@ -690,6 +691,10 @@ export function Settings() {
               onChange={notifyVolume => update({notifyVolume})}
               format={v => (v > 0 ? `${v}%` : t('settings.volumeOff'))}
             />
+          </Row>
+
+          <Row label={t('sounds.label')}>
+            <SoundPackPicker value={draft.soundPack} onChange={soundPack => update({soundPack})} />
           </Row>
 
           <Row

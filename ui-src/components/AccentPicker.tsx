@@ -146,7 +146,6 @@ export function AccentPicker({
         </button>
       </>
     }>
-      <p className="ap-lede">{t('accents.customBody')}</p>
 
       <div
         className="ap-square"
