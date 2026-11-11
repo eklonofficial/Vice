@@ -260,6 +260,8 @@ export function TrimModal({
               ref={videoRef}
               className="trim-video"
               controls
+              controlsList="nodownload noplaybackrate noremoteplayback"
+              disablePictureInPicture
               playsInline
               onLoadedMetadata={e => {
                 const seconds = Number.isFinite(e.currentTarget.duration)

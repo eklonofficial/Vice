@@ -159,8 +159,6 @@
 }
 
 .ed-lib-clip {
-  border-radius: var(--radius-element);
-  overflow: hidden;
   cursor: grab;
   transition: transform var(--duration-fast) var(--ease-standard);
 }
@@ -654,6 +652,7 @@
 
 .ed-tl-canvas {
   position: relative;
+  min-width: 100%;
   min-height: 100%;
 }
 
@@ -751,7 +750,7 @@
 
 .ed-rail-type {
   font-size: 11px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.02em;
   color: var(--color-text-disabled);
 }
 
