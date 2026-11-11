@@ -70,7 +70,8 @@ interface DisplayInfo {
 
 export function Settings() {
   const {state, saveConfig, notify} = useStore();
-  const {choose, chooseCustom, seed} = useAccentChoice();
+  const {choose, chooseCustom, chooseMatugen, seed} = useAccentChoice();
+  const matugenColors = state.matugen;
   const [picking, setPicking] = useState(false);
   const customBase = seed ? deriveCustom(seed).ramp.base : null;
   const {config, accent, status} = state;
@@ -1293,6 +1294,19 @@ export function Settings() {
                 onClick={() => setPicking(true)}>
                 {accent === 'custom' ? <IconCheck size={13} /> : <IconPlus size={13} />}
               </button>
+              {matugenColors ? (
+                <button
+                  type="button"
+                  className="swatch"
+                  data-active={accent === 'matugen' || undefined}
+                  style={{background: matugenColors.primary}}
+                  title={t('accents.matugen')}
+                  aria-label={t('accents.matugen')}
+                  aria-pressed={accent === 'matugen'}
+                  onClick={chooseMatugen}>
+                  {accent === 'matugen' ? <IconCheck size={13} /> : null}
+                </button>
+              ) : null}
             </div>
           </Row>
 

@@ -24,13 +24,13 @@
   var name = null, bg = null, ac = null;
   try {
     name = localStorage.getItem('vice-theme');
-    if (name === 'custom') {
+    if (name === 'custom' || name === 'matugen') {
       // A custom accent's scheme is derived by Material 3 in the bundle, which
       // has not parsed yet and is far too large to run here. The two colours
       // the cover needs are cached beside the seed when the user confirms it.
       var hex = /^#[0-9a-f]{6}$/i;
-      var b = localStorage.getItem('vice-custom-bg');
-      var a = localStorage.getItem('vice-custom-base');
+      var b = localStorage.getItem('vice-' + name + '-bg');
+      var a = localStorage.getItem('vice-' + name + '-base');
       if (hex.test(b || '') && hex.test(a || '')) { bg = b; ac = a; }
     }
   } catch (e) { name = null; }

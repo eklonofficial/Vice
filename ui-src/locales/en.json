@@ -519,7 +519,8 @@
     "previewPrimary": "Save clip",
     "previewQuiet": "Trim",
     "previewChip": "Deadlock",
-    "lowContrast": "This colour does not leave enough contrast to read comfortably. Vice has lightened the accent as far as it can; try something less dark."
+    "lowContrast": "This colour does not leave enough contrast to read comfortably. Vice has lightened the accent as far as it can; try something less dark.",
+    "matugen": "Matugen"
   },
   "events": {
     "clipSaved": "Clip saved",
@@ -930,13 +931,13 @@
     "effectsAuto": "Auto",
     "effectsFull": "Full",
     "effectsReduced": "Reduced",
-    "effectsSoftware": "This window is compositing in software, so effects are reduced.",
-    "effectsSlow": "Frames are arriving too slowly here, so effects are reduced.",
-    "effectsKeepingUp": "Frames are keeping up, so the full treatment is on.",
+    "effectsSoftware": "Reduced, because this window isn't using the GPU.",
+    "effectsSlow": "Reduced, because Vice is running slowly here.",
+    "effectsKeepingUp": "Running smoothly, so effects are on.",
     "effectsMeasuring": "Measuring.",
     "gsrArgs": "Extra gpu-screen-recorder arguments",
     "checkForUpdates": "Check for updates",
-    "checkForUpdatesHelp": "Ask GitHub once a day whether a newer Vice is out. Nothing about you or your clips is sent.",
+    "checkForUpdatesHelp": "Check for a new version once a day. Nothing about you is sent.",
     "checkNow": "Check now",
     "checkNowHelp": "Look straight away, ignoring the daily wait.",
     "checking": "Checking",
@@ -959,7 +960,7 @@
     "discordGameIcons": "Show the game's icon",
     "discordGameIconsHelp": "Show the game's icon on your Discord profile.",
     "discordCustomGamesHelp": "One game per line: {format}.",
-    "gsrArgsHelp": "Appended to the recorder command as written. Example: {example}",
+    "gsrArgsHelp": "Extra flags for gpu-screen-recorder, for example {example}",
     "language": "Language",
     "languageHelp": "Missing your language? You can help translate Vice on GitHub.",
     "screenshotKey": "Screenshot key",
@@ -984,6 +985,10 @@
       "soundPacks": {
         "title": "New sounds",
         "body": "Pick Classic or Futuristic under Settings, Audio."
+      },
+      "matugen": {
+        "title": "Matugen colours",
+        "body": "Run vice matugen once, and Vice follows your wallpaper. Pick Matugen under Settings, Appearance."
       },
       "gameTags": {
         "title": "Set a clip's game",

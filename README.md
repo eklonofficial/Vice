@@ -140,6 +140,8 @@ The Flatpak also works on any other distro with Flatpak installed.
 
 **Your keys on screen.** A keyboard overlay shows the keys you press over your game, for streams and clips, in your theme colour. Drag it anywhere or pick a corner, and label the keys for AZERTY or QWERTY. Pick which keys are on it in Settings. Vice can also keep the keys with each clip to show in the viewer or burn into an editor export. Off until you turn it on; only the overlay's own keys are ever read. Needs X11, or a Wayland desktop with layer-shell (KDE Plasma, Hyprland, Sway, Niri).
 
+**Matches your desktop.** Five accents, any colour you pick, or your wallpaper's colours through matugen.
+
 **Two sets of sounds.** The clip and session sounds come as Classic tones or a Futuristic pack. Pick one in Settings, or use your own files.
 
 **Stays out of the way.** List the apps that clip on their own keys and Vice ignores its hotkeys while they are focused.
@@ -306,6 +308,16 @@ Voice clipping runs completely offline using [Vosk](https://alphacephei.com/vosk
    rm vosk-model-small-en-us-0.15.zip
    ```
 3. Enable **Voice clipping** in Settings under **Audio** (or in `~/.config/vice/config.toml`). Vice listens for **"Vice, clip that"** and **"Clip that"**, plus any custom trigger phrase you set.
+
+### Matugen colours
+
+Vice can take its colours from [matugen](https://github.com/InioX/matugen), so it matches your wallpaper. Run:
+
+```bash
+vice matugen
+```
+
+It prints a few lines to add to `~/.config/matugen/config.toml`. Run matugen as usual, then pick Matugen under Settings, Appearance. Vice recolours itself each time matugen runs.
 
 ## Troubleshooting
 

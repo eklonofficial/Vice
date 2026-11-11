@@ -219,6 +219,33 @@ def _save_views(views: dict[str, int]) -> None:
     tmp.replace(VIEWS_PATH)
 
 
+# Colours written by matugen from the template `vice matugen` sets up (#295).
+MATUGEN_PATH = actual_home_dir() / ".config" / "vice" / "matugen.json"
+_HEX = re.compile(r"#[0-9a-fA-F]{6}")
+
+
+def load_matugen() -> Optional[dict[str, str]]:
+    """The matugen scheme, or None when there is none or it is incomplete.
+    Every role in the template has to be there, so a template from another
+    app cannot half-theme Vice."""
+    try:
+        roles = json.loads((_pkg_files("vice") / "data" / "matugen.json").read_text())
+        data = json.loads(MATUGEN_PATH.read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        log.warning("Matugen colours in %s cannot be read: %s", MATUGEN_PATH, exc)
+        return None
+    if not isinstance(data, dict):
+        return None
+    colours = {role: str(data.get(role, "")).lower() for role in roles}
+    missing = [role for role, value in colours.items() if not _HEX.fullmatch(value)]
+    if missing:
+        log.warning("Matugen colours in %s are missing %s", MATUGEN_PATH, ", ".join(missing))
+        return None
+    return colours
+
+
 # A clip's game when it is not simply its auto playlist's: captured when a
 # session started, or set by hand. An empty string is a game cleared by hand.
 CLIP_GAMES_PATH = actual_home_dir() / ".local" / "share" / "vice" / "clip_games.json"
@@ -1140,6 +1167,7 @@ class ShareServer:
 
         self._tunnel_proc: Optional[asyncio.subprocess.Process] = None
         self._tunnel_task: Optional[asyncio.Task] = None
+        self._matugen_task: Optional[asyncio.Task] = None
         self._tunnel_stopping = False
         self._tunnel_url:  Optional[str] = None
         self._local_base_url: Optional[str] = None
@@ -1229,6 +1257,7 @@ class ShareServer:
         r.add_post("/api/playlists/{pid}/clips",           self._api_playlist_add_clip)
         r.add_delete("/api/playlists/{pid}/clips/{slug}",  self._api_playlist_remove_clip)
         r.add_get("/api/config",               self._api_get_config)
+        r.add_get("/api/theme/matugen",        self._api_matugen)
         r.add_get("/api/displays",             self._api_get_displays)
         r.add_get("/api/audio-sources",        self._api_get_audio_sources)
         r.add_post("/api/config",              self._api_set_config)
@@ -1277,6 +1306,7 @@ class ShareServer:
         public_port = self.cfg.sharing.public_port or (local_port + 1)
         public_host = _local_ip()
 
+        self._matugen_task = asyncio.create_task(self._watch_matugen())
         self._local_runner = web.AppRunner(self._local_app, access_log=None)
         await self._local_runner.setup()
         self._local_site = web.TCPSite(self._local_runner, "127.0.0.1", local_port)
@@ -1313,7 +1343,30 @@ class ShareServer:
         if self.cfg.sharing.cloudflare_tunnel:
             await self._start_tunnel(public_port)
 
+    async def _watch_matugen(self) -> None:
+        """Follow matugen's output, so a new wallpaper recolours an open window."""
+        last = None
+        while True:
+            try:
+                st = MATUGEN_PATH.stat()
+                stamp = (st.st_mtime_ns, st.st_size)
+            except OSError:
+                stamp = None
+            if stamp != last:
+                if last is not None or stamp is not None:
+                    await self.broadcast({"type": "matugen", "colors": load_matugen()})
+                last = stamp
+            await asyncio.sleep(2)
+
+    async def _api_matugen(self, _: web.Request) -> web.Response:
+        return web.json_response({"colors": load_matugen()})
+
     async def stop(self) -> None:
+        matugen_task = getattr(self, "_matugen_task", None)
+        if matugen_task:
+            matugen_task.cancel()
+            await asyncio.gather(matugen_task, return_exceptions=True)
+            self._matugen_task = None
         self._proxy_stopping = True
         tasks = list(self._proxy_tasks)
         for task in tasks:

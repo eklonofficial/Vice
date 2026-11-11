@@ -2506,6 +2506,23 @@ def open_config() -> None:
     os.execlp(editor, editor, str(CONFIG_PATH))
 
 
+@cli.command()
+def matugen() -> None:
+    """Set up matugen to colour Vice from your wallpaper."""
+    from importlib.resources import files as pkg_files
+    from .share import MATUGEN_PATH
+    # Copied out of the package so matugen can read it from any install,
+    # the Flatpak included.
+    template = MATUGEN_PATH.with_name("matugen-template.json")
+    template.parent.mkdir(parents=True, exist_ok=True)
+    template.write_text((pkg_files("vice") / "data" / "matugen.json").read_text())
+    click.echo("Add this to ~/.config/matugen/config.toml:\n")
+    click.echo("[templates.vice]")
+    click.echo(f"input_path = '{template}'")
+    click.echo(f"output_path = '{MATUGEN_PATH}'")
+    click.echo("\nThen run matugen and pick Matugen under Settings, Appearance.")
+
+
 @cli.command("list-keys")
 @click.option("--filter", "filt", default="", help="Filter by substring.")
 def list_keys(filt: str) -> None:

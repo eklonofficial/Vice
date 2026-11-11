@@ -1195,6 +1195,56 @@ class TrimKeyframeTests(unittest.IsolatedAsyncioTestCase):
 
 
 @unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
+class MatugenTests(unittest.IsolatedAsyncioTestCase):
+    """#295: Vice can take its colours from matugen."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "matugen.json"
+        patcher = mock.patch.object(_share, "MATUGEN_PATH", self.path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        from importlib.resources import files
+        self.roles = list(json.loads((files("vice") / "data" / "matugen.json").read_text()))
+
+    def test_a_full_scheme_is_read(self) -> None:
+        self.path.write_text(json.dumps({role: "#A1B2C3" for role in self.roles}))
+        self.assertEqual(_share.load_matugen(), {role: "#a1b2c3" for role in self.roles})
+
+    def test_nothing_without_the_file(self) -> None:
+        self.assertIsNone(_share.load_matugen())
+
+    def test_an_incomplete_or_unrendered_scheme_is_ignored(self) -> None:
+        scheme = {role: "#a1b2c3" for role in self.roles}
+        scheme["primary"] = "{{colors.primary.dark.hex}}"
+        self.path.write_text(json.dumps(scheme))
+        with self.assertLogs("vice.share", level="WARNING"):
+            self.assertIsNone(_share.load_matugen())
+
+    async def test_a_change_is_pushed_to_open_windows(self) -> None:
+        server = ShareServer.__new__(ShareServer)
+        server.broadcast = mock.AsyncMock()
+        with mock.patch.object(_share.asyncio, "sleep", new=mock.AsyncMock(side_effect=[None, asyncio.CancelledError])):
+            self.path.write_text(json.dumps({role: "#a1b2c3" for role in self.roles}))
+            with self.assertRaises(asyncio.CancelledError):
+                await server._watch_matugen()
+        server.broadcast.assert_awaited_once()
+        self.assertEqual(server.broadcast.await_args.args[0]["type"], "matugen")
+
+    def test_the_command_writes_a_template_matugen_can_read(self) -> None:
+        from click.testing import CliRunner
+        from vice import main as main_mod
+        with mock.patch("vice.main.normalize_runtime_environment", create=True):
+            result = CliRunner().invoke(main_mod.cli, ["matugen"])
+        self.assertEqual(result.exit_code, 0, result.output)
+        template = self.path.with_name("matugen-template.json")
+        self.assertIn(f"input_path = '{template}'", result.output)
+        self.assertIn(f"output_path = '{self.path}'", result.output)
+        self.assertIn("{{colors.primary.dark.hex}}", template.read_text())
+
+
+@unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
 class ClipGameByHandTests(unittest.IsolatedAsyncioTestCase):
     """#187: a clip's game can be set when detection missed it."""
 

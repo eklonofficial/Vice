@@ -69,6 +69,8 @@ interface State {
   accent: AccentChoice;
   /** The seed for a custom accent, as #rrggbb. Null when none is saved. */
   customAccent: string | null;
+  /** Colours matugen wrote for Vice, when it has (#295). */
+  matugen: Record<string, string> | null;
   event: IslandEvent | null;
   sessionStartedAt: number | null;
   dismissed: BannerId[];
@@ -111,6 +113,7 @@ const initialState: State = {
   searchQuery: '',
   accent: DEFAULT_ACCENT,
   customAccent: null,
+  matugen: null,
   event: null,
   sessionStartedAt: null,
   dismissed: [],
@@ -132,6 +135,7 @@ type Action =
   | {type: 'setView'; view: ViewName; playlistId?: string | null}
   | {type: 'setSearch'; query: string}
   | {type: 'setAccent'; accent: AccentChoice; custom?: string | null}
+  | {type: 'setMatugen'; colors: Record<string, string> | null}
   | {type: 'setConfig'; config: Config}
   | {type: 'mergeConfig'; patch: Record<string, Record<string, unknown>>}
   | {type: 'setClips'; clips: Clip[]}
@@ -191,6 +195,9 @@ function reduce(state: State, action: Action): State {
         // not mean picking it again.
         customAccent: action.custom !== undefined ? action.custom : state.customAccent,
       };
+
+    case 'setMatugen':
+      return {...state, matugen: action.colors};
 
     case 'setConfig':
       return {...state, config: action.config};
@@ -347,6 +354,9 @@ function reduceWs(state: State, msg: WsMessage): State {
       };
     }
 
+    case 'matugen':
+      return {...state, matugen: (msg.colors as Record<string, string> | null) ?? null};
+
     case 'gsr_install': {
       const {type: _ignored, ...progress} = msg;
       return {...state, gsrInstall: progress as GsrInstall};
@@ -491,6 +501,13 @@ export function StoreProvider({children}: {children: ReactNode}) {
     };
   }, []);
 
+  useEffect(() => {
+    void api
+      .matugen()
+      .then(r => dispatch({type: 'setMatugen', colors: r.colors}))
+      .catch(err => console.debug('Reading matugen colours failed', err));
+  }, []);
+
   // The accent is a per-install preference, not a synced setting.
   useEffect(() => {
     let custom: string | null = null;
@@ -504,7 +521,8 @@ export function StoreProvider({children}: {children: ReactNode}) {
     const named = saved && (ACCENT_NAMES as string[]).includes(saved);
     // A saved 'custom' with no seed behind it is not a usable accent, so it
     // falls back rather than opening the window in a half-applied theme.
-    if (named || (saved === 'custom' && custom)) {
+    // Matugen's colours arrive from the daemon a moment later; blue stands in.
+    if (named || (saved === 'custom' && custom) || saved === 'matugen') {
       dispatch({type: 'setAccent', accent: saved as AccentChoice, custom});
     } else if (custom) {
       dispatch({type: 'setAccent', accent: DEFAULT_ACCENT, custom});

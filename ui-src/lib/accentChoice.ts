@@ -18,6 +18,7 @@ export function useAccentChoice(): {
   seed: string | null;
   choose: (name: AccentName) => void;
   chooseCustom: (seed: string) => void;
+  chooseMatugen: () => void;
 } {
   const {state, dispatch} = useStore();
 
@@ -67,5 +68,12 @@ export function useAccentChoice(): {
     [dispatch, remember, pushEmbedColour],
   );
 
-  return {accent: state.accent, seed: state.customAccent, choose, chooseCustom};
+  // The cover's colours and the embed colour are kept in step by App, since
+  // matugen can change them while the window is open.
+  const chooseMatugen = useCallback(() => {
+    dispatch({type: 'setAccent', accent: 'matugen'});
+    remember('vice-theme', 'matugen');
+  }, [dispatch, remember]);
+
+  return {accent: state.accent, seed: state.customAccent, choose, chooseCustom, chooseMatugen};
 }

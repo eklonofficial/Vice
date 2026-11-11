@@ -15,6 +15,7 @@ import './styles/editor.css';
 
 import {initLocale, subscribeLocale, t} from './lib/i18n';
 import {setNativeTrayLabels} from './lib/env';
+import {api} from './lib/api';
 import {accentVars, resolveAccent} from './theme/viceTheme';
 import {StoreProvider, useStore} from './state/store';
 import {PlaybackProvider} from './state/playback';
@@ -33,10 +34,27 @@ function syncNativeTrayLabels(): void {
 
 function App() {
   const {state} = useStore();
-  const {accent, customAccent, ready, view} = state;
+  const {accent, customAccent, matugen, ready, view} = state;
   // One resolve per render, shared by the theme, the ambient wash and the
   // custom properties, so a custom accent cannot be derived three times.
-  const {ramp, theme} = resolveAccent(accent, customAccent);
+  const {ramp, theme} = resolveAccent(accent, customAccent, matugen);
+
+  // Matugen can change the colours under an open window, so the boot cover's
+  // copy and the share embed colour follow them here rather than at the pick.
+  useEffect(() => {
+    if (accent !== 'matugen' || !matugen) return;
+    try {
+      localStorage.setItem('vice-matugen-bg', ramp.bg);
+      localStorage.setItem('vice-matugen-base', ramp.base);
+    } catch (err) {
+      console.debug('Saving the matugen colours failed', err);
+    }
+    if (state.config?.sharing?.embed_color !== ramp.base) {
+      void api.saveConfig({sharing: {embed_color: ramp.base}}).catch(err =>
+        console.debug('Saving the embed colour failed', err),
+      );
+    }
+  }, [accent, matugen, ramp.bg, ramp.base, state.config?.sharing?.embed_color]);
   const [, retranslate] = useState(0);
 
   useEffect(() => {

@@ -31,6 +31,7 @@ REDIRECTS = {
 }
 SHARE_REDIRECTS = {
     "THUMB_DIR": ROOT / "thumbs",
+    "MATUGEN_PATH": ROOT / "matugen.json",
     "PROXY_DIR": ROOT / "proxies",
     "EXPORT_WORK_DIR": ROOT / "exports",
     "HIGHLIGHTS_DIR": ROOT / "highlights",

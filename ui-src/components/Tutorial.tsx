@@ -42,7 +42,8 @@ const PAGES = [
  */
 export function Tutorial({open, onClose}: {open: boolean; onClose: () => void}) {
   const {state, hotkey, notify, saveConfig} = useStore();
-  const {choose, chooseCustom, seed} = useAccentChoice();
+  const {choose, chooseCustom, chooseMatugen, seed} = useAccentChoice();
+  const matugenColors = state.matugen;
   const [page, setPage] = useState(1);
   const [picking, setPicking] = useState(false);
 
@@ -236,6 +237,19 @@ export function Tutorial({open, onClose}: {open: boolean; onClose: () => void}) 
                 onClick={() => setPicking(true)}>
                 {accent === 'custom' ? <IconCheck size={16} /> : <IconPlus size={16} />}
               </button>
+              {matugenColors ? (
+                <button
+                  type="button"
+                  className="swatch swatch-lg"
+                  data-active={accent === 'matugen' || undefined}
+                  style={{background: matugenColors.primary}}
+                  title={t('accents.matugen')}
+                  aria-label={t('accents.matugen')}
+                  aria-pressed={accent === 'matugen'}
+                  onClick={chooseMatugen}>
+                  {accent === 'matugen' ? <IconCheck size={16} /> : null}
+                </button>
+              ) : null}
             </div>
           </>
         ) : page === 2 ? (

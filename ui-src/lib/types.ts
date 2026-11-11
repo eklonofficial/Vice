@@ -206,6 +206,7 @@ export type WsMessage =
   | ({type: 'update_available'} & UpdateInfo)
   | ({type: 'key_overlay'} & KeyOverlayState)
   | ({type: 'gsr_install'} & GsrInstall)
+  | {type: 'matugen'; colors: Record<string, string> | null}
   | {type: 'config_changed'};
 
 export type ViewName = 'home' | 'clips' | 'images' | 'editor' | 'settings' | 'about';
