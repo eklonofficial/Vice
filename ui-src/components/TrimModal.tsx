@@ -86,7 +86,8 @@ export function TrimModal({
   slugRef.current = clip?.slug ?? null;
 
   const close = () => {
-    if (clip && pendingName && pendingName !== clipTitle(clip)) onRename(clip, pendingName);
+    // While a trim runs, save() applies the name itself when it finishes.
+    if (!busy && clip && pendingName && pendingName !== clipTitle(clip)) onRename(clip, pendingName);
     setPendingName(null);
     onClose();
   };

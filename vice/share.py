@@ -1926,6 +1926,8 @@ class ShareServer:
 
     async def _api_delete(self, req: web.Request) -> web.Response:
         slug = req.match_info["slug"]
+        if slug in self._trimming:
+            return self._trim_running_response()
         path = self._clips.pop(slug, None)
         _purge_clip_discord(path)
         if path and path.exists():
@@ -1957,16 +1959,19 @@ class ShareServer:
         # get past it. Refused rather than queued: the second cut was chosen
         # against a file the first one is about to replace (#281).
         if slug in self._trimming:
-            return web.json_response(
-                {"ok": False,
-                 "error": "A trim is already running on this clip. "
-                          "Wait for it to finish."},
-                status=409)
+            return self._trim_running_response()
         self._trimming.add(slug)
         try:
             return await self._trim_clip(req, slug, path)
         finally:
             self._trimming.discard(slug)
+
+    @staticmethod
+    def _trim_running_response() -> web.Response:
+        return web.json_response(
+            {"ok": False,
+             "error": "A trim is already running on this clip. Wait for it to finish."},
+            status=409)
 
     async def _trim_clip(self, req: web.Request, slug: str, path: Path) -> web.Response:
         body  = await req.json()
@@ -2088,6 +2093,10 @@ class ShareServer:
         path = self._clips.get(slug)
         if not path or not path.exists():
             raise web.HTTPNotFound()
+
+        # The trim replaces the file at the path it started with.
+        if slug in self._trimming:
+            return self._trim_running_response()
 
         body     = await req.json()
         requested = str(body.get("name") or "").strip()

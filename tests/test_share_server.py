@@ -1312,6 +1312,21 @@ class TrimOverlapTests(unittest.IsolatedAsyncioTestCase):
                 release.set()
                 await first
 
+    async def test_a_clip_being_trimmed_cannot_be_renamed_or_deleted(self) -> None:
+        # The trim replaces the file at the path it started with, so a rename
+        # would leave the trimmed result under the old name beside the original.
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._server(Path(tmp))
+            src = server._clips["Vice_Clip_1"]
+            server._trimming.add("Vice_Clip_1")
+            req = self._req()
+            req.json = mock.AsyncMock(return_value={"name": "Renamed"})
+            renamed = await server._api_rename(req)
+            deleted = await server._api_delete(self._req())
+            self.assertEqual((renamed.status, deleted.status), (409, 409))
+            self.assertTrue(src.exists())
+            self.assertIs(server._clips["Vice_Clip_1"], src)
+
     async def test_the_clip_can_be_trimmed_again_once_the_first_trim_ends(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             server = self._server(Path(tmp))
