@@ -1,7 +1,7 @@
 import {useEffect, useRef, type RefObject} from 'react';
 
 import {t} from '../lib/i18n';
-import {KEY_LAYOUT, keysAt, type KeyInterval} from '../lib/keyLayout';
+import {keyLayoutRows, keysAt, type KeyInterval} from '../lib/keyLayout';
 import {useStore} from '../state/store';
 
 /**
@@ -21,6 +21,8 @@ export function KeyOverlay({
   const root = useRef<HTMLDivElement>(null);
   const {state} = useStore();
   const hidden = (state.config?.overlay?.keys_hidden ?? []) as string[];
+  // Which keyboard the labels are for, from Settings. QWERTY when unset.
+  const layout = state.config?.overlay?.keys_layout;
 
   useEffect(() => {
     let frame = 0;
@@ -42,7 +44,7 @@ export function KeyOverlay({
 
   return (
     <div className="key-overlay" ref={root} aria-label={t('viewer.keysAria')} role="img">
-      {KEY_LAYOUT.map((row, r) => (
+      {keyLayoutRows(layout).map((row, r) => (
         <div className="key-overlay-row" key={r}>
           {row.map(([id, label, span], k) =>
             id === null || hidden.includes(id) ? (

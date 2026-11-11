@@ -5,6 +5,7 @@ over stdin, one JSON object per line:
 
     {"t": "key", "k": "W", "d": true}
     {"t": "style", "accent": "#8ab9f3"}
+    {"t": "layout", "name": "azerty"}
     {"t": "place", "position": "bottom-left", "x": 0, "y": 0, "scale": 1.0}
     {"t": "move", "on": true}
 
@@ -31,7 +32,7 @@ import traceback
 from importlib.resources import files as _pkg_files
 from typing import Collection
 
-from .keys import LAYOUT
+from .keys import DEFAULT_KEY_LAYOUT, LAYOUT, layout_rows, normalize_key_layout
 
 PRESETS = ("bottom-left", "bottom-right", "top-left", "top-right", "bottom-center")
 EDGE = 32
@@ -90,12 +91,13 @@ def _mix(a: tuple, b: tuple, t: float) -> tuple:
     return tuple(x + (y - x) * t for x, y in zip(a, b))
 
 
-def key_rects(scale: float, hidden: Collection[str] = ()):
-    """(key, label, x, y, w, h) for every key on the panel. A key taken off it
-    leaves its space, so the rest stay where the hand expects them (#258)."""
+def key_rects(scale: float, hidden: Collection[str] = (), layout: str = DEFAULT_KEY_LAYOUT):
+    """(key, label, x, y, w, h) for every key on the panel, labelled for
+    keyboard *layout*. A key taken off it leaves its space, so the rest stay
+    where the hand expects them (#258)."""
     unit, gap, pad = UNIT * scale, GAP * scale, PAD * scale
     y = pad
-    for row in LAYOUT:
+    for row in layout_rows(layout):
         x = pad
         for key, label, span in row:
             w = span * unit + (span - 1) * gap if span >= 1 else span * unit
@@ -132,9 +134,9 @@ def _draw_cap(cr, scheme: dict, scale: float, label: str,
 
 
 def draw(cr, scheme: dict, scale: float, pressed: dict[str, float], moving: bool = False,
-         hidden: Collection[str] = ()) -> None:
+         hidden: Collection[str] = (), layout: str = DEFAULT_KEY_LAYOUT) -> None:
     """Paint the panel. *pressed* maps a key to how far into its press it is,
-    0 to 1.
+    0 to 1. *layout* picks the labels, QWERTY or AZERTY.
 
     M3 Expressive: the panel is a surface container, idle keys the tonal
     secondary container, a held key the primary, and the shape answers the
@@ -157,11 +159,12 @@ def draw(cr, scheme: dict, scale: float, pressed: dict[str, float], moving: bool
         cr.stroke()
     else:
         cr.new_path()
-    for key, label, x, y, w, h in key_rects(scale, hidden):
+    for key, label, x, y, w, h in key_rects(scale, hidden, layout):
         _draw_cap(cr, scheme, scale, label, x, y, w, h, pressed.get(key, 0.0))
 
 
-def render_burn_assets(out_dir, accent: str, scale: float, hidden: Collection[str] = ()) -> dict:
+def render_burn_assets(out_dir, accent: str, scale: float, hidden: Collection[str] = (),
+                       layout: str = DEFAULT_KEY_LAYOUT) -> dict:
     """PNGs for burning the panel into an export: the idle panel, and each
     key held, cut to its own box so ffmpeg can lay it over the panel.
 
@@ -176,11 +179,11 @@ def render_burn_assets(out_dir, accent: str, scale: float, hidden: Collection[st
     scheme = ramp_for(accent)
     width, height = panel_size(scale)
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
-    draw(cairo.Context(surface), scheme, scale, {}, hidden=hidden)
+    draw(cairo.Context(surface), scheme, scale, {}, hidden=hidden, layout=layout)
     panel = out / "panel.png"
     surface.write_to_png(str(panel))
     keys = {}
-    for key, label, x, y, w, h in key_rects(scale, hidden):
+    for key, label, x, y, w, h in key_rects(scale, hidden, layout):
         x0, y0 = math.floor(x), math.floor(y)
         cap = cairo.ImageSurface(cairo.FORMAT_ARGB32, math.ceil(x + w) - x0, math.ceil(y + h) - y0)
         cr = cairo.Context(cap)
@@ -209,6 +212,7 @@ class Overlay:
         self.moving = False
         self.drag_from: tuple[float, float] | None = None
         self.hidden: frozenset[str] = frozenset()
+        self.layout = DEFAULT_KEY_LAYOUT
         self.down: dict[str, bool] = {}
         self.progress: dict[str, float] = {}
         self.last_tick = time.monotonic()
@@ -315,6 +319,9 @@ class Overlay:
             self.custom = (int(message.get("x", EDGE) or 0), int(message.get("y", EDGE) or 0))
             self._resize()
             self._place()
+        elif kind == "layout":
+            self.layout = normalize_key_layout(message.get("name"))
+            self.area.queue_draw()
         elif kind == "hide":
             self.hidden = frozenset(str(k) for k in message.get("keys", ()))
             self.area.queue_draw()
@@ -452,7 +459,7 @@ class Overlay:
 
     def _on_draw(self, _widget, cr) -> bool:
         eased = {k: 1 - (1 - v) ** 3 for k, v in self.progress.items() if v > 0}
-        draw(cr, self.scheme, self.scale, eased, self.moving, self.hidden)
+        draw(cr, self.scheme, self.scale, eased, self.moving, self.hidden, self.layout)
         return True
 
 

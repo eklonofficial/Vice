@@ -15,6 +15,7 @@ import os
 import time
 from typing import Callable, Iterable, Optional
 
+from .keys import DEFAULT_KEY_LAYOUT, normalize_key_layout
 from .runtime import has_display, in_vice_flatpak
 
 log = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ class KeyOverlayHost:
         self._place: dict = {}
         self._accent = ""
         self._hidden: list[str] = []
+        self._layout = DEFAULT_KEY_LAYOUT
         self._moving = False
         self._starts: list[float] = []
         self.error: Optional[str] = None
@@ -49,9 +51,13 @@ class KeyOverlayHost:
     def state(self) -> dict:
         return {"running": self.running, "error": self.error, "moving": self._moving}
 
-    async def sync(self, enabled: bool, place: dict, accent: str, hidden: Iterable[str] = ()) -> None:
+    async def sync(self, enabled: bool, place: dict, accent: str, hidden: Iterable[str] = (),
+                   layout: str = DEFAULT_KEY_LAYOUT) -> None:
         """Bring the overlay in line with the settings."""
         self._wanted = enabled
+        layout = normalize_key_layout(layout)
+        changed_layout = layout != self._layout
+        self._layout = layout
         changed_place = place != self._place
         changed_accent = accent != self._accent
         changed_hidden = sorted(hidden) != self._hidden
@@ -69,6 +75,8 @@ class KeyOverlayHost:
             self._send({"t": "style", "accent": self._accent})
         if changed_hidden:
             self._send({"t": "hide", "keys": self._hidden})
+        if changed_layout:
+            self._send({"t": "layout", "name": self._layout})
 
     def key(self, key: str, down: bool) -> None:
         if self.running:
@@ -115,6 +123,9 @@ class KeyOverlayHost:
         self._send({"t": "place", **self._place})
         if self._hidden:
             self._send({"t": "hide", "keys": self._hidden})
+        if self._layout != DEFAULT_KEY_LAYOUT:
+            # The overlay starts on the default, so only a choice needs saying.
+            self._send({"t": "layout", "name": self._layout})
         self._reader = asyncio.create_task(self._read(self._proc))
         self._on_state()
 

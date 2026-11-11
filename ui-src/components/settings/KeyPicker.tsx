@@ -1,5 +1,5 @@
 import {t} from '../../lib/i18n';
-import {KEY_LAYOUT} from '../../lib/keyLayout';
+import {KEY_LAYOUT, keyLayoutRows} from '../../lib/keyLayout';
 
 const ALL_KEYS = KEY_LAYOUT.flat().flatMap(([id]) => (id ? [id] : []));
 
@@ -7,11 +7,20 @@ const ALL_KEYS = KEY_LAYOUT.flat().flatMap(([id]) => (id ? [id] : []));
  * The overlay's panel, where a click takes a key off it or puts it back
  * (#258). The last key cannot go, since an empty panel is never what was meant.
  */
-export function KeyPicker({hidden, onChange}: {hidden: string[]; onChange: (next: string[]) => void}) {
+export function KeyPicker({
+  hidden,
+  layout,
+  onChange,
+}: {
+  hidden: string[];
+  /** Which keyboard the labels are for. QWERTY when unset. */
+  layout?: string;
+  onChange: (next: string[]) => void;
+}) {
   const lastOne = hidden.length >= ALL_KEYS.length - 1;
   return (
     <div className="key-picker" role="group" aria-label={t('settings.keyOverlayKeys')}>
-      {KEY_LAYOUT.map((row, r) => (
+      {keyLayoutRows(layout).map((row, r) => (
         <div className="key-picker-row" key={r}>
           {row.map(([id, label, span], k) => {
             if (id === null) return <span key={k} style={{gridColumn: `span ${span * 2}`}} />;
