@@ -1236,6 +1236,7 @@ class ShareServer:
         r.add_post("/api/update/check",         self._api_check_update)
         r.add_post("/api/trigger",             self._api_trigger)
         r.add_post("/api/quit",                self._api_quit)
+        r.add_post("/api/sounds/preview",      self._api_preview_sound)
         r.add_post("/api/uninstall",           self._api_uninstall)
 
         # WebSocket
@@ -2879,7 +2880,8 @@ class ShareServer:
             Config, RecordingConfig, HotkeyConfig, OutputConfig, SharingConfig,
             DiscordConfig, DiscordCustomGame, UpdatesConfig, NotificationsConfig,
             UIConfig, OverlayConfig, VoiceConfig,
-            clamp_recording_limits, ensure_buffer_covers_clip_presets, normalize_overlay,
+            clamp_recording_limits, ensure_buffer_covers_clip_presets, normalize_notifications,
+            normalize_overlay,
             normalize_voice,
             normalize_clip_presets, normalize_combo, normalize_focus_blocklist,
             validate_hotkeys,
@@ -2984,6 +2986,7 @@ class ShareServer:
         ensure_buffer_covers_clip_presets(new_cfg)
         clamp_recording_limits(new_cfg)
         normalize_overlay(new_cfg)
+        normalize_notifications(new_cfg)
         normalize_voice(new_cfg)
 
         old_cfg = copy.deepcopy(self.cfg)
@@ -3087,6 +3090,19 @@ class ShareServer:
             log.debug("Manual update check failed: %s", exc)
             found = None
         return web.json_response({"ok": True, "update": found})
+
+    async def _api_preview_sound(self, req: web.Request) -> web.Response:
+        """Play a sound from a pack, so one can be chosen by ear (#300)."""
+        from . import audio
+        try:
+            body = await req.json()
+        except ValueError:
+            return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+        pack = body.get("pack") if isinstance(body, dict) else None
+        if pack not in audio.SOUND_PACKS:
+            return web.json_response({"ok": False, "error": "unknown sound pack"}, status=400)
+        audio.preview(str(body.get("sound") or "clip"), self.cfg.notifications.sound_volume, pack)
+        return web.json_response({"ok": True})
 
     async def _api_quit(self, _: web.Request) -> web.Response:
         """Stop the daemon (browser-mode quit, native window uses pywebview API)."""

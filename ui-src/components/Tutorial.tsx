@@ -11,6 +11,7 @@ import {IconCheck, IconPlus} from './Icons';
 import {AccentPicker} from './AccentPicker';
 import {useAccentChoice} from '../lib/accentChoice';
 import {customAccent as deriveCustom} from '../theme/viceTheme';
+import {SoundPackPicker} from './settings/SoundPackPicker';
 import {KeyCapture} from './settings/KeyCapture';
 import {Slider, Toggle} from './settings/Fields';
 import {ACCENTS, ACCENT_NAMES} from '../theme/accents';
@@ -268,6 +269,13 @@ export function Tutorial({open, onClose}: {open: boolean; onClose: () => void}) 
               </label>
             </div>
             <p className="tut-note">{t('tutorial.screenshotKeyNote')}</p>
+            <div className="tut-key">
+              <span>{t('sounds.label')}</span>
+              <SoundPackPicker
+                value={String(state.config?.notifications?.sound_pack ?? 'classic')}
+                onChange={pack => persist({notifications: {sound_pack: pack}})}
+              />
+            </div>
           </>
         ) : page === 3 ? (
           <>

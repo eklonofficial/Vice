@@ -13,11 +13,12 @@ Each is built at the requested volume (notifications.sound_volume) and
 cached, so changing the setting applies immediately. Volume 0 plays nothing.
 
 All playback is non-blocking (asyncio task).
-No external audio files needed, pure Python + stdlib wave module.
+Another sound pack (vice/sounds/<pack>) can stand in for the tones.
 """
 
 from __future__ import annotations
 
+import array
 import asyncio
 import io
 import logging
@@ -25,7 +26,9 @@ import math
 import os
 import shutil
 import struct
+import sys
 import wave
+from importlib.resources import files as _pkg_files
 from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote, urlsplit
@@ -115,6 +118,60 @@ _SPECS: dict[str, tuple[tuple[float, float], ...]] = {
     "screenshot":    ((1318, 0.04), (1760, 0.05)),
 }
 
+# Sound packs: "classic" is the synthesised tones above. Another pack is a
+# folder of WAVs under vice/sounds, 48 kHz stereo 16-bit like the tones (#163),
+# named after the sounds. A sound a pack does not have uses one it does
+# (_PACK_STANDINS), then the classic tone.
+CLASSIC = "classic"
+SOUND_PACKS = (CLASSIC, "futuristic")
+# Marking a highlight is the same moment as saving a clip (#300).
+_PACK_STANDINS = {"highlight": "clip"}
+
+
+def normalize_pack(pack: object) -> str:
+    value = str(pack or "").strip().lower()
+    return value if value in SOUND_PACKS else CLASSIC
+
+
+def _pack_frames(pack: str, name: str) -> Optional[bytes]:
+    """The pack's 16-bit frames for *name*, or None when it has none."""
+    folder = _pkg_files("vice") / "sounds" / pack
+    for candidate in (name, _PACK_STANDINS.get(name)):
+        if not candidate:
+            continue
+        source = folder / f"{candidate}.wav"
+        try:
+            with wave.open(io.BytesIO(source.read_bytes())) as w:
+                if (w.getsampwidth(), w.getnchannels(), w.getframerate()) != (2, _CHANNELS, _SR):
+                    log.warning("Sound pack file %s is not 48 kHz stereo 16-bit", source)
+                    return None
+                return w.readframes(w.getnframes())
+        except FileNotFoundError:
+            continue
+        except (OSError, wave.Error, EOFError) as exc:
+            log.warning("Sound pack file %s cannot be read: %s", source, exc)
+            return None
+    return None
+
+
+def _scaled_wav(frames: bytes, level: float) -> bytes:
+    samples = array.array("h")
+    samples.frombytes(frames)
+    if sys.byteorder == "big":
+        samples.byteswap()
+    if level < 1.0:
+        samples = array.array("h", (int(v * level) for v in samples))
+    if sys.byteorder == "big":
+        samples.byteswap()
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(_CHANNELS)
+        w.setsampwidth(2)
+        w.setframerate(_SR)
+        w.writeframes(samples.tobytes())
+    return buf.getvalue()
+
+
 # Built per volume rather than once at import, so the setting takes effect
 # without a daemon restart. Synthesis is pure Python, so the result is cached.
 _wav_cache: dict[tuple[str, int], bytes] = {}
@@ -127,8 +184,21 @@ def _clamp_volume(volume: float) -> float:
         return 1.0
 
 
-def _wav_for(name: str, volume: float) -> bytes:
+_wav_cache_packs: dict[tuple[str, str, int], bytes] = {}
+
+
+def _wav_for(name: str, volume: float, pack: str = CLASSIC) -> bytes:
     level = _clamp_volume(volume)
+    if pack != CLASSIC:
+        key3 = (pack, name, int(round(level * 100)))
+        wav = _wav_cache_packs.get(key3)
+        if wav is None:
+            frames = _pack_frames(pack, name)
+            if frames is not None:
+                wav = _scaled_wav(frames, level)
+                _wav_cache_packs[key3] = wav
+        if wav is not None:
+            return wav
     key = (name, int(round(level * 100)))
     wav = _wav_cache.get(key)
     if wav is None:
@@ -220,7 +290,8 @@ async def _run_player(player: str, sound: Path) -> Optional[str]:
     return (stderr or b"").decode(errors="replace").strip()[:200] or f"exit code {proc.returncode}"
 
 
-async def _play(name: str, volume: float, custom: Optional[str] = None) -> None:
+async def _play(name: str, volume: float, custom: Optional[str] = None,
+                pack: str = CLASSIC) -> None:
     player = _find_player()
     if not player:
         log.debug("No audio player found (paplay/aplay/ffplay); skipping notification")
@@ -234,12 +305,14 @@ async def _play(name: str, volume: float, custom: Optional[str] = None) -> None:
         log.warning("Notification sound %s would not play (%s), using the built-in tone",
                     sound, problem)
 
-    wav_data = _wav_for(name, volume)
+    pack = normalize_pack(pack)
+    wav_data = _wav_for(name, volume, pack)
     # One file per sound and volume, written only when it is not already
     # there: two clips in quick succession used to rewrite a single shared
     # path while the previous player still had it open.
     level = int(round(_clamp_volume(volume) * 100))
-    tone = _TMP_DIR / f"snd_{name}_{level}.wav"
+    tone = _TMP_DIR / (f"snd_{name}_{level}.wav" if pack == CLASSIC
+                       else f"snd_{pack}_{name}_{level}.wav")
     try:
         _TMP_DIR.mkdir(parents=True, exist_ok=True)
         if not tone.exists() or tone.stat().st_size != len(wav_data):
@@ -255,39 +328,51 @@ async def _play(name: str, volume: float, custom: Optional[str] = None) -> None:
 
 # ── Public helpers (fire-and-forget, safe to call from any async context) ──────
 
-def _fire(name: str, volume: float, custom: Optional[str] = None) -> None:
+def _fire(name: str, volume: float, custom: Optional[str] = None, pack: str = CLASSIC) -> None:
     # At zero, play nothing rather than playing silence: no temp file, no
     # player process, no device wake-up.
     if _clamp_volume(volume) <= 0.0:
         return
-    asyncio.create_task(_play(name, volume, custom))
+    asyncio.create_task(_play(name, volume, custom, pack))
 
 
-def play_clip(volume: float = 1.0, custom: Optional[str] = None) -> None:
+def play_clip(volume: float = 1.0, custom: Optional[str] = None,
+              pack: str = CLASSIC) -> None:
     """Fire-and-forget: play the clip-saved notification sound."""
-    _fire("clip", volume, custom)
+    _fire("clip", volume, custom, pack)
 
 
-def play_clip_failed(volume: float = 1.0, custom: Optional[str] = None) -> None:
+def play_clip_failed(volume: float = 1.0, custom: Optional[str] = None,
+                     pack: str = CLASSIC) -> None:
     """Fire-and-forget: play the clip-failed notification sound."""
-    _fire("clip_failed", volume, custom)
+    _fire("clip_failed", volume, custom, pack)
 
 
-def play_session_start(volume: float = 1.0, custom: Optional[str] = None) -> None:
+def play_session_start(volume: float = 1.0, custom: Optional[str] = None,
+                       pack: str = CLASSIC) -> None:
     """Fire-and-forget: play the session-started notification sound."""
-    _fire("session_start", volume, custom)
+    _fire("session_start", volume, custom, pack)
 
 
-def play_session_end(volume: float = 1.0, custom: Optional[str] = None) -> None:
+def play_session_end(volume: float = 1.0, custom: Optional[str] = None,
+                     pack: str = CLASSIC) -> None:
     """Fire-and-forget: play the session-ended notification sound."""
-    _fire("session_end", volume, custom)
+    _fire("session_end", volume, custom, pack)
 
 
-def play_highlight(volume: float = 1.0, custom: Optional[str] = None) -> None:
+def play_highlight(volume: float = 1.0, custom: Optional[str] = None,
+                   pack: str = CLASSIC) -> None:
     """Fire-and-forget: play the session-highlight marker sound."""
-    _fire("highlight", volume, custom)
+    _fire("highlight", volume, custom, pack)
 
 
-def play_screenshot(volume: float = 1.0, custom: Optional[str] = None) -> None:
+def play_screenshot(volume: float = 1.0, custom: Optional[str] = None,
+                    pack: str = CLASSIC) -> None:
     """Fire-and-forget: play the screenshot-taken notification sound."""
-    _fire("screenshot", volume, custom)
+    _fire("screenshot", volume, custom, pack)
+
+
+def preview(name: str, volume: float, pack: str) -> None:
+    """Play one sound of a pack, for choosing one in Settings."""
+    if name in _SPECS:
+        _fire(name, volume, None, normalize_pack(pack))

@@ -3750,13 +3750,13 @@ class NotificationVolumeTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(audio_mod, "_play", new=mock.AsyncMock()) as play:
             audio_mod.play_clip(0.4)
             await asyncio.sleep(0)
-        play.assert_awaited_once_with("clip", 0.4, None)
+        play.assert_awaited_once_with("clip", 0.4, None, "classic")
 
     async def test_custom_sound_is_passed_through(self) -> None:
         with mock.patch.object(audio_mod, "_play", new=mock.AsyncMock()) as play:
             audio_mod.play_clip(0.4, "~/sounds/ping.wav")
             await asyncio.sleep(0)
-        play.assert_awaited_once_with("clip", 0.4, "~/sounds/ping.wav")
+        play.assert_awaited_once_with("clip", 0.4, "~/sounds/ping.wav", "classic")
 
     def test_daemon_passes_the_configured_volume(self) -> None:
         source = (Path(__file__).resolve().parents[1] / "vice" / "main.py").read_text()
@@ -4218,6 +4218,42 @@ class CustomNotificationSoundTests(unittest.TestCase):
     def test_every_sound_has_a_synthesised_tone_to_fall_back_on(self) -> None:
         for name in ("clip", "clip_failed", "session_start", "session_end", "highlight"):
             self.assertTrue(audio_mod._wav_for(name, 1.0))
+
+
+class SoundPackTests(unittest.TestCase):
+    """#300: a built-in pack of recorded sounds as well as the tones."""
+
+    def test_every_pack_file_matches_the_tone_format(self) -> None:
+        from importlib.resources import files
+        import wave
+        for pack in audio_mod.SOUND_PACKS[1:]:
+            folder = files("vice") / "sounds" / pack
+            names = [p.name for p in folder.iterdir() if p.name.endswith(".wav")]
+            self.assertTrue(names, pack)
+            for name in names:
+                with self.subTest(pack=pack, name=name), wave.open(str(folder / name)) as w:
+                    self.assertEqual((w.getsampwidth(), w.getnchannels(), w.getframerate()), (2, 2, 48000))
+                    self.assertIn(name[:-4], audio_mod._SPECS)
+
+    def test_a_pack_sound_is_used_and_scaled(self) -> None:
+        loud = audio_mod._wav_for("clip", 1.0, "futuristic")
+        quiet = audio_mod._wav_for("clip", 0.5, "futuristic")
+        self.assertNotEqual(loud, audio_mod._wav_for("clip", 1.0))
+        self.assertEqual(len(loud), len(quiet))
+        self.assertLess(max(abs(v) for v in memoryview(quiet[44:]).cast("h")),
+                        max(abs(v) for v in memoryview(loud[44:]).cast("h")))
+
+    def test_highlight_borrows_the_clip_sound(self) -> None:
+        self.assertEqual(audio_mod._wav_for("highlight", 1.0, "futuristic"),
+                         audio_mod._wav_for("clip", 1.0, "futuristic"))
+
+    def test_an_unknown_pack_is_the_classic_tones(self) -> None:
+        self.assertEqual(audio_mod.normalize_pack("nope"), "classic")
+        from vice.config import Config, normalize_notifications
+        cfg = Config()
+        cfg.notifications.sound_pack = "Futuristic"
+        normalize_notifications(cfg)
+        self.assertEqual(cfg.notifications.sound_pack, "futuristic")
 
 
 class CustomSoundPlaybackTests(unittest.IsolatedAsyncioTestCase):

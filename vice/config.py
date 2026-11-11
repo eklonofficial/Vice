@@ -281,6 +281,9 @@ class NotificationsConfig:
     session_end_sound: Optional[str] = None
     highlight_sound: Optional[str] = None
     screenshot_sound: Optional[str] = None
+    # Which built-in set of sounds plays: classic | futuristic (#300). A
+    # custom sound above still wins for its own event.
+    sound_pack: str = "classic"
 
 
 @dataclass
@@ -507,6 +510,11 @@ def normalize_overlay(cfg: "Config") -> None:
     ov.keys_layout = layout
 
 
+def normalize_notifications(cfg: "Config") -> None:
+    from .audio import normalize_pack  # audio imports nothing from config
+    cfg.notifications.sound_pack = normalize_pack(cfg.notifications.sound_pack)
+
+
 def normalize_voice(cfg: Config) -> None:
     vc = getattr(cfg, "voice", None)
     if not isinstance(vc, VoiceConfig):
@@ -664,6 +672,7 @@ def load() -> Config:
     ensure_buffer_covers_clip_presets(cfg)
     clamp_recording_limits(cfg)
     normalize_overlay(cfg)
+    normalize_notifications(cfg)
     normalize_voice(cfg)
     return cfg
 

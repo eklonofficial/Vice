@@ -1660,7 +1660,8 @@ class ViceDaemon:
             self._session_highlights.append(entry)
             click.echo(f"[Vice] Session highlight at {elapsed:.1f}s", err=True)
             audio.play_highlight(self.cfg.notifications.sound_volume,
-                                 self.cfg.notifications.highlight_sound)
+                                 self.cfg.notifications.highlight_sound,
+                                 self.cfg.notifications.sound_pack)
             if self.share:
                 asyncio.create_task(
                     self.share.broadcast({
@@ -1687,11 +1688,13 @@ class ViceDaemon:
             # the point of a clipper. Failure gets its own tone instead, so
             # the confirmation is never a lie (#154).
             audio.play_clip(self.cfg.notifications.sound_volume,
-                            self.cfg.notifications.clip_sound)
+                            self.cfg.notifications.clip_sound,
+                            self.cfg.notifications.sound_pack)
             saved = await self.recorder.save_clip(duration)
             if saved is None:
                 audio.play_clip_failed(self.cfg.notifications.sound_volume,
-                                       self.cfg.notifications.clip_failed_sound)
+                                       self.cfg.notifications.clip_failed_sound,
+                                       self.cfg.notifications.sound_pack)
                 if self.share:
                     await self.share.broadcast({
                         "type": "clip_error",
@@ -1725,13 +1728,15 @@ class ViceDaemon:
         except RuntimeError as exc:
             click.echo(f"[Vice] Screenshot failed: {exc}", err=True)
             audio.play_clip_failed(self.cfg.notifications.sound_volume,
-                                   self.cfg.notifications.clip_failed_sound)
+                                   self.cfg.notifications.clip_failed_sound,
+                                   self.cfg.notifications.sound_pack)
             await self.share.broadcast({"type": "image_error", "error": str(exc)})
             return
 
         click.echo(f"[Vice] Screenshot saved: {out.name}", err=True)
         audio.play_screenshot(self.cfg.notifications.sound_volume,
-                              self.cfg.notifications.screenshot_sound)
+                              self.cfg.notifications.screenshot_sound,
+                              self.cfg.notifications.sound_pack)
         self.share.add_image(out, game=self._last_clip_game)
         copied, copy_error = await copy_image_to_clipboard(out)
         if not copied:
@@ -1821,7 +1826,8 @@ class ViceDaemon:
         self._session_active = True
         self._session_path   = path
         audio.play_session_start(self.cfg.notifications.sound_volume,
-                                 self.cfg.notifications.session_start_sound)
+                                 self.cfg.notifications.session_start_sound,
+                                 self.cfg.notifications.sound_pack)
         click.echo(f"[Vice] Session recording started → {path}", err=True)
         if self.share:
             asyncio.create_task(
@@ -1839,7 +1845,8 @@ class ViceDaemon:
         self._session_path = None
 
         audio.play_session_end(self.cfg.notifications.sound_volume,
-                               self.cfg.notifications.session_end_sound)
+                               self.cfg.notifications.session_end_sound,
+                               self.cfg.notifications.sound_pack)
         if path and self.share:
             slug = path.stem
             url  = self.share.add_clip(path, game=game, session=True)
