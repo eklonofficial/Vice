@@ -20,6 +20,15 @@ import {usePlaylistToggleItems} from '../state/playlistItems';
 import {GameTagModal} from './GameTagModal';
 import {KeyOverlay} from './KeyOverlay';
 import type {KeyInterval} from '../lib/keyLayout';
+import {
+  ClipAudioTracks,
+  settingsFromClip,
+  switchableTracks,
+  trackPlan,
+  useTrackPlayback,
+  type TrackSetting,
+  type TrackSettings,
+} from './ClipAudioTracks';
 import {InlineRename} from './InlineRename';
 import {t, tNode} from '../lib/i18n';
 
@@ -140,6 +149,13 @@ export function Viewer(props: ViewerProps) {
   const [renamingTitle, setRenamingTitle] = useState(false);
   const [volume, setVolume] = useState(storedVolume);
   const [muted, setMuted] = useState(storedMuted);
+  // The Audio tracks list, the clip's track settings as shown (kept by the
+  // daemon shortly after each change), and the track heard alone.
+  const [tracksOpen, setTracksOpen] = useState(false);
+  const [trackSettings, setTrackSettings] = useState<TrackSettings>({});
+  const [soloTrack, setSoloTrack] = useState<number | null>(null);
+  const pendingTracks = useRef<{slug: string; settings: TrackSettings} | null>(null);
+  const trackSaveTimer = useRef<number | undefined>(undefined);
   const [expanded, setExpanded] = useState(false);
   const [idle, setIdle] = useState(false);
   const [grabbing, setGrabbing] = useState(false);
@@ -149,6 +165,70 @@ export function Viewer(props: ViewerProps) {
 
   const index = clip ? clips.findIndex(c => c.slug === clip.slug) : -1;
   const open = props.clip !== null;
+
+  // The list starts closed each time the viewer opens; stepping between
+  // clips keeps it as it is.
+  useEffect(() => {
+    if (!open) setTracksOpen(false);
+  }, [open]);
+  useEffect(() => {
+    if (!tracksOpen) setSoloTrack(null);
+  }, [tracksOpen]);
+
+  // Send a waiting change now, before the clip it belongs to goes away.
+  // Stable, so the unmount flush below runs once, not on every render.
+  const notifyRef = useRef(props.notify);
+  notifyRef.current = props.notify;
+  const flushTrackSettings = useCallback(() => {
+    window.clearTimeout(trackSaveTimer.current);
+    const pending = pendingTracks.current;
+    pendingTracks.current = null;
+    if (!pending) return;
+    const tracks = Object.entries(pending.settings).map(([index, s]) => ({index: Number(index), ...s}));
+    void api.saveTrackMix(pending.slug, tracks).catch(err =>
+      notifyRef.current(t('viewer.tracksKeepFailed'), (err as Error).message, 'error'),
+    );
+  }, []);
+
+  // Each clip shows the settings kept for it. Its own echo of a change is not
+  // a reason to reload them, a new file (a trim) is.
+  useEffect(() => {
+    flushTrackSettings();
+    setTrackSettings(settingsFromClip(clip));
+    setSoloTrack(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clip?.slug, clip?.video_url]);
+  useEffect(() => flushTrackSettings, [flushTrackSettings]);
+
+  const changeTrack = (index: number, patch: Partial<TrackSetting>) => {
+    if (!clip) return;
+    const next = {...trackSettings, [index]: {...(trackSettings[index] ?? {enabled: true, volume: 1}), ...patch}};
+    setTrackSettings(next);
+    // A slider sends a change per step; keep the last one.
+    pendingTracks.current = {slug: clip.slug, settings: next};
+    window.clearTimeout(trackSaveTimer.current);
+    trackSaveTimer.current = window.setTimeout(flushTrackSettings, 400);
+  };
+  const resetTracks = () => {
+    if (!clip) return;
+    const next = Object.fromEntries(
+      switchableTracks(clip).map(track => [track.index, {enabled: true, volume: 1}]),
+    ) as TrackSettings;
+    setTrackSettings({});
+    pendingTracks.current = {slug: clip.slug, settings: next};
+    flushTrackSettings();
+  };
+
+  const plan = clip ? trackPlan(clip, trackSettings, tracksOpen ? soloTrack : null) : null;
+  const playingTracks = Boolean(plan?.active) && open && !closing;
+  useTrackPlayback({
+    clip,
+    videoRef,
+    active: playingTracks,
+    gains: plan?.gains ?? {},
+    playerVolume: volume,
+    playerMuted: muted,
+  });
 
   // Attach the source only when it actually changes. Stepping back to the clip
   // already loaded must not reload it, because a fresh load is what counts as
@@ -213,7 +293,8 @@ export function Viewer(props: ViewerProps) {
     const video = videoRef.current;
     if (!video) return;
     video.volume = volume;
-    video.muted = muted;
+    // The clip's own sound is replaced while its tracks play beside it.
+    video.muted = muted || playingTracks;
   });
 
   // Expanding is a layout change inside the Vice window, not the Fullscreen
@@ -432,6 +513,9 @@ export function Viewer(props: ViewerProps) {
   }, [open, closing, trimOpen, step, addHighlight, toggleExpanded, saveFrame, toggleMuted, toggle]);
 
   if (!mounted || !clip) return null;
+
+  // Only clips recorded with separate sources have tracks to switch.
+  const hasTracks = switchableTracks(clip).length >= 2;
 
   const duration = position.duration;
   const percent = duration > 0 ? (position.current / duration) * 100 : 0;
@@ -797,6 +881,19 @@ export function Viewer(props: ViewerProps) {
               )}
             </div>
 
+            {tracksOpen && hasTracks && plan ? (
+              <ClipAudioTracks
+                clip={clip}
+                settings={trackSettings}
+                onChange={changeTrack}
+                onReset={resetTracks}
+                solo={soloTrack}
+                onSolo={setSoloTrack}
+                plan={plan}
+                videoRef={videoRef}
+              />
+            ) : null}
+
             <footer className="viewer-foot">
               <span className="viewer-shortcuts mono">
                 {t('viewer.shortcuts')}
@@ -812,6 +909,16 @@ export function Viewer(props: ViewerProps) {
                       remember(KEYS_SHOWN_KEY, keysShown ? '0' : '1');
                     }}>
                     {t('viewer.keys')}
+                  </button>
+                ) : null}
+                {hasTracks ? (
+                  <button
+                    type="button"
+                    className={tracksOpen ? 'btn btn-sm' : 'btn btn-quiet btn-sm'}
+                    aria-pressed={tracksOpen}
+                    aria-expanded={tracksOpen}
+                    onClick={() => setTracksOpen(open => !open)}>
+                    {t('viewer.tracksButton')}
                   </button>
                 ) : null}
                 <button

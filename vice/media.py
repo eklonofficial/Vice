@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import math
+import re
 from fractions import Fraction
 from pathlib import Path
 from typing import Optional
@@ -23,6 +24,8 @@ log = logging.getLogger("vice.media")
 TEMP_FILE_GLOBS = ("*.trim.mp4", "*.wm.mp4", "*.fix.mp4", "*.trimming.mp4",
                    "*.trim.mkv", "*.wm.mkv", "*.fix.mkv", "*.trimming.mkv",
                    "*.export.mp4",
+                   # Track titles written after a save (_label_audio_tracks).
+                   "*.labels.mp4", "*.labels.mkv",
                    # Left behind when an image annotation is interrupted
                    # between writing the new picture and moving it into place.
                    "*.annotating.png", "*.annotating.jpg", "*.annotating.jpeg")
@@ -145,7 +148,7 @@ async def probe_media_detailed(path: Path) -> tuple[Optional[dict], str]:
         tags = {k.lower(): v for k, v in stream.get("tags", {}).items()}
         audio_tracks.append({
             "index": index,
-            "title": str(tags.get("title", ""))[:200],
+            "title": _track_title(tags)[:200],
             "language": str(tags.get("language", ""))[:32],
             "channels": int(stream.get("channels") or 0),
         })
@@ -157,6 +160,22 @@ async def probe_media_detailed(path: Path) -> tuple[Optional[dict], str]:
         "audio_streams": len(audio),
         "audio_tracks": audio_tracks,
     }, ""
+
+
+# Handler names muxers stamp on every track, which name nothing: FFmpeg's
+# own (what gpu-screen-recorder writes), Apple's, GPAC's, L-SMASH's.
+_GENERIC_HANDLER = re.compile(r"(?i).*handler|core media \w+|.*\biso ?media\b.*")
+
+
+def _track_title(tags: dict) -> str:
+    """A track's title. MP4 reads a title back as "name", and loses it at the
+    next remux while keeping the handler name, so those stand in for it
+    unless the handler name is one every track gets."""
+    for key in ("title", "name"):
+        if str(tags.get(key, "")).strip():
+            return str(tags[key]).strip()
+    handler = str(tags.get("handler_name", "")).strip()
+    return "" if _GENERIC_HANDLER.fullmatch(handler) else handler
 
 
 def _ffprobe_reason(stderr: Optional[bytes], path: Optional[Path] = None) -> str:

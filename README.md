@@ -232,8 +232,9 @@ capture_audio   = true
 capture_microphone = false
 microphone_source = "default_input" # default_input | device:name; which mic to capture
 gsr_audio_source = "default_output" # default_output | device:name | app:name | app-inverse:name
-audio_tracks    = []      # separate tracks instead of a mix, e.g. ["default_output", "default_input", "app:Discord"]
+audio_tracks    = []      # separate tracks instead of a mix, e.g. ["everything_else", "app:Spotify", "app:Discord"]
 audio_tracks_mix_first = false # also record a track 1 that mixes every source
+auto_app_tracks = false   # give every app that plays sound its own track, in place of audio_tracks
 gsr_args        = ""      # extra gpu-screen-recorder flags, e.g. "-k hevc -bm cbr -q 20000"
 
 [hotkeys]
@@ -283,6 +284,9 @@ Notes:
 - `updates.check_on_start` asks the GitHub releases API at most once a day whether a newer Vice is out, and shows a notice with a few lines from the release notes when there is. Nothing about you or your clips is sent, the notice appears once per release and leaves only a small chip in the top bar after you dismiss it, and a failed check is silent. Turn it off in Settings → Advanced, or with this key.
 
 - `recording.audio_tracks` records each listed source as its own audio track, in order. Browsers and Discord play only track 1; video editors see all of them. Tracks can be reordered from Settings → Recording. With mic capture on, the microphone is added as its own track. `audio_tracks_mix_first` adds an extra track 1 that mixes every source, so shared clips carry full audio. `container` and `audio_tracks` apply to the gpu-screen-recorder backend; wf-recorder/ffmpeg clips stay single-track MP4.
+- `recording.auto_app_tracks` gives every app Vice hears playing sound a track of its own, next to everything else, the microphone and a combined track 1 for sharing, with no list to keep. Vice remembers the apps it has heard (up to 10, forgotten after 30 days), so an app started after Vice still gets its own track. One it has never heard goes on everything else until recording next starts.
+- `everything_else` in `recording.audio_tracks` records every app that has no track of its own, so each app is on exactly one track. `default_output` (Desktop) records every app, so an app listed next to it ends up on both tracks.
+- Clips name their tracks after their sources (Spotify, Microphone, All audio). In a clip, the **Audio tracks** button opens a list that switches each source on or off and sets its volume, heard straight away and kept for that clip. Share links, the Discord embed and copied files go out with one audio track mixed that way, so a source switched off is not in what you send. The clip itself keeps every track, so it can be switched back on. In the editor, Detach audio starts from the same settings, with every part on and the combined track off.
 - `recording.microphone_source` picks which microphone the mic toggle captures. `default_input` follows the system default; `device:<name>` pins a specific input without changing your system setting.
 - `recording.gsr_args` supports environment/tilde expansion and a `{default_sink_monitor}` placeholder for desktop-audio capture.
 - With the gpu-screen-recorder backend, `recording.encoder` also accepts `h264_vulkan`, `hevc_vulkan`, and `av1_vulkan`. Auto uses an available Vulkan encoder when GSR reports none of its usual hardware codecs. Other systems keep GSR's normal selection. Vulkan encoding requires support from GSR, FFmpeg, and the GPU driver.

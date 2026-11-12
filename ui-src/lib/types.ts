@@ -21,7 +21,23 @@ export interface Clip {
   vcodec: string | null;
   /** The H.264 preview used when this window cannot play the clip's codec. */
   preview?: 'none' | 'working' | 'ready';
-  audio_tracks?: Array<{index: number; title: string; language: string; channels: number}>;
+  audio_tracks?: Array<{
+    index: number;
+    title: string;
+    language: string;
+    channels: number;
+    /** One part of the whole recording. Only set when the clip was recorded
+     * with the current track settings; detaching turns the parts on and the
+     * rest (a combined track, an app the desktop track holds) off. */
+    part?: boolean;
+    /** The combined track 1, mixed from the parts. Saving tracks from the
+     * viewer rebuilds it rather than keeping it. */
+    combined?: boolean;
+  }>;
+  /** The viewer's Audio tracks settings, by track index; tracks not listed
+   * play as recorded. Share links, Discord and copied files are mixed from
+   * them. */
+  track_mix?: Record<string, {enabled: boolean; volume: number}>;
   /** Set when ffprobe could not read the file. The clip is left on disk. */
   unreadable: boolean;
   unreadable_reason: string;

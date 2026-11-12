@@ -163,6 +163,11 @@ class RecordingConfig:
     # mixes every source. Players, Discord, and share embeds play track 1, so
     # this keeps shared clips complete while the separates stay editable.
     audio_tracks_mix_first: bool = False
+    # Give every app that plays sound a track of its own, in place of
+    # audio_tracks: the apps Vice has heard recently, everything else, the
+    # microphone, and a combined track 1. An app Vice has never heard goes on
+    # everything else until the recorder next starts.
+    auto_app_tracks: bool = False
     # Loudness of each separate track when a clip is saved, keyed by the
     # source id in audio_tracks: 1.0 = unchanged, up to 2.0. Missing means
     # 1.0. The microphone added on its own track uses microphone_volume.

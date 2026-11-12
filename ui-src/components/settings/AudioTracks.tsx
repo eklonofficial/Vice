@@ -1,6 +1,10 @@
 import {IconClose} from '../Icons';
 import {Slider} from './Fields';
-import {tracksLostWithoutDesktopAudio} from '../../lib/settingsDraft';
+import {
+  appsAlsoOnDesktop,
+  recordEverythingElse,
+  tracksLostWithoutDesktopAudio,
+} from '../../lib/settingsDraft';
 import {t} from '../../lib/i18n';
 
 export interface AudioSource {
@@ -37,7 +41,8 @@ export function AudioTracks({
   desktopAudioOn: boolean;
   pick: string;
   onPickChange: (id: string) => void;
-  onChange: (next: string[]) => void;
+  /** The new track list, and the volumes too when they had to follow it. */
+  onChange: (next: string[], volumes?: Record<string, number>) => void;
   onRefresh: () => void;
   refreshing: boolean;
   onDuplicate: () => void;
@@ -73,6 +78,13 @@ export function AudioTracks({
   const base = showsMix ? 2 : 1;
   const {dropped, trimmed} = tracksLostWithoutDesktopAudio(tracks);
   const warn = !desktopAudioOn && (dropped.length > 0 || trimmed.length > 0);
+  // An app recorded on its own track and on the desktop track cannot be muted
+  // out of a clip in the editor, which is the reason to give it a track.
+  const doubled = desktopAudioOn ? appsAlsoOnDesktop(tracks) : [];
+  const useEverythingElse = () => {
+    const next = recordEverythingElse(tracks, volumes);
+    onChange(next.tracks, next.volumes);
+  };
 
   return (
     <div className="tracks">
@@ -182,6 +194,17 @@ export function AudioTracks({
             </div>
           ) : null}
           <p className="tracks-empty">{showsMix ? t('audioTracks.levelsHelpMix') : t('audioTracks.levelsHelp')}</p>
+        </div>
+      ) : null}
+
+      {doubled.length ? (
+        <div className="tracks-warning tracks-doubled" role="status">
+          <p>
+            {t('audioTracks.doubledWarning', {count: doubled.length, list: doubled.join(', ')})}
+          </p>
+          <button type="button" className="btn btn-quiet btn-sm" onClick={useEverythingElse}>
+            {t('audioTracks.useEverythingElse')}
+          </button>
         </div>
       ) : null}
 

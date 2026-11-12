@@ -216,6 +216,13 @@
   gap: var(--spacing-3);
   padding: var(--spacing-3) var(--spacing-4) var(--spacing-4);
   min-height: 0;
+  /* Highlights and audio tracks keep their own height and the area scrolls
+     when the window is short, instead of squeezing each list to a sliver. */
+  overflow-y: auto;
+}
+
+.viewer-bottom > * {
+  flex-shrink: 0;
 }
 
 .viewer-timeline {
@@ -296,6 +303,97 @@ kbd {
   gap: 3px;
   max-height: 168px;
   overflow-y: auto;
+}
+
+/* ── audio tracks (ClipAudioTracks) ──────────────────────────────── */
+.viewer-tracks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.viewer-tracks-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+
+.viewer-tracks-actions {
+  display: flex;
+  gap: var(--spacing-2);
+}
+
+.viewer-track-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 210px;
+  overflow-y: auto;
+}
+
+.viewer-track {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(110px, 200px) auto;
+  align-items: center;
+  gap: var(--spacing-3);
+  padding: 4px var(--spacing-2);
+  border-radius: var(--radius-inner);
+}
+
+.viewer-track:hover {
+  background: var(--color-overlay-hover);
+}
+
+.viewer-track[data-off="true"] .viewer-track-name,
+.viewer-track[data-off="true"] .viewer-track-volume {
+  opacity: 0.45;
+}
+
+.viewer-track-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.viewer-track-name b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.viewer-track-note {
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+}
+
+.viewer-track-volume {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.viewer-track-volume input {
+  flex: 1;
+  min-width: 0;
+}
+
+.viewer-track-volume span {
+  width: 4.5ch;
+  text-align: right;
+  font-size: 12px;
+}
+
+@media (max-width: 560px) {
+  .viewer-track {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .viewer-track-volume {
+    grid-column: 1 / -1;
+  }
 }
 
 .viewer-hl-empty {
@@ -417,6 +515,12 @@ kbd {
   justify-content: space-between;
   gap: var(--spacing-3);
   flex-wrap: wrap;
+  /* Trim, Share and Delete stay in reach while the lists above scroll. */
+  position: sticky;
+  bottom: calc(-1 * var(--spacing-4));
+  margin-bottom: calc(-1 * var(--spacing-4));
+  padding: var(--spacing-2) 0 var(--spacing-4);
+  background: var(--color-background-popover);
 }
 
 .viewer-shortcuts {
