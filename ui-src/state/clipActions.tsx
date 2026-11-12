@@ -5,9 +5,11 @@ import {copyShareLink, shareButtonLabel, shareClip} from '../lib/share';
 import {clipTitle, type Clip} from '../lib/types';
 import type {ClipActions} from '../components/ClipCard';
 import {ContextMenu} from '../components/ContextMenu';
+import {GameTagModal} from '../components/GameTagModal';
 import {Modal} from '../components/Modal';
 import {useStore} from './store';
 import {usePlayback} from './playback';
+import {usePlaylistToggleItems} from './playlistItems';
 import {t} from '../lib/i18n';
 
 /**
@@ -57,14 +59,16 @@ export function useRenameClip(): (clip: Clip, name: string) => Promise<Clip | nu
 }
 
 export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
-  const {state, notify, refreshPlaylists} = useStore();
+  const {state, notify} = useStore();
   const {openViewer, openTrim, openShare} = usePlayback();
   const {playlists} = state;
+  const playlistItems = usePlaylistToggleItems();
 
   const [menu, setMenu] = useState<{clip: Clip; at: {x: number; y: number}} | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Clip | null>(null);
   const [manualCopy, setManualCopy] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [tagging, setTagging] = useState<Clip | null>(null);
 
   const fail = useCallback(
     (title: string) => (err: Error) =>
@@ -148,6 +152,7 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
             {id: 'open', label: t('card.open'), onSelect: () => openViewer(menuClip.slug)},
             {id: 'trim', label: t('card.trim'), onSelect: () => openTrim(menuClip.slug)},
             {id: 'rename', label: t('card.rename'), onSelect: () => setRenaming(menuClip.slug)},
+            {id: 'game', label: t('card.setGame'), onSelect: () => setTagging(menuClip)},
             {
               id: 'copy-link',
               label: menuClip.share_url ? t('card.copyShareLink') : t('card.noShareLink'),
@@ -157,36 +162,7 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
             {id: 'copy-file', label: t('card.copyVideoShort'), onSelect: () => copyFile(menuClip)},
             {id: 'reveal', label: t('card.reveal'), onSelect: () => reveal(menuClip)},
             ...(playlists.length ? [{id: 'sep-playlists', separator: true} as const] : []),
-            // One row per playlist that toggles, so adding and removing are
-            // the same gesture in the same place.
-            ...playlists.map(playlist => {
-              const inIt = playlist.clip_slugs?.includes(menuClip.slug) ?? false;
-              return {
-                id: playlist.id,
-                label: inIt
-                  ? t('card.removeFrom', {playlist: playlist.name})
-                  : t('card.addTo', {playlist: playlist.name}),
-                mark: inIt ? '✓' : (playlist.emoji ?? undefined),
-                onSelect: () => {
-                  const call = inIt
-                    ? api.removeClipFromPlaylist(playlist.id, menuClip.slug)
-                    : api.addClipToPlaylist(playlist.id, menuClip.slug);
-                  void call
-                    .then(async result => {
-                      if (result?.ok === false) {
-                        throw new Error(result.error || t('card.playlistUnchanged'));
-                      }
-                      await refreshPlaylists();
-                      say(
-                        inIt
-                          ? t('card.removedFrom', {playlist: playlist.name})
-                          : t('card.addedTo', {playlist: playlist.name}),
-                      );
-                    })
-                    .catch(fail(t('clips.errUpdatePlaylist')));
-                },
-              };
-            }),
+            ...playlistItems(menuClip),
             {id: 'sep-delete', separator: true},
             {
               id: 'delete',
@@ -229,6 +205,8 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
           })}
         </p>
       </Modal>
+
+      <GameTagModal clip={tagging} onClose={() => setTagging(null)} />
 
       <Modal open={manualCopy !== null} title={t('viewer.copyLinkTitle')} onClose={() => setManualCopy(null)}>
         <p>{t('viewer.copyLinkBody')}</p>

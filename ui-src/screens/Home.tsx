@@ -10,6 +10,7 @@ import {api} from '../lib/api';
 import {copyToClipboard} from '../lib/clipboard';
 import {formatBytes, formatDuration, relativeTime} from '../lib/format';
 import {gameCaptureBlocked} from '../lib/gameCapture';
+import {GsrSetup, needsGsrSetup} from '../components/GsrSetup';
 import {t, tNode} from '../lib/i18n';
 import {ClipCard} from '../components/ClipCard';
 import {Tile, ActionTile} from '../components/Tile';
@@ -270,6 +271,8 @@ export function Home() {
       onClick={() => dispatch({type: 'setView', view: 'settings'})}
     />
   );
+
+  if (needsGsrSetup(status, state.gsrInstall)) return <GsrSetup />;
 
   return (
     <div className="home-layout">

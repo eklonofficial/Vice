@@ -34,8 +34,8 @@ import tempfile
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Coroutine, Optional
-from urllib.parse import quote
+from typing import Callable, Coroutine, Iterable, Optional
+from urllib.parse import quote, urlsplit
 
 from importlib.resources import files as _pkg_files
 
@@ -222,6 +222,49 @@ def _save_views(views: dict[str, int]) -> None:
     tmp = VIEWS_PATH.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(views))
     tmp.replace(VIEWS_PATH)
+
+
+# Colours written by matugen from the template `vice matugen` sets up (#295).
+MATUGEN_PATH = actual_home_dir() / ".config" / "vice" / "matugen.json"
+_HEX = re.compile(r"#[0-9a-fA-F]{6}")
+
+
+def load_matugen() -> Optional[dict[str, str]]:
+    """The matugen scheme, or None when there is none or it is incomplete.
+    Every role in the template has to be there, so a template from another
+    app cannot half-theme Vice."""
+    try:
+        roles = json.loads((_pkg_files("vice") / "data" / "matugen.json").read_text())
+        data = json.loads(MATUGEN_PATH.read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        log.warning("Matugen colours in %s cannot be read: %s", MATUGEN_PATH, exc)
+        return None
+    if not isinstance(data, dict):
+        return None
+    colours = {role: str(data.get(role, "")).lower() for role in roles}
+    missing = [role for role, value in colours.items() if not _HEX.fullmatch(value)]
+    if missing:
+        log.warning("Matugen colours in %s are missing %s", MATUGEN_PATH, ", ".join(missing))
+        return None
+    return colours
+
+
+# A clip's game when it is not simply its auto playlist's: captured when a
+# session started, or set by hand. An empty string is a game cleared by hand.
+CLIP_GAMES_PATH = actual_home_dir() / ".local" / "share" / "vice" / "clip_games.json"
+
+
+def _load_clip_games() -> dict[str, str]:
+    try:
+        data = json.loads(CLIP_GAMES_PATH.read_text())
+        return {slug: game for slug, game in data.items() if isinstance(game, str)}
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError, AttributeError) as exc:
+        log.warning("Clip games file %s is unreadable: %s", CLIP_GAMES_PATH, exc)
+        return {}
 
 
 # Public links name a clip by a random token rather than its filename. Clip
@@ -563,7 +606,8 @@ def _trimmed_copy_path(path: Path) -> Path:
     return candidate
 
 
-def _key_burn_for(project: dict, sources: dict, work: Path, accent: str) -> Optional[KeyBurn]:
+def _key_burn_for(project: dict, sources: dict, work: Path, accent: str,
+                  hidden: Iterable[str] = (), layout: str = "qwerty") -> Optional[KeyBurn]:
     """The keyboard panel for an export, or None when no clip in it has keys
     or the panel cannot be drawn here."""
     intervals = {}
@@ -576,7 +620,7 @@ def _key_burn_for(project: dict, sources: dict, work: Path, accent: str) -> Opti
     _, height, _ = canvas_for(project, sources)
     try:
         from .key_overlay import render_burn_assets
-        assets = render_burn_assets(work, accent, max(0.5, height / 1080))
+        assets = render_burn_assets(work, accent, max(0.5, height / 1080), hidden, layout)
     except Exception as exc:  # pycairo missing, or a drawing failure
         log.warning("Exporting without the keyboard panel: %s", exc)
         return None
@@ -778,17 +822,22 @@ _DISCORD_TIMEOUT = 600
 
 
 async def _make_discord_copy(path: Path, duration: float,
-                            audio_streams: int = 1) -> Optional[Path]:
+                            audio_streams: int = 1, vcodec: str = "") -> Optional[Path]:
     """Return a copy of *path* small enough to drop into a Discord chat.
 
-    The source itself when it already fits, a cached H.264 transcode when it
-    does not, and None when the transcode fails. Raises DiscordTooLarge when
-    no bitrate fits the clip under the cap. Same bitrate budget as the
-    editor's "optimize for Discord" export, so the two produce comparable
-    files.
+    The source itself when it is already an H.264 MP4 that fits, a cached
+    H.264 transcode otherwise, and None when the transcode fails. Raises
+    DiscordTooLarge when no bitrate fits the clip under the cap. Same bitrate
+    budget as the editor's "optimize for Discord" export, so the two produce
+    comparable files.
+
+    *vcodec* is the source's video codec as ffprobe names it. A small AV1 or
+    HEVC clip used to go out unconverted, and plenty of phones cannot play
+    either in Discord (#289), so only H.264 is passed through.
     """
     try:
         already_small = (path.suffix.lower() == ".mp4"
+                         and vcodec == "h264"
                          and path.stat().st_size <= DISCORD_MAX_BYTES)
     except OSError:
         return None
@@ -1082,10 +1131,43 @@ def _quick_tunnel_url(line: str) -> Optional[str]:
 
 # ── share server ─────────────────────────────────────────────────────────────
 
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _is_loopback_authority(authority: str) -> bool:
+    try:
+        return urlsplit(f"//{authority}").hostname in _LOOPBACK_HOSTS
+    except ValueError:
+        return False
+
+
+@web.middleware
+async def _local_request_guard(req: web.Request, handler):
+    """Keep web pages out of the control server. Listening on loopback does
+    not: a page can send a plain POST here without any CORS approval and open
+    a WebSocket with no same-origin rule, and a hostname rebound to 127.0.0.1
+    makes this look like the page's own site. Requests with no Origin, which
+    is scripts and the CLI, are not a browser's and pass."""
+    host = req.headers.get("Host")
+    if host is not None and not _is_loopback_authority(host):
+        log.warning("Refused a request to the control server for host %r", host)
+        raise web.HTTPForbidden(text="This server only answers on localhost.")
+    origin = req.headers.get("Origin")
+    if origin is not None and (req.method not in ("GET", "HEAD", "OPTIONS") or req.path == "/ws"):
+        try:
+            same = host is not None and urlsplit(origin).netloc.lower() == host.lower()
+        except ValueError:
+            same = False
+        if not same:
+            log.warning("Refused %s %s from origin %r", req.method, req.path, origin)
+            raise web.HTTPForbidden(text="Request origin is not allowed.")
+    return await handler(req)
+
+
 class ShareServer:
     def __init__(self, cfg) -> None:
         self.cfg = cfg
-        self._local_app = web.Application()
+        self._local_app = web.Application(middlewares=[_local_request_guard])
         self._public_app = web.Application()
         self._local_runner: Optional[web.AppRunner] = None
         self._local_site: Optional[web.TCPSite] = None
@@ -1103,9 +1185,15 @@ class ShareServer:
         # clip's, and they can collide with one, so nothing may look an image
         # up in _clips or the other way round.
         self._images: dict[str, Path] = {}
+        # Slugs with a trim in flight. A trim can run for minutes when it has
+        # to re-encode, and a second one on the same clip would write the same
+        # .trimming file and read the original while the first replaces it,
+        # which leaves a corrupt clip (#281).
+        self._trimming: set[str] = set()
 
         self.playlists = PlaylistStore()
         self._views = _load_views()
+        self._clip_games = _load_clip_games()
         self._share_tokens = _load_share_tokens()
         self._share_slugs = {token: slug for slug, token in self._share_tokens.items()}
         self.editor_project = EditorProjectStore()
@@ -1117,9 +1205,12 @@ class ShareServer:
         self._proxy_lock = asyncio.Lock()
         self._proxy_tasks: set[asyncio.Task] = set()
         self._proxy_stopping = False
+        # Slug to how many requests are waiting on its preview being built.
+        self._previews_building: dict[str, int] = {}
 
         self._tunnel_proc: Optional[asyncio.subprocess.Process] = None
         self._tunnel_task: Optional[asyncio.Task] = None
+        self._matugen_task: Optional[asyncio.Task] = None
         self._tunnel_stopping = False
         self._tunnel_url:  Optional[str] = None
         self._local_base_url: Optional[str] = None
@@ -1139,6 +1230,8 @@ class ShareServer:
         self.apply_config_cb: Optional[Callable[[], Coroutine]] = None
         # Injected so Settings can put the keyboard overlay into move mode.
         self.key_overlay_move_cb: Optional[Callable[[bool], None]] = None
+        # Starts installing the GSR Flatpak (Vice Flatpak only); False when it cannot.
+        self.install_gsr_cb: Optional[Callable[[], bool]] = None
 
         self._setup_local_routes()
         self._setup_public_routes()
@@ -1172,6 +1265,8 @@ class ShareServer:
         r.add_post("/api/clips/{slug}/trim",              self._api_trim)
         r.add_post("/api/clips/{slug}/track-mix",         self._api_track_mix)
         r.add_post("/api/clips/{slug}/rename",            self._api_rename)
+        r.add_post("/api/clips/{slug}/game",              self._api_clip_game)
+        r.add_post("/api/clips/{slug}/prepare-preview",   self._api_prepare_preview)
         r.add_post("/api/clips/{slug}/reveal",            self._api_reveal)
         r.add_post("/api/clips/{slug}/open",              self._api_open)
         r.add_post("/api/clips/{slug}/copy-file",         self._api_copy_file)
@@ -1184,6 +1279,7 @@ class ShareServer:
         r.add_get("/api/clips/{slug}/highlights",         self._api_get_highlights)
         r.add_get("/api/clips/{slug}/keys",               self._api_get_keys)
         r.add_post("/api/overlay/move",                   self._api_overlay_move)
+        r.add_post("/api/recorder/install-gsr",           self._api_install_gsr)
         r.add_post("/api/clips/{slug}/highlights",        self._api_add_highlight)
         r.add_patch("/api/clips/{slug}/highlights/{hid}", self._api_patch_highlight)
         r.add_delete("/api/clips/{slug}/highlights/{hid}",self._api_del_highlight)
@@ -1205,6 +1301,7 @@ class ShareServer:
         r.add_post("/api/playlists/{pid}/clips",           self._api_playlist_add_clip)
         r.add_delete("/api/playlists/{pid}/clips/{slug}",  self._api_playlist_remove_clip)
         r.add_get("/api/config",               self._api_get_config)
+        r.add_get("/api/theme/matugen",        self._api_matugen)
         r.add_get("/api/displays",             self._api_get_displays)
         r.add_get("/api/audio-sources",        self._api_get_audio_sources)
         r.add_post("/api/config",              self._api_set_config)
@@ -1212,6 +1309,7 @@ class ShareServer:
         r.add_post("/api/update/check",         self._api_check_update)
         r.add_post("/api/trigger",             self._api_trigger)
         r.add_post("/api/quit",                self._api_quit)
+        r.add_post("/api/sounds/preview",      self._api_preview_sound)
         r.add_post("/api/uninstall",           self._api_uninstall)
 
         # WebSocket
@@ -1241,6 +1339,7 @@ class ShareServer:
             set(self._clips) | {image_slug(s) for s in self._images},
             build_tag_index(self.cfg.discord.custom_games),
             seed_auto=self.cfg.output.auto_playlist_by_game,
+            pinned=set(self._clip_games),
         )
         # View counts persist like highlights: they are only dropped when a
         # clip is deleted (in _api_delete) or its number is reused by a new
@@ -1251,6 +1350,7 @@ class ShareServer:
         public_port = self.cfg.sharing.public_port or (local_port + 1)
         public_host = _local_ip()
 
+        self._matugen_task = asyncio.create_task(self._watch_matugen())
         self._local_runner = web.AppRunner(self._local_app, access_log=None)
         await self._local_runner.setup()
         self._local_site = web.TCPSite(self._local_runner, "127.0.0.1", local_port)
@@ -1287,7 +1387,30 @@ class ShareServer:
         if self.cfg.sharing.cloudflare_tunnel:
             await self._start_tunnel(public_port)
 
+    async def _watch_matugen(self) -> None:
+        """Follow matugen's output, so a new wallpaper recolours an open window."""
+        last = None
+        while True:
+            try:
+                st = MATUGEN_PATH.stat()
+                stamp = (st.st_mtime_ns, st.st_size)
+            except OSError:
+                stamp = None
+            if stamp != last:
+                if last is not None or stamp is not None:
+                    await self.broadcast({"type": "matugen", "colors": load_matugen()})
+                last = stamp
+            await asyncio.sleep(2)
+
+    async def _api_matugen(self, _: web.Request) -> web.Response:
+        return web.json_response({"colors": load_matugen()})
+
     async def stop(self) -> None:
+        matugen_task = getattr(self, "_matugen_task", None)
+        if matugen_task:
+            matugen_task.cancel()
+            await asyncio.gather(matugen_task, return_exceptions=True)
+            self._matugen_task = None
         self._proxy_stopping = True
         tasks = list(self._proxy_tasks)
         for task in tasks:
@@ -1314,7 +1437,18 @@ class ShareServer:
 
     # ── public helpers (called by ViceDaemon) ─────────────────────────────────
 
-    def add_clip(self, path: Path, game: Optional[str] = None) -> str:
+    def _save_clip_games(self) -> None:
+        CLIP_GAMES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = CLIP_GAMES_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(self._clip_games))
+        tmp.replace(CLIP_GAMES_PATH)
+
+    def _clip_game(self, slug: str) -> Optional[str]:
+        if slug in self._clip_games:
+            return self._clip_games[slug] or None
+        return self.playlists.game_for(slug)
+
+    def add_clip(self, path: Path, game: Optional[str] = None, *, session: bool = False) -> str:
         """Register a new clip and return its share URL."""
         slug = path.stem
         self._clips[slug] = path
@@ -1324,6 +1458,11 @@ class ShareServer:
         # one would be shown the new recording.
         if self._views.pop(slug, None) is not None:
             _save_views(self._views)
+        old_game = self._clip_games.pop(slug, None)
+        if session and game:
+            self._clip_games[slug] = game
+        if self._clip_games.get(slug) != old_game:
+            self._save_clip_games()
         self._issue_share_token(slug)
         if (game and self.cfg.output.auto_playlist_by_game
                 and self.playlists.record_auto(game, slug)):
@@ -1460,6 +1599,15 @@ class ShareServer:
         if slug not in self._clips:
             raise web.HTTPNotFound()
         return web.json_response({"keys": keystore.load_sidecar(slug)})
+
+    async def _api_install_gsr(self, _: web.Request) -> web.Response:
+        """Install the gpu-screen-recorder Flatpak. Progress arrives as
+        gsr_install events over the WebSocket."""
+        if self.install_gsr_cb is None or not self.install_gsr_cb():
+            return web.json_response(
+                {"ok": False, "error": "Only the Vice Flatpak installs gpu-screen-recorder itself."},
+                status=409)
+        return web.json_response({"ok": True})
 
     async def _api_overlay_move(self, req: web.Request) -> web.Response:
         body = await req.json()
@@ -1615,7 +1763,8 @@ class ShareServer:
             "name":       path.name,
             "size":       size,
             "created_at": created_at,
-            "game":       self.playlists.game_for(slug),
+            "game":       self._clip_game(slug),
+            "preview":    self._preview_state(slug, path),
             "views":      self._views.get(slug, 0),
             # Keys were kept beside this clip for the viewer's overlay.
             "keys":       keystore.sidecar_path(slug).exists(),
@@ -1874,21 +2023,57 @@ class ShareServer:
             },
         )
 
+    async def _ensure_preview(self, slug: str, path: Path) -> Optional[Path]:
+        """The clip's H.264 preview proxy, building it if needed and telling
+        the UI while it does, so a card can say so (#241)."""
+        proxy = _proxy_path(path)
+        if proxy.exists() and proxy.stat().st_size > 0:
+            return proxy
+        task = asyncio.current_task()
+        self._proxy_tasks.add(task)
+        self._previews_building[slug] = self._previews_building.get(slug, 0) + 1
+        if self._previews_building[slug] == 1:
+            asyncio.create_task(self._broadcast_clip(slug, path))
+        try:
+            async with self._proxy_lock:
+                meta = await self._get_meta(slug, path)
+                return await _make_preview_proxy(path, meta.get("vcodec", ""))
+        finally:
+            self._proxy_tasks.discard(task)
+            left = self._previews_building[slug] - 1
+            if left:
+                self._previews_building[slug] = left
+            else:
+                del self._previews_building[slug]
+                asyncio.create_task(self._broadcast_clip(slug, path))
+
+    def _preview_state(self, slug: str, path: Path) -> str:
+        """none, working or ready. Only clips this window cannot play need a
+        preview, and the UI is what knows which those are."""
+        if slug in self._previews_building:
+            return "working"
+        try:
+            return "ready" if _proxy_path(path).stat().st_size > 0 else "none"
+        except OSError:
+            return "none"
+
+    async def _api_prepare_preview(self, req: web.Request) -> web.Response:
+        """Start a clip's preview without opening it (#241)."""
+        slug = req.match_info["slug"]
+        path = self._clips.get(slug)
+        if not path or not path.exists():
+            raise web.HTTPNotFound()
+        if self._proxy_stopping:
+            raise web.HTTPServiceUnavailable()
+        asyncio.create_task(self._ensure_preview(slug, path))
+        return web.json_response({"ok": True})
+
     async def _serve_preview_proxy(self, slug: str, path: Path):
         """Return a FileResponse for the clip's H.264 preview proxy, or None to
         fall back to serving the original."""
         if self._proxy_stopping:
             raise web.HTTPServiceUnavailable()
-        task = asyncio.current_task()
-        self._proxy_tasks.add(task)
-        try:
-            proxy = _proxy_path(path)
-            if not proxy.exists() or proxy.stat().st_size == 0:
-                async with self._proxy_lock:
-                    meta = await self._get_meta(slug, path)
-                    proxy = await _make_preview_proxy(path, meta.get("vcodec", ""))
-        finally:
-            self._proxy_tasks.discard(task)
+        proxy = await self._ensure_preview(slug, path)
         if proxy is None or not proxy.exists():
             return None
         return web.FileResponse(
@@ -1928,6 +2113,7 @@ class ShareServer:
                     source,
                     meta.get("duration", 0),
                     1 if source != path else meta.get("audio_streams", 1),
+                    meta.get("vcodec", ""),
                 )
         finally:
             self._proxy_tasks.discard(task)
@@ -2012,6 +2198,8 @@ class ShareServer:
 
     async def _api_delete(self, req: web.Request) -> web.Response:
         slug = req.match_info["slug"]
+        if slug in self._trimming:
+            return self._trim_running_response()
         path = self._clips.pop(slug, None)
         _purge_clip_discord(path)
         _purge_clip_sends(path)
@@ -2025,6 +2213,8 @@ class ShareServer:
         self._meta.pop(slug, None)
         if self._views.pop(slug, None) is not None:
             _save_views(self._views)
+        if self._clip_games.pop(slug, None) is not None:
+            self._save_clip_games()
         self._forget_share_token(slug)
         if self.playlists.on_clip_deleted(slug):
             await self._broadcast_playlists()
@@ -2039,6 +2229,25 @@ class ShareServer:
         if not path or not path.exists():
             raise web.HTTPNotFound()
 
+        # No await between the check and the add, so two requests cannot both
+        # get past it. Refused rather than queued: the second cut was chosen
+        # against a file the first one is about to replace (#281).
+        if slug in self._trimming:
+            return self._trim_running_response()
+        self._trimming.add(slug)
+        try:
+            return await self._trim_clip(req, slug, path)
+        finally:
+            self._trimming.discard(slug)
+
+    @staticmethod
+    def _trim_running_response() -> web.Response:
+        return web.json_response(
+            {"ok": False,
+             "error": "A trim is already running on this clip. Wait for it to finish."},
+            status=409)
+
+    async def _trim_clip(self, req: web.Request, slug: str, path: Path) -> web.Response:
         body  = await req.json()
         start = float(body.get("start", 0))
         end   = float(body.get("end",   0))
@@ -2140,7 +2349,7 @@ class ShareServer:
             if kept_keys is not None:
                 keystore.save_sidecar(target.stem, keystore.cut_intervals(kept_keys, start, end))
             track_mix.copy(slug, target.stem)
-            self.add_clip(target, self.playlists.game_for(slug))
+            self.add_clip(target, self._clip_game(slug), session=slug in self._clip_games)
             return web.json_response({"ok": True, "slug": target.stem, "copy": True})
 
         tmp.replace(path)
@@ -2155,11 +2364,39 @@ class ShareServer:
         asyncio.create_task(self._broadcast_clip(slug, path))
         return web.json_response({"ok": True, "slug": slug})
 
+    async def _api_clip_game(self, req: web.Request) -> web.Response:
+        """Set a clip's game by hand, for when detection missed it (#187). An
+        empty name clears it. Set here rather than in the filename, so the
+        clip's name and its share link stay as they are."""
+        slug = req.match_info["slug"]
+        path = self._clips.get(slug)
+        if not path or not path.exists():
+            raise web.HTTPNotFound()
+        try:
+            body = await req.json()
+        except ValueError:
+            return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+        requested = body.get("game") if isinstance(body, dict) else None
+        if not isinstance(requested, str):
+            return web.json_response({"ok": False, "error": "game must be a string"}, status=400)
+        game = " ".join(requested.split())[:80]
+        self._clip_games[slug] = game
+        self._save_clip_games()
+        wanted = game if self.cfg.output.auto_playlist_by_game else ""
+        if self.playlists.set_auto(slug, wanted):
+            await self._broadcast_playlists()
+        await self._broadcast_clip(slug, path)
+        return web.json_response({"ok": True, "game": game or None})
+
     async def _api_rename(self, req: web.Request) -> web.Response:
         slug = req.match_info["slug"]
         path = self._clips.get(slug)
         if not path or not path.exists():
             raise web.HTTPNotFound()
+
+        # The trim replaces the file at the path it started with.
+        if slug in self._trimming:
+            return self._trim_running_response()
 
         body     = await req.json()
         requested = str(body.get("name") or "").strip()
@@ -2207,6 +2444,13 @@ class ShareServer:
             old_hl.rename(HIGHLIGHTS_DIR / f"{new_slug}.json")
         keystore.move_sidecar(slug, new_slug)
         track_mix.move(slug, new_slug)
+        if slug != new_slug:
+            game = self._clip_games.pop(slug, None)
+            stale_game = self._clip_games.pop(new_slug, None)
+            if game is not None:
+                self._clip_games[new_slug] = game
+            if game is not None or stale_game is not None:
+                self._save_clip_games()
 
         # Playlist membership, the view counter and the editor project follow
         # the clip
@@ -2768,7 +3012,8 @@ class ShareServer:
         key_burn = None
         if body.get("keys"):
             key_burn = await asyncio.to_thread(
-                _key_burn_for, project, sources, work / "keys", accent)
+                _key_burn_for, project, sources, work / "keys", accent,
+                self.cfg.overlay.keys_hidden, self.cfg.overlay.keys_layout)
         try:
             cmd = build_export_cmd(project, sources, tmp,
                                    accent=accent,
@@ -2870,8 +3115,10 @@ class ShareServer:
         from .config import (
             Config, RecordingConfig, HotkeyConfig, OutputConfig, SharingConfig,
             DiscordConfig, DiscordCustomGame, UpdatesConfig, NotificationsConfig,
-            UIConfig, OverlayConfig,
-            clamp_recording_limits, ensure_buffer_covers_clip_presets, normalize_overlay,
+            UIConfig, OverlayConfig, VoiceConfig,
+            clamp_recording_limits, ensure_buffer_covers_clip_presets, normalize_notifications,
+            normalize_overlay,
+            normalize_voice,
             normalize_clip_presets, normalize_combo, normalize_focus_blocklist,
             validate_hotkeys,
             load as load_cfg, save as save_cfg,
@@ -2963,6 +3210,10 @@ class ShareServer:
                 k: v for k, v in merged.get("overlay", {}).items()
                 if k in OverlayConfig.__dataclass_fields__
             }),
+            voice=VoiceConfig(**{
+                k: v for k, v in merged.get("voice", {}).items()
+                if k in VoiceConfig.__dataclass_fields__
+            }),
         )
         try:
             validate_hotkeys(new_cfg.hotkeys)
@@ -2971,6 +3222,8 @@ class ShareServer:
         ensure_buffer_covers_clip_presets(new_cfg)
         clamp_recording_limits(new_cfg)
         normalize_overlay(new_cfg)
+        normalize_notifications(new_cfg)
+        normalize_voice(new_cfg)
 
         old_cfg = copy.deepcopy(self.cfg)
         image_dir_changed = (
@@ -2990,9 +3243,12 @@ class ShareServer:
         )
 
         # Apply live (some settings still require daemon restart, e.g. recorder
-        # backend). "ui" is only read by vice-app when the window opens, but it
-        # is carried across so self.cfg still matches what is on disk.
-        for field in ("recording", "hotkeys", "output", "sharing", "discord", "ui", "overlay"):
+        # Apply live (some settings still require daemon restart, e.g. recorder
+        # backend). vice-app reads "ui" at startup and on close/minimize;
+        # carry it across so self.cfg still matches what is on disk.
+        # "notifications" is read each time a sound plays (#297).
+        for field in ("recording", "hotkeys", "output", "sharing", "discord", "ui", "overlay",
+                      "notifications", "voice"):
             setattr(self.cfg, field, getattr(new_cfg, field))
 
         apply_error: str | None = None
@@ -3070,6 +3326,19 @@ class ShareServer:
             log.debug("Manual update check failed: %s", exc)
             found = None
         return web.json_response({"ok": True, "update": found})
+
+    async def _api_preview_sound(self, req: web.Request) -> web.Response:
+        """Play a sound from a pack, so one can be chosen by ear (#300)."""
+        from . import audio
+        try:
+            body = await req.json()
+        except ValueError:
+            return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+        pack = body.get("pack") if isinstance(body, dict) else None
+        if pack not in audio.SOUND_PACKS:
+            return web.json_response({"ok": False, "error": "unknown sound pack"}, status=400)
+        audio.preview(str(body.get("sound") or "clip"), self.cfg.notifications.sound_volume, pack)
+        return web.json_response({"ok": True})
 
     async def _api_quit(self, _: web.Request) -> web.Response:
         """Stop the daemon (browser-mode quit, native window uses pywebview API)."""

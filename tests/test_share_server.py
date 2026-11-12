@@ -893,9 +893,25 @@ class DiscordCopyTests(unittest.IsolatedAsyncioTestCase):
             root = Path(tmp)
             src = root / "Vice_Clip_1.mp4"
             src.write_bytes(b"small")
-            out = await share_mod._make_discord_copy(src, 10)
+            out = await share_mod._make_discord_copy(src, 10, vcodec="h264")
             self.assertEqual(out, src)
             self.assertFalse((root / share_mod.DISCORD_SUBDIR).exists())
+
+    async def test_a_small_clip_in_another_codec_is_converted(self) -> None:
+        """#289: a 10 MB AV1 clip went to Discord as AV1, which many phones
+        cannot play. Only H.264 goes out as it is."""
+        import vice.share as share_mod
+        for vcodec in ("av1", "hevc", ""):
+            with tempfile.TemporaryDirectory() as tmp:
+                src = Path(tmp) / "Vice_Clip_1.mp4"
+                src.write_bytes(b"small")
+                captured: list = []
+                with mock.patch("asyncio.create_subprocess_exec",
+                                self._recording_ffmpeg(captured)):
+                    out = await share_mod._make_discord_copy(src, 10, vcodec=vcodec)
+                self.assertNotEqual(out, src, vcodec)
+                self.assertEqual(len(captured), 1, vcodec)
+                self.assertIn("libx264", captured[0])
 
     async def test_the_copy_lands_beside_the_clip(self) -> None:
         """A sandboxed drop target (Discord ships as a Flatpak) can only read
@@ -1179,6 +1195,337 @@ class TrimKeyframeTests(unittest.IsolatedAsyncioTestCase):
 
 
 @unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
+class MatugenTests(unittest.IsolatedAsyncioTestCase):
+    """#295: Vice can take its colours from matugen."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "matugen.json"
+        patcher = mock.patch.object(_share, "MATUGEN_PATH", self.path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        from importlib.resources import files
+        self.roles = list(json.loads((files("vice") / "data" / "matugen.json").read_text()))
+
+    def test_a_full_scheme_is_read(self) -> None:
+        self.path.write_text(json.dumps({role: "#A1B2C3" for role in self.roles}))
+        self.assertEqual(_share.load_matugen(), {role: "#a1b2c3" for role in self.roles})
+
+    def test_nothing_without_the_file(self) -> None:
+        self.assertIsNone(_share.load_matugen())
+
+    def test_an_incomplete_or_unrendered_scheme_is_ignored(self) -> None:
+        scheme = {role: "#a1b2c3" for role in self.roles}
+        scheme["primary"] = "{{colors.primary.dark.hex}}"
+        self.path.write_text(json.dumps(scheme))
+        with self.assertLogs("vice.share", level="WARNING"):
+            self.assertIsNone(_share.load_matugen())
+
+    async def test_a_change_is_pushed_to_open_windows(self) -> None:
+        server = ShareServer.__new__(ShareServer)
+        server.broadcast = mock.AsyncMock()
+        with mock.patch.object(_share.asyncio, "sleep", new=mock.AsyncMock(side_effect=[None, asyncio.CancelledError])):
+            self.path.write_text(json.dumps({role: "#a1b2c3" for role in self.roles}))
+            with self.assertRaises(asyncio.CancelledError):
+                await server._watch_matugen()
+        server.broadcast.assert_awaited_once()
+        self.assertEqual(server.broadcast.await_args.args[0]["type"], "matugen")
+
+    def test_the_command_writes_a_template_matugen_can_read(self) -> None:
+        from click.testing import CliRunner
+        from vice import main as main_mod
+        with mock.patch("vice.main.normalize_runtime_environment", create=True):
+            result = CliRunner().invoke(main_mod.cli, ["matugen"])
+        self.assertEqual(result.exit_code, 0, result.output)
+        template = self.path.with_name("matugen-template.json")
+        self.assertIn(f"input_path = '{template}'", result.output)
+        self.assertIn(f"output_path = '{self.path}'", result.output)
+        self.assertIn("{{colors.primary.dark.hex}}", template.read_text())
+
+
+@unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
+class ClipGameByHandTests(unittest.IsolatedAsyncioTestCase):
+    """#187: a clip's game can be set when detection missed it."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        for target, value in (
+            ("vice.share.CLIP_GAMES_PATH", self.root / "clip_games.json"),
+            ("vice.playlists.PLAYLISTS_PATH", self.root / "playlists.json"),
+        ):
+            patcher = mock.patch(target, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _server(self, name: str = "Vice_Clip_1.mp4", auto: bool = True) -> "ShareServer":
+        cfg = Config()
+        cfg.output.directory = str(self.root)
+        cfg.output.auto_playlist_by_game = auto
+        (self.root / name).write_bytes(b"x")
+        server = ShareServer(cfg)
+        server.playlists.path = self.root / "playlists.json"
+        server.playlists.load()
+        server._clips[Path(name).stem] = self.root / name
+        server.broadcast = mock.AsyncMock()
+        return server
+
+    def _req(self, slug: str, game) -> mock.MagicMock:
+        req = mock.MagicMock()
+        req.match_info = {"slug": slug}
+        req.json = mock.AsyncMock(return_value={"game": game})
+        return req
+
+    async def test_setting_a_game_labels_the_clip_and_files_it(self) -> None:
+        server = self._server()
+        resp = await server._api_clip_game(self._req("Vice_Clip_1", "  Genshin   Impact "))
+        self.assertEqual(json.loads(resp.text)["game"], "Genshin Impact")
+        self.assertEqual(server._clip_game("Vice_Clip_1"), "Genshin Impact")
+        self.assertEqual(server.playlists.game_for("Vice_Clip_1"), "Genshin Impact")
+
+    async def test_changing_a_game_moves_it_between_playlists(self) -> None:
+        server = self._server()
+        await server._api_clip_game(self._req("Vice_Clip_1", "Halo"))
+        await server._api_clip_game(self._req("Vice_Clip_1", "Doom"))
+        self.assertEqual(server.playlists.game_for("Vice_Clip_1"), "Doom")
+        self.assertIsNone(server.playlists.get("auto:halo"))
+
+    async def test_clearing_beats_the_filename_after_a_restart(self) -> None:
+        server = self._server("Vice_Clip_1_Halo.mp4")
+        server.playlists.record_auto("Halo", "Vice_Clip_1_Halo")
+        await server._api_clip_game(self._req("Vice_Clip_1_Halo", ""))
+        self.assertIsNone(server._clip_game("Vice_Clip_1_Halo"))
+        server.playlists.backfill({"Vice_Clip_1_Halo"}, {}, pinned=set(server._clip_games))
+        self.assertIsNone(server.playlists.game_for("Vice_Clip_1_Halo"))
+
+    async def test_no_playlist_when_auto_playlists_are_off(self) -> None:
+        server = self._server(auto=False)
+        await server._api_clip_game(self._req("Vice_Clip_1", "Halo"))
+        self.assertEqual(server._clip_game("Vice_Clip_1"), "Halo")
+        self.assertIsNone(server.playlists.game_for("Vice_Clip_1"))
+
+    async def test_a_bad_body_is_refused(self) -> None:
+        server = self._server()
+        resp = await server._api_clip_game(self._req("Vice_Clip_1", 3))
+        self.assertEqual(resp.status, 400)
+
+    async def test_the_filename_is_left_alone(self) -> None:
+        server = self._server()
+        await server._api_clip_game(self._req("Vice_Clip_1", "Halo"))
+        self.assertTrue((self.root / "Vice_Clip_1.mp4").exists())
+
+
+@unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
+class PreviewStatusTests(unittest.IsolatedAsyncioTestCase):
+    """#241: whether a clip's preview is ready, and starting one from the card."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        patcher = mock.patch("vice.share.PROXY_DIR", self.root / "proxies")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        (self.root / "proxies").mkdir()
+        cfg = Config()
+        cfg.output.directory = str(self.root)
+        self.clip = self.root / "Vice_Clip_1.mp4"
+        self.clip.write_bytes(b"x")
+        self.server = ShareServer(cfg)
+        self.server._clips["Vice_Clip_1"] = self.clip
+        self.server._broadcast_clip = mock.AsyncMock()
+
+    async def test_states(self) -> None:
+        state = lambda: self.server._preview_state("Vice_Clip_1", self.clip)  # noqa: E731
+        self.assertEqual(state(), "none")
+        release = asyncio.Event()
+        seen = []
+
+        async def make(path, vcodec):
+            seen.append(state())
+            await release.wait()
+            proxy = _share._proxy_path(path)
+            proxy.write_bytes(b"proxy")
+            return proxy
+
+        with mock.patch.object(_share, "_make_preview_proxy", new=make), \
+                mock.patch.object(self.server, "_get_meta", new=mock.AsyncMock(return_value={})):
+            req = mock.MagicMock()
+            req.match_info = {"slug": "Vice_Clip_1"}
+            resp = await self.server._api_prepare_preview(req)
+            self.assertTrue(json.loads(resp.text)["ok"])
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            self.assertEqual(state(), "working")
+            release.set()
+            for _ in range(5):
+                await asyncio.sleep(0)
+        self.assertEqual(seen, ["working"])
+        self.assertEqual(state(), "ready")
+        self.assertEqual(self.server._broadcast_clip.await_count, 2)
+
+    async def test_a_failed_build_goes_back_to_none(self) -> None:
+        with mock.patch.object(_share, "_make_preview_proxy", new=mock.AsyncMock(return_value=None)), \
+                mock.patch.object(self.server, "_get_meta", new=mock.AsyncMock(return_value={})):
+            self.assertIsNone(await self.server._ensure_preview("Vice_Clip_1", self.clip))
+        self.assertEqual(self.server._preview_state("Vice_Clip_1", self.clip), "none")
+
+
+@unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
+class LocalRequestGuardTests(unittest.IsolatedAsyncioTestCase):
+    """The control server listens on loopback, which a web page can still
+    reach: a plain cross-site POST needs no CORS approval, and a WebSocket
+    has no same-origin rule at all."""
+
+    async def asyncSetUp(self) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        cfg = Config()
+        cfg.output.directory = self.tmp.name
+        self.server = ShareServer(cfg)
+        self.client = TestClient(TestServer(self.server._local_app))
+        await self.client.start_server()
+        self.addAsyncCleanup(self.client.close)
+        self.authority = f"127.0.0.1:{self.client.port}"
+
+    async def _state(self, headers: dict) -> int:
+        resp = await self.client.post(
+            "/api/app-state", data=json.dumps({"seen": 1}),
+            headers={"Content-Type": "text/plain", **headers})
+        return resp.status
+
+    async def test_a_cross_site_post_is_refused(self) -> None:
+        for origin in ("https://evil.example", "http://127.0.0.1:1", "null"):
+            with self.subTest(origin=origin):
+                self.assertEqual(await self._state({"Origin": origin}), 403)
+
+    async def test_the_app_itself_is_allowed(self) -> None:
+        self.assertEqual(await self._state({"Origin": f"http://{self.authority}"}), 200)
+
+    async def test_localhost_is_the_same_app(self) -> None:
+        # `vice open` uses localhost, the window uses 127.0.0.1.
+        authority = f"localhost:{self.client.port}"
+        self.assertEqual(
+            await self._state({"Host": authority, "Origin": f"http://{authority}"}), 200)
+
+    async def test_scripts_without_an_origin_keep_working(self) -> None:
+        self.assertEqual(await self._state({}), 200)
+
+    async def test_a_rebound_hostname_is_refused(self) -> None:
+        # DNS rebinding: the browser thinks this is the attacker's own site.
+        resp = await self.client.get("/api/status", headers={"Host": "evil.example:8765"})
+        self.assertEqual(resp.status, 403)
+
+    async def test_a_cross_site_websocket_is_refused(self) -> None:
+        from aiohttp import WSServerHandshakeError
+
+        with self.assertRaises(WSServerHandshakeError) as caught:
+            await self.client.ws_connect("/ws", headers={"Origin": "https://evil.example"})
+        self.assertEqual(caught.exception.status, 403)
+
+    async def test_the_apps_own_websocket_connects(self) -> None:
+        ws = await self.client.ws_connect("/ws", headers={"Origin": f"http://{self.authority}"})
+        await ws.close()
+
+    async def test_a_cross_site_read_is_still_served(self) -> None:
+        # An <img> or <video> may embed; CORS keeps the response from the page.
+        resp = await self.client.get("/api/status", headers={"Origin": "https://evil.example"})
+        self.assertEqual(resp.status, 200)
+
+    async def test_the_public_server_is_not_restricted_by_host(self) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        public = TestClient(TestServer(self.server._public_app))
+        await public.start_server()
+        self.addAsyncCleanup(public.close)
+        resp = await public.get("/c/nope", headers={"Host": "abc.trycloudflare.com"})
+        self.assertEqual(resp.status, 404)
+
+
+@unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
+class TrimOverlapTests(unittest.IsolatedAsyncioTestCase):
+    """#281: a second trim started while the first was still running wrote the
+    same .trimming file and corrupted the clip."""
+
+    def _server(self, root: Path) -> "ShareServer":
+        cfg = Config()
+        cfg.output.directory = str(root)
+        server = ShareServer(cfg)
+        src = root / "Vice_Clip_1.mp4"
+        src.write_bytes(b"original")
+        server._clips["Vice_Clip_1"] = src
+        return server
+
+    def _req(self) -> mock.MagicMock:
+        req = mock.MagicMock()
+        req.match_info = {"slug": "Vice_Clip_1"}
+        req.json = mock.AsyncMock(return_value={"start": 1.0, "end": 3.0})
+        return req
+
+    async def test_a_second_trim_on_the_same_clip_is_refused_while_one_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._server(Path(tmp))
+            started = asyncio.Event()
+            release = asyncio.Event()
+            calls = []
+
+            async def slow_trim(req, slug, path):
+                calls.append(slug)
+                started.set()
+                await release.wait()
+                return mock.MagicMock(status=200)
+
+            with mock.patch.object(server, "_trim_clip", new=slow_trim):
+                first = asyncio.ensure_future(server._api_trim(self._req()))
+                await started.wait()
+
+                second = await server._api_trim(self._req())
+                self.assertEqual(second.status, 409)
+                self.assertFalse(json.loads(second.text)["ok"])
+                self.assertEqual(calls, ["Vice_Clip_1"], "the second trim must not start")
+
+                release.set()
+                await first
+
+    async def test_a_clip_being_trimmed_cannot_be_renamed_or_deleted(self) -> None:
+        # The trim replaces the file at the path it started with, so a rename
+        # would leave the trimmed result under the old name beside the original.
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._server(Path(tmp))
+            src = server._clips["Vice_Clip_1"]
+            server._trimming.add("Vice_Clip_1")
+            req = self._req()
+            req.json = mock.AsyncMock(return_value={"name": "Renamed"})
+            renamed = await server._api_rename(req)
+            deleted = await server._api_delete(self._req())
+            self.assertEqual((renamed.status, deleted.status), (409, 409))
+            self.assertTrue(src.exists())
+            self.assertIs(server._clips["Vice_Clip_1"], src)
+
+    async def test_the_clip_can_be_trimmed_again_once_the_first_trim_ends(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._server(Path(tmp))
+            ok = mock.MagicMock(status=200)
+            with mock.patch.object(server, "_trim_clip", new=mock.AsyncMock(return_value=ok)):
+                await server._api_trim(self._req())
+                self.assertNotIn("Vice_Clip_1", server._trimming)
+                await server._api_trim(self._req())
+
+    async def test_a_failed_trim_releases_the_clip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._server(Path(tmp))
+            boom = mock.AsyncMock(side_effect=RuntimeError("ffmpeg died"))
+            with mock.patch.object(server, "_trim_clip", new=boom):
+                with self.assertRaises(RuntimeError):
+                    await server._api_trim(self._req())
+            self.assertNotIn("Vice_Clip_1", server._trimming)
+
+
+@unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
 class TrimEncoderTests(unittest.IsolatedAsyncioTestCase):
     """#172: a trim that has to re-encode used to hardcode libx264, so every
     H.265 recording came back as H.264 whatever the user set Video codec to."""
@@ -1332,16 +1679,17 @@ class TrimEncoderTests(unittest.IsolatedAsyncioTestCase):
             before = hashlib.sha256(src.read_bytes()).hexdigest()
             cfg = Config()
             cfg.output.directory = str(root)
-            server = ShareServer(cfg)
-            server._clips["Session"] = src
+            cfg.output.auto_playlist_by_game = False
+            with mock.patch.object(share_mod, "CLIP_GAMES_PATH", root / "clip_games.json"):
+                server = ShareServer(cfg)
+                server.add_clip(src, game="Overwatch 2", session=True)
 
             req = mock.MagicMock()
             req.match_info = {"slug": "Session"}
             req.json = mock.AsyncMock(return_value={"start": 1.0, "end": 3.0, "copy": True})
             with mock.patch.object(share_mod, "_available_encoders", return_value={"libx264"}), \
                  mock.patch.object(share_mod, "_is_nvidia", return_value=False), \
-                 mock.patch.object(server.playlists, "game_for", return_value="Overwatch 2"), \
-                 mock.patch.object(server, "add_clip") as add_clip:
+                 mock.patch.object(share_mod, "CLIP_GAMES_PATH", root / "clip_games.json"):
                 resp = await server._api_trim(req)
 
             body = json.loads(resp.text)
@@ -1349,14 +1697,17 @@ class TrimEncoderTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(body["slug"], "Session-trim-2")
             self.assertEqual(hashlib.sha256(src.read_bytes()).hexdigest(), before)
             copy = root / "Session-trim-2.mp4"
-            add_clip.assert_called_once_with(copy, "Overwatch 2")
+            self.assertEqual(server._clip_json(copy.stem, copy, {})["game"], "Overwatch 2")
+            self.assertIsNone(server.playlists.game_for(copy.stem))
             duration = float(subprocess.run(
                 ["ffprobe", "-v", "error", "-show_entries", "format=duration",
                  "-of", "csv=p=0", str(copy)], capture_output=True, text=True,
             ).stdout)
             self.assertAlmostEqual(duration, 2.0, delta=0.1)
-            self.assertEqual(sorted(p.name for p in root.iterdir()),
-                             ["Session-trim-2.mp4", "Session-trim.mp4", "Session.mp4"])
+            self.assertEqual(
+                sorted(p.name for p in root.iterdir()),
+                ["Session-trim-2.mp4", "Session-trim.mp4", "Session.mp4", "clip_games.json"],
+            )
 
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg not installed")
     async def test_a_trim_keeps_the_clips_codec(self) -> None:
@@ -1710,6 +2061,75 @@ class ShareServerDisplayApiTests(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
 class ShareServerConfigApiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_close_policy_persists_and_changes_in_the_same_gui_session(self) -> None:
+        from vice import app as vice_app, config
+        from vice.tray import WindowTrayController
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch.object(config, "CONFIG_DIR", root), mock.patch.object(
+                config, "CONFIG_PATH", root / "config.toml"
+            ):
+                cfg = Config()
+                cfg.ui.hardware_video_decode = True
+                config.save(cfg)
+                server = ShareServer(cfg)
+                win = mock.Mock()
+                shutdown = mock.Mock()
+                controller = WindowTrayController(
+                    win=win,
+                    socket_path=root / "vice-app.sock",
+                    icon_paths=(),
+                    shutdown_daemon=shutdown,
+                    close_window=win.destroy,
+                    logger=mock.Mock(),
+                    close_to_tray=vice_app._close_to_tray_enabled,
+                )
+                controller._tray_available = True
+
+                # One controller sees both directions of the saved toggle.
+                for opt_in in (True, False, True):
+                    with self.subTest(close_to_tray=opt_in):
+                        response = await server._api_set_config(
+                            _JsonRequest({"ui": {"close_to_tray": opt_in}})
+                        )
+                        payload = json.loads(response.text)
+                        self.assertEqual(response.status, 200)
+                        self.assertTrue(payload["ok"], payload)
+                        self.assertFalse(payload["restart_required"])
+                        self.assertIs(config.load().ui.close_to_tray, opt_in)
+                        self.assertIs(server.cfg.ui.close_to_tray, opt_in)
+                        fetched = json.loads((await server._api_get_config(mock.Mock())).text)
+                        self.assertIs(fetched["ui"]["close_to_tray"], opt_in)
+                        self.assertTrue(fetched["ui"]["hardware_video_decode"])
+
+                        win.reset_mock()
+                        self.assertIs(controller._on_closing(), False if opt_in else None)
+                        controller.keep_running()
+                        self.assertEqual(win.hide.call_count, 2 if opt_in else 0)
+                        self.assertEqual(win.destroy.call_count, 0 if opt_in else 1)
+                        shutdown.assert_not_called()
+
+    async def test_notification_settings_apply_without_a_restart(self) -> None:
+        # #297: the daemon reads self.cfg when it plays a sound, so a section
+        # left out of the live copy only changes after a restart.
+        from vice import config
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch.object(config, "CONFIG_DIR", root), mock.patch.object(
+                config, "CONFIG_PATH", root / "config.toml"
+            ):
+                cfg = Config()
+                config.save(cfg)
+                server = ShareServer(cfg)
+                response = await server._api_set_config(_JsonRequest({
+                    "notifications": {"clip_sound": "~/ping.wav", "sound_volume": 0.4},
+                }))
+                self.assertTrue(json.loads(response.text)["ok"])
+                self.assertEqual(cfg.notifications.clip_sound, "~/ping.wav")
+                self.assertEqual(cfg.notifications.sound_volume, 0.4)
+
     async def test_api_set_config_saves_clip_presets_and_grows_buffer(self) -> None:
         server = ShareServer(
             Config(

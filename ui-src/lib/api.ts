@@ -63,6 +63,10 @@ export const api = {
   clips: async () => (await request<{clips: Clip[]}>('/api/clips')).clips,
   deleteClip: (slug: string) => request<void>(`/api/clips/${enc(slug)}`, {method: 'DELETE'}),
   renameClip: (slug: string, name: string) => post<Clip>(`/api/clips/${enc(slug)}/rename`, {name}),
+  setClipGame: (slug: string, game: string) => post<{ok: boolean}>(`/api/clips/${enc(slug)}/game`, {game}),
+  matugen: () => request<{colors: Record<string, string> | null}>('/api/theme/matugen'),
+  previewSound: (pack: string, sound = 'clip') => post<{ok: boolean}>('/api/sounds/preview', {pack, sound}),
+  prepareClipPreview: (slug: string) => post<{ok: boolean}>(`/api/clips/${enc(slug)}/prepare-preview`),
   revealClip: (slug: string) => post<void>(`/api/clips/${enc(slug)}/reveal`),
   openClip: (slug: string) => post<void>(`/api/clips/${enc(slug)}/open`),
   /**
@@ -131,6 +135,8 @@ export const api = {
   clipKeys: async (slug: string) =>
     (await request<{keys: [number, number, string][] | null}>(`/api/clips/${enc(slug)}/keys`)).keys,
   moveKeyOverlay: (on: boolean) => post<{ok: boolean}>('/api/overlay/move', {on}),
+  /** Vice Flatpak only. Progress arrives as gsr_install WebSocket events. */
+  installGsr: () => post<{ok: boolean; error?: string}>('/api/recorder/install-gsr'),
   highlights: async (slug: string) =>
     (await request<{highlights: Highlight[]}>(`/api/clips/${enc(slug)}/highlights`)).highlights ?? [],
   addHighlight: (slug: string, body: Omit<Highlight, 'id'>) =>

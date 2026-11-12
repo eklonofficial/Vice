@@ -1,2 +1,2 @@
 """Vice: Linux game clip recorder."""
-__version__ = "2.15.1"
+__version__ = "2.18.0"

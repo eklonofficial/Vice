@@ -404,6 +404,7 @@ class SettingsCoverageTests(unittest.TestCase):
             "check_on_start",
             "sound_volume",
             "hardware_video_decode",
+            "close_to_tray",
             "client_id_override",
             "custom_games",
         ):
@@ -419,6 +420,16 @@ class SettingsCoverageTests(unittest.TestCase):
             "screenshot_sound",
         ):
             self.assertIn(key, self.draft)
+
+    def test_close_to_tray_uses_the_settings_draft_and_localized_copy(self) -> None:
+        self.assertIn("closeToTray: ui.close_to_tray === true", self.draft)
+        self.assertIn("close_to_tray: draft.closeToTray", self.draft)
+        self.assertIn("checked={draft.closeToTray}", self.settings)
+        self.assertIn("update({closeToTray})", self.settings)
+        self.assertIn("t('settings.closeToTrayHelp')", self.settings)
+        copy = english_copy()["settings"]
+        self.assertEqual(copy["closeToTray"], "Close to tray")
+        self.assertIn("recording continues", copy["closeToTrayHelp"])
 
     def test_the_screenshot_key_can_be_set_and_cleared(self) -> None:
         self.assertIn("screenshotKey", self.draft)
@@ -763,6 +774,15 @@ class TranslationTests(unittest.TestCase):
         self.assertGreater(len(self.english_keys), 300)
         self.assertTrue((LOCALES / "index.ts").is_file())
 
+    def test_every_locale_file_is_imported_in_index(self) -> None:
+        index_ts = (LOCALES / "index.ts").read_text()
+        for path in LOCALES.glob("*.json"):
+            self.assertIn(
+                f"{path.stem}.json",
+                index_ts,
+                f"{path.name} exists in ui-src/locales/ but is not imported in index.ts",
+            )
+
     def test_no_locale_carries_a_key_english_has_dropped(self) -> None:
         # An extra key means English was renamed and this file was not, so the
         # string is dead weight and whatever replaced it is untranslated.
@@ -870,8 +890,8 @@ class CustomAccentTests(unittest.TestCase):
     def test_the_boot_cover_can_paint_a_custom_accent(self) -> None:
         # The cover paints before the bundle parses and cannot derive anything,
         # so the two colours it needs are cached when the user confirms.
-        self.assertIn("vice-custom-bg", self.index)
-        self.assertIn("vice-custom-base", self.index)
+        self.assertIn("'vice-' + name + '-bg'", self.index)
+        self.assertIn("'vice-' + name + '-base'", self.index)
         choice = (UI_SRC / "lib" / "accentChoice.ts").read_text()
         self.assertIn("vice-custom-bg", choice)
         self.assertIn("vice-custom-base", choice)
@@ -881,7 +901,7 @@ class CustomAccentTests(unittest.TestCase):
     def test_a_custom_accent_without_a_seed_falls_back(self) -> None:
         # A cleared localStorage leaves 'custom' selected with nothing behind
         # it, and a window painted in no accent at all is not an option.
-        self.assertIn("accent === 'custom' ? 'blue' : accent", self.theme)
+        self.assertIn("accent === 'custom' || accent === 'matugen' ? 'blue' : accent", self.theme)
 
     def test_the_custom_theme_is_cached_by_seed(self) -> None:
         # <Theme> compares by identity, so rebuilding per render would swap the

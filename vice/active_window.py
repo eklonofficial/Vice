@@ -22,7 +22,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Optional
 
-from .runtime import actual_home_dir
+from .runtime import actual_home_dir, host_argv, host_which, read_host_proc
 
 log = logging.getLogger(__name__)
 
@@ -32,11 +32,13 @@ ActiveWindow = dict  # {"process": str, "class": str, "pid": int, "window_id": s
 # caller can pin capture without asking X11 for focus a second time.
 
 
+# Compositor tools that only exist on the host, never inside the Flatpak.
+_HOST_TOOLS = frozenset({"hyprctl", "swaymsg", "niri", "kdotool"})
+
+
 def _read_proc_comm(pid: int) -> str:
-    try:
-        return Path(f"/proc/{pid}/comm").read_text(errors="replace").strip()
-    except Exception:
-        return ""
+    raw = read_host_proc(pid, "comm")
+    return raw.decode(errors="replace").strip() if raw else ""
 
 
 def read_steam_app_id(pid) -> Optional[str]:
@@ -55,10 +57,8 @@ def read_steam_app_id(pid) -> Optional[str]:
         return None
     if pid <= 0:
         return None
-    try:
-        raw = Path(f"/proc/{pid}/environ").read_bytes()
-    except OSError as exc:
-        log.debug("Cannot read the environment of pid %s: %s", pid, exc)
+    raw = read_host_proc(pid, "environ")
+    if raw is None:
         return None
 
     fallback = None
@@ -76,6 +76,8 @@ def read_steam_app_id(pid) -> Optional[str]:
 
 
 def _run(cmd: list[str], timeout: float = 1.0) -> str:
+    if cmd and cmd[0] in _HOST_TOOLS:
+        cmd = host_argv(cmd)
     try:
         result = subprocess.run(
             cmd,
@@ -497,7 +499,8 @@ def pointer_display_supported() -> bool:
 def detection_tools_status() -> dict:
     """Which window-detection tools are installed, for doctor and logs."""
     import shutil
-    return {tool: bool(shutil.which(tool)) for tool in ("xdotool", "xprop", "wmctrl", "kdotool")}
+    return {tool: (host_which(tool) if tool in _HOST_TOOLS else bool(shutil.which(tool)))
+            for tool in ("xdotool", "xprop", "wmctrl", "kdotool")}
 
 
 # ─── compositor detection (one-shot at import time) ─────────────────────────
@@ -509,12 +512,10 @@ def _detect_compositor_adapter() -> Optional[Callable[[], Optional[ActiveWindow]
     if os.environ.get("SWAYSOCK"):
         return _get_active_window_sway
     if os.environ.get("NIRI_SOCKET"):
-        import shutil
-        if shutil.which("niri"):
+        if host_which("niri"):
             return _get_active_window_niri
     if os.environ.get("WAYLAND_DISPLAY") and ("kde" in desktop or "plasma" in desktop):
-        import shutil
-        if shutil.which("kdotool"):
+        if host_which("kdotool"):
             return _get_active_window_kde
         if os.environ.get("DISPLAY"):
             return _get_active_window_x11

@@ -2,6 +2,7 @@ import {useStore, type BannerId} from '../state/store';
 import {H264_SUPPORTED} from '../lib/env';
 import {IconClose, IconWarning} from './Icons';
 import {t} from '../lib/i18n';
+import {needsGsrSetup} from './GsrSetup';
 
 const GSR_FLATPAK_INSTALL = 'flatpak install flathub com.dec05eba.gpu_screen_recorder';
 
@@ -17,7 +18,9 @@ export function Banners() {
   const showing = (id: BannerId) => !dismissed.includes(id);
   const dismiss = (banner: BannerId) => () => dispatch({type: 'dismiss', banner});
 
-  const recorderDown = status.ready === false && Boolean(status.recorder_error);
+  // The Flatpak's setup step already says this, louder and with the fix.
+  const recorderDown =
+    status.ready === false && Boolean(status.recorder_error) && !needsGsrSetup(status, state.gsrInstall);
 
   return (
     <div className="banners">

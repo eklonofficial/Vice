@@ -3750,13 +3750,13 @@ class NotificationVolumeTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(audio_mod, "_play", new=mock.AsyncMock()) as play:
             audio_mod.play_clip(0.4)
             await asyncio.sleep(0)
-        play.assert_awaited_once_with("clip", 0.4, None)
+        play.assert_awaited_once_with("clip", 0.4, None, "classic")
 
     async def test_custom_sound_is_passed_through(self) -> None:
         with mock.patch.object(audio_mod, "_play", new=mock.AsyncMock()) as play:
             audio_mod.play_clip(0.4, "~/sounds/ping.wav")
             await asyncio.sleep(0)
-        play.assert_awaited_once_with("clip", 0.4, "~/sounds/ping.wav")
+        play.assert_awaited_once_with("clip", 0.4, "~/sounds/ping.wav", "classic")
 
     def test_daemon_passes_the_configured_volume(self) -> None:
         source = (Path(__file__).resolve().parents[1] / "vice" / "main.py").read_text()
@@ -4201,9 +4201,103 @@ class CustomNotificationSoundTests(unittest.TestCase):
             sound.write_bytes(b"RIFF")
             self.assertEqual(audio_mod.resolve_custom_sound("~/tilde.wav"), sound)
 
+    def test_a_path_pasted_from_a_file_manager_is_understood(self) -> None:
+        # #297: file managers copy a location quoted, or as a file:// URI.
+        sound = self.dir / "medal clip.wav"
+        sound.write_bytes(b"RIFF")
+        for pasted in (
+            f'"{sound}"',
+            f"'{sound}'",
+            f"  {sound}\n",
+            sound.as_uri(),
+            f'"{sound.as_uri()}"',
+        ):
+            with self.subTest(pasted=pasted):
+                self.assertEqual(audio_mod.resolve_custom_sound(pasted), sound)
+
     def test_every_sound_has_a_synthesised_tone_to_fall_back_on(self) -> None:
         for name in ("clip", "clip_failed", "session_start", "session_end", "highlight"):
             self.assertTrue(audio_mod._wav_for(name, 1.0))
+
+
+class SoundPackTests(unittest.TestCase):
+    """#300: a built-in pack of recorded sounds as well as the tones."""
+
+    def test_every_pack_file_matches_the_tone_format(self) -> None:
+        from importlib.resources import files
+        import wave
+        for pack in audio_mod.SOUND_PACKS[1:]:
+            folder = files("vice") / "sounds" / pack
+            names = [p.name for p in folder.iterdir() if p.name.endswith(".wav")]
+            self.assertTrue(names, pack)
+            for name in names:
+                with self.subTest(pack=pack, name=name), wave.open(str(folder / name)) as w:
+                    self.assertEqual((w.getsampwidth(), w.getnchannels(), w.getframerate()), (2, 2, 48000))
+                    self.assertIn(name[:-4], audio_mod._SPECS)
+
+    def test_a_pack_sound_is_used_and_scaled(self) -> None:
+        loud = audio_mod._wav_for("clip", 1.0, "futuristic")
+        quiet = audio_mod._wav_for("clip", 0.5, "futuristic")
+        self.assertNotEqual(loud, audio_mod._wav_for("clip", 1.0))
+        self.assertEqual(len(loud), len(quiet))
+        self.assertLess(max(abs(v) for v in memoryview(quiet[44:]).cast("h")),
+                        max(abs(v) for v in memoryview(loud[44:]).cast("h")))
+
+    def test_highlight_borrows_the_clip_sound(self) -> None:
+        self.assertEqual(audio_mod._wav_for("highlight", 1.0, "futuristic"),
+                         audio_mod._wav_for("clip", 1.0, "futuristic"))
+
+    def test_an_unknown_pack_is_the_classic_tones(self) -> None:
+        self.assertEqual(audio_mod.normalize_pack("nope"), "classic")
+        from vice.config import Config, normalize_notifications
+        cfg = Config()
+        cfg.notifications.sound_pack = "Futuristic"
+        normalize_notifications(cfg)
+        self.assertEqual(cfg.notifications.sound_pack, "futuristic")
+
+
+class CustomSoundPlaybackTests(unittest.IsolatedAsyncioTestCase):
+    """A file that exists but will not play must not turn into silence (#297)."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+        self.played = self.dir / "played.txt"
+        self.custom = self.dir / "custom.wav"
+        self.custom.write_bytes(b"not really audio")
+        player = self.dir / "player"
+        player.write_text(
+            "#!/bin/sh\n"
+            f'echo "$1" >> "{self.played}"\n'
+            f'if [ "$1" = "{self.custom}" ]; then echo "Failed to open audio file." >&2; exit 1; fi\n'
+        )
+        player.chmod(0o755)
+        for target, value in (
+            ("vice.audio._find_player", mock.Mock(return_value=str(player))),
+            ("vice.audio._TMP_DIR", self.dir / "tones"),
+        ):
+            patcher = mock.patch(target, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    async def test_an_unplayable_file_falls_back_to_the_tone_and_says_why(self) -> None:
+        with self.assertLogs("vice.audio", level="WARNING") as logs:
+            await audio_mod._play("clip", 1.0, str(self.custom))
+        lines = self.played.read_text().splitlines()
+        self.assertEqual(lines[0], str(self.custom))
+        self.assertEqual(len(lines), 2)
+        self.assertIn("snd_clip_", lines[1])
+        self.assertIn("Failed to open audio file", "\n".join(logs.output))
+
+    async def test_a_tone_that_fails_is_not_retried(self) -> None:
+        with mock.patch("vice.audio._wav_for", return_value=b"tone"):
+            player = self.dir / "failing"
+            player.write_text(f'#!/bin/sh\necho "$1" >> "{self.played}"\nexit 1\n')
+            player.chmod(0o755)
+            with mock.patch("vice.audio._find_player", return_value=str(player)):
+                await audio_mod._play("clip", 1.0, None)
+        self.assertEqual(len(self.played.read_text().splitlines()), 1)
 
 
 class ClipErrorReasonTests(unittest.TestCase):

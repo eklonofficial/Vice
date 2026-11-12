@@ -44,6 +44,34 @@ EVDEV_TO_KEY: dict[str, str] = {
 
 LAYOUT_KEYS = frozenset(EVDEV_TO_KEY.values())
 
+# Keyboard layouts the panel can be labelled for. Key ids, and so the keys
+# saved beside clips and the keys taken off the panel, name the physical key
+# evdev reports (KEY_Q is the key right of Tab on every keyboard), so a layout
+# only changes what is printed on a key, never which key lights up. LAYOUT
+# above is the QWERTY one.
+KEY_LAYOUTS = ("qwerty", "azerty")
+DEFAULT_KEY_LAYOUT = "qwerty"
+
+# Labels that differ from LAYOUT's, by key id. On AZERTY the physical Q, W and
+# A keys print A, Z and Q. The number row keeps 1 to 5, the names games and
+# players use for those keys.
+_LAYOUT_LABELS: dict[str, dict[str, str]] = {
+    "azerty": {"Q": "A", "W": "Z", "A": "Q"},
+}
+
+
+def normalize_key_layout(name: object) -> str:
+    """*name* when it is a known layout, the default otherwise."""
+    value = str(name or "").strip().lower()
+    return value if value in KEY_LAYOUTS else DEFAULT_KEY_LAYOUT
+
+
+def layout_rows(name: object = DEFAULT_KEY_LAYOUT) -> list[list[tuple[Optional[str], str, float]]]:
+    """LAYOUT with the labels of layout *name*. Same keys, same widths."""
+    labels = _LAYOUT_LABELS.get(normalize_key_layout(name), {})
+    return [[(key, labels.get(key, label) if key is not None else label, span)
+             for key, label, span in row] for row in LAYOUT]
+
 
 class KeyRing:
     """Presses and releases of layout keys over the last *horizon* seconds,
@@ -51,6 +79,8 @@ class KeyRing:
 
     def __init__(self, horizon: float) -> None:
         self.horizon = horizon
+        # Keys the user took off the panel: never recorded (#258).
+        self.hidden: frozenset[str] = frozenset()
         self._events: deque[tuple[float, str, bool]] = deque()
         # Several physical keys can share one layout key (both shifts), so a
         # key is up only when every one of them is.
@@ -60,7 +90,7 @@ class KeyRing:
         """Note one key event. Returns (layout key, now down) when what the
         layout shows changed, None otherwise."""
         key = EVDEV_TO_KEY.get(evdev_name)
-        if key is None:
+        if key is None or key in self.hidden:
             return None
         now = time.monotonic() if at is None else at
         held = self._held.setdefault(key, set())
@@ -74,6 +104,13 @@ class KeyRing:
         self._events.append((now, key, bool(held)))
         self._trim(now)
         return key, bool(held)
+
+    def hide(self, keys: Iterable[str]) -> None:
+        """Stop recording *keys*, and forget what was already kept of them."""
+        self.hidden = frozenset(keys)
+        for key in self.hidden:
+            self._held.pop(key, None)
+        self._events = deque(e for e in self._events if e[1] not in self.hidden)
 
     def _trim(self, now: float) -> None:
         cutoff = now - self.horizon

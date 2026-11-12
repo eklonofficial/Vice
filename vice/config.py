@@ -20,6 +20,7 @@ else:
 
 import tomli_w
 
+from .keys import DEFAULT_KEY_LAYOUT, KEY_LAYOUTS, LAYOUT_KEYS
 from .runtime import actual_home_dir, resolve_path
 
 CONFIG_DIR = actual_home_dir() / ".config" / "vice"
@@ -285,10 +286,16 @@ class NotificationsConfig:
     session_end_sound: Optional[str] = None
     highlight_sound: Optional[str] = None
     screenshot_sound: Optional[str] = None
+    # Which built-in set of sounds plays: classic | futuristic (#300). A
+    # custom sound above still wins for its own event.
+    sound_pack: str = "classic"
 
 
 @dataclass
 class UIConfig:
+    # Opt in to retaining the GUI in the tray on X / in-app Minimize.
+    # Otherwise release the GUI while the recording daemon keeps running.
+    close_to_tray: bool = False
     # Let Chromium decode clip previews on the GPU. Off by default: hardware
     # decode draws a black rectangle on a lot of Linux GPU and driver
     # combinations, and a laggy preview beats no picture (#140). Worth turning
@@ -313,6 +320,27 @@ class OverlayConfig:
     # Also keep the keys pressed during each saved clip beside it, so the
     # viewer can show them afterwards. Only the overlay's keys are stored.
     keys_in_clips: bool = False
+    # Keys left off the panel, by the ids in keys.LAYOUT. A key here is not
+    # shown, read or kept with clips (#258).
+    keys_hidden: list[str] = field(default_factory=list)
+    # Which keyboard the panel's labels are for: qwerty | azerty. The keys
+    # stay where they are and the same physical key lights up either way; only
+    # what is printed on them changes.
+    keys_layout: str = DEFAULT_KEY_LAYOUT
+
+
+@dataclass
+class VoiceConfig:
+    # Continuously listen on the microphone for "Vice, clip that" / "Clip that".
+    enabled: bool = False
+    # Optional custom trigger phrase in addition to the defaults (e.g. "Record that").
+    custom_phrase: str = ""
+    # Cooldown seconds after a voice trigger before another voice clip can fire.
+    cooldown: float = 4.0
+    # Minimum word confidence threshold (0.20 to 0.90, default 0.50).
+    min_confidence: float = 0.50
+    # Custom path to an unpacked Vosk speech model; empty means default lookup.
+    model_path: str = ""
 
 
 @dataclass
@@ -326,6 +354,7 @@ class Config:
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     ui: UIConfig = field(default_factory=UIConfig)
     overlay: OverlayConfig = field(default_factory=OverlayConfig)
+    voice: VoiceConfig = field(default_factory=VoiceConfig)
 
 
 def _merge(defaults: dict, overrides: dict) -> dict:
@@ -475,6 +504,37 @@ def normalize_overlay(cfg: "Config") -> None:
         ov.keys_scale = 1.0
     ov.keys = bool(ov.keys)
     ov.keys_in_clips = bool(ov.keys_in_clips)
+    raw = ov.keys_hidden if isinstance(ov.keys_hidden, (list, tuple)) else []
+    hidden = sorted({k for k in raw if k in LAYOUT_KEYS})
+    # A panel with nothing on it is never what was meant.
+    ov.keys_hidden = [] if len(hidden) == len(LAYOUT_KEYS) else hidden
+    layout = str(ov.keys_layout or "").strip().lower()
+    if layout not in KEY_LAYOUTS:
+        log.warning("overlay.keys_layout=%r is unknown, using %s", ov.keys_layout, DEFAULT_KEY_LAYOUT)
+        layout = DEFAULT_KEY_LAYOUT
+    ov.keys_layout = layout
+
+
+def normalize_notifications(cfg: "Config") -> None:
+    from .audio import normalize_pack  # audio imports nothing from config
+    cfg.notifications.sound_pack = normalize_pack(cfg.notifications.sound_pack)
+
+
+def normalize_voice(cfg: Config) -> None:
+    vc = getattr(cfg, "voice", None)
+    if not isinstance(vc, VoiceConfig):
+        return
+    vc.custom_phrase = str(getattr(vc, "custom_phrase", "") or "").strip()
+    try:
+        vc.cooldown = max(1.0, min(float(getattr(vc, "cooldown", 4.0)), 60.0))
+    except (TypeError, ValueError):
+        vc.cooldown = 4.0
+    try:
+        vc.min_confidence = max(0.20, min(float(getattr(vc, "min_confidence", 0.50)), 0.90))
+    except (TypeError, ValueError):
+        vc.min_confidence = 0.50
+    vc.model_path = str(getattr(vc, "model_path", "") or "").strip()
+    vc.enabled = bool(vc.enabled)
 
 
 def clamp_recording_limits(cfg: Config) -> None:
@@ -612,10 +672,13 @@ def load() -> Config:
         ),
         ui=UIConfig(**_known_keys(UIConfig, merged.get("ui", {}))),
         overlay=OverlayConfig(**_known_keys(OverlayConfig, merged.get("overlay", {}))),
+        voice=VoiceConfig(**_known_keys(VoiceConfig, merged.get("voice", {}))),
     )
     ensure_buffer_covers_clip_presets(cfg)
     clamp_recording_limits(cfg)
     normalize_overlay(cfg)
+    normalize_notifications(cfg)
+    normalize_voice(cfg)
     return cfg
 
 

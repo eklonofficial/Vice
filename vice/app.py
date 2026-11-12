@@ -719,6 +719,16 @@ def _hardware_video_decode_enabled() -> bool:
         return False
 
 
+def _close_to_tray_enabled() -> bool:
+    """Read the opt-in close policy; config errors retain low-memory closing."""
+    try:
+        from .config import load as load_config
+        return load_config().ui.close_to_tray is True
+    except Exception as exc:
+        log.debug("Could not read ui.close_to_tray: %s", exc)
+        return False
+
+
 def _prepare_webview_environment() -> None:
     """Set environment for a stable QtWebEngine (Chromium) session.
 
@@ -1072,6 +1082,7 @@ def _run_webview(url: str) -> None:
         shutdown_daemon=_stop_daemon_completely,
         close_window=lambda: _close_window_after_bridge(win),
         logger=log,
+        close_to_tray=_close_to_tray_enabled,
     )
     tray_controller.start()
     api._bind_tray(tray_controller)

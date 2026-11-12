@@ -42,16 +42,27 @@
 
 ## Install
 
-**Arch / Manjaro / CachyOS / any Arch-based distro:**
+Find your system, then jump to its section.
+
+| Your system | How to install | |
+|---|---|---|
+| Arch, Manjaro, CachyOS, EndeavourOS and other Arch-based distros | AUR package `vice-clipper` | [Jump](#arch-linux-aur) |
+| NixOS | Flake | [Jump](#nixos-flake) |
+| Ubuntu, Debian, Mint, Pop!_OS, Fedora Workstation, openSUSE | Install script | [Jump](#ubuntu-debian-fedora-opensuse-install-script) |
+| Steam Deck, Bazzite, Fedora Atomic (Silverblue, Kinoite) and other immutable distros | Flatpak (**beta**) | [Jump](#steam-deck-bazzite-fedora-atomic-flatpak-beta) |
+
+After installing, launch **Vice** from your app menu (or run `vice-app`) and press **F9** in a game.
+
+### Arch Linux (AUR)
 
 ```bash
 yay -S vice-clipper     # or: paru -S vice-clipper
 systemctl --user enable --now vice.service
 ```
 
-The package ships the service but does not enable it for you, so run that second line to have clipping start at login. `./install.sh` asks and does it for you.
+The package ships the service but does not enable it for you, so run that second line to have clipping start at login.
 
-**NixOS (flake):**
+### NixOS (flake)
 
 ```nix
 {
@@ -67,25 +78,41 @@ The package ships the service but does not enable it for you, so run that second
 
 The module installs the package, the `uaccess` udev rule for the hotkey listener, gpu-screen-recorder's capability wrapper so recording starts without a password prompt, and the user daemon, which starts with your graphical session. Set `services.vice.autoStart = false;` to only record while the window is open. Without flakes, `nix/package.nix` and `nix/module.nix` are plain callPackage/NixOS files you can import directly.
 
-**Ubuntu / Debian / Mint / Fedora / openSUSE / other:**
+### Ubuntu, Debian, Fedora, openSUSE (install script)
 
 ```bash
 git clone https://github.com/splitshotz/Vice && cd Vice && ./install.sh
 ```
 
-Launch **Vice** from your app menu (or run `vice-app`) and press **F9** in a game. If the terminal says `vice: command not found`, restart the terminal first.
+The script detects your package manager (`apt`, `dnf`, `pacman`, `zypper`) and installs everything Vice needs, including the `gpu-screen-recorder` capture backend and a systemd user service so clipping starts at login (it asks first). If the terminal says `vice: command not found` afterwards, open a new terminal.
 
-The AUR package and the script install everything Vice needs, including the `gpu-screen-recorder` capture backend and a systemd user service so clipping starts at login. The script detects your package manager (`apt`, `dnf`, `pacman`, `zypper`) automatically.
+> Don't mix the AUR package and `./install.sh` on the same machine. Uninstall one before switching.
+
+### Steam Deck, Bazzite, Fedora Atomic (Flatpak, BETA)
+
+> [!WARNING]
+> **The Flatpak is in BETA.** It's new, and so far it has only been tested on a regular desktop distro. I'm actively looking for feedback from **Steam Deck**, **Bazzite**, **Fedora Atomic** and other immutable systems. If you try it, please post how it went on [#97](https://github.com/splitshotz/Vice/issues/97), even if everything worked. If something breaks, include the output of `flatpak run --command=vice io.github.splitshotz.Vice doctor`.
+
+```bash
+flatpak install --user https://splitshotz.github.io/vice-flatpak/vice.flatpakref
+```
+
+Or download `Vice.flatpak` from the [latest release](https://github.com/splitshotz/Vice/releases/latest) and run `flatpak install --user Vice.flatpak`. Both get updates from the same place with `flatpak update`.
+
+The first time Vice opens, it asks to install gpu-screen-recorder, which is what records your screen. One click installs it from Flathub. The first recording then asks for your password once, so gpu-screen-recorder can set up its screen capture helper. On a Steam Deck, open Vice in Desktop Mode the first time so that prompt can appear.
+
+Hotkeys read the keyboard directly, so your user has to be in the `input` group: run `sudo usermod -aG input $USER` and reboot. On a Steam Deck, set a password with `passwd` in Desktop Mode first.
+
+The Flatpak also works on any other distro with Flatpak installed.
+
+### Updating and uninstalling
 
 | | Update | Uninstall |
 |---|---|---|
 | AUR | `yay -Syu` | `sudo pacman -Rns vice-clipper` |
-| Git clone | `cd Vice && git pull && ./install.sh` | `vice uninstall && rm -rf Vice` |
+| Install script | `cd Vice && git pull && ./install.sh` | `vice uninstall && rm -rf Vice` |
 | NixOS | `nix flake update vice && sudo nixos-rebuild switch` | Remove `services.vice.enable` and rebuild |
-
-> Don't mix the AUR package and `./install.sh` on the same machine. Uninstall one before switching.
-
-**Bazzite / Fedora Atomic:** not supported yet. rpm-ostree systems can't use `install.sh`, and the installer exits early on them rather than breaking your system. A Flatpak will fix this; follow [#97](https://github.com/splitshotz/Vice/issues/97).
+| Flatpak (beta) | `flatpak update` | `flatpak uninstall io.github.splitshotz.Vice` |
 
 ---
 
@@ -103,7 +130,7 @@ The AUR package and the script install everything Vice needs, including the `gpu
 
 **Discord Rich Presence.** Shows what game you're clipping right in your Discord status, on by default for known games.
 
-**Clips titled for you.** Vice recognizes the game you're playing from a curated list and names the file accordingly, no guessing from window titles.
+**Clips titled for you.** Vice recognizes the game you're playing from a curated list and names the file accordingly, no guessing from window titles. If it missed one, right-click the clip and set the game yourself.
 
 **Hotkeys per clip.** Add your own rename-able, color-coded hotkeys to any clip for quick recall later.
 
@@ -111,7 +138,11 @@ The AUR package and the script install everything Vice needs, including the `gpu
 
 **Clips the screen you're on.** Turn on Follow my mouse and Vice records whichever monitor the pointer is sitting on, instead of one you picked in advance. Works on X11, Hyprland and Sway.
 
-**Your keys on screen.** A keyboard overlay shows the keys you press over your game, for streams and clips, in your theme colour. Drag it anywhere or pick a corner. Vice can also keep the keys with each clip to show in the viewer or burn into an editor export. Off until you turn it on; only the overlay's own keys are ever read. Needs X11, or a Wayland desktop with layer-shell (KDE Plasma, Hyprland, Sway, Niri).
+**Your keys on screen.** A keyboard overlay shows the keys you press over your game, for streams and clips, in your theme colour. Drag it anywhere or pick a corner, and label the keys for AZERTY or QWERTY. Pick which keys are on it in Settings. Vice can also keep the keys with each clip to show in the viewer or burn into an editor export. Off until you turn it on; only the overlay's own keys are ever read. Needs X11, or a Wayland desktop with layer-shell (KDE Plasma, Hyprland, Sway, Niri).
+
+**Matches your desktop.** Five accents, any colour you pick, or your wallpaper's colours through matugen.
+
+**Two sets of sounds.** The clip and session sounds come as Classic tones or a Futuristic pack. Pick one in Settings, or use your own files.
 
 **Stays out of the way.** List the apps that clip on their own keys and Vice ignores its hotkeys while they are focused.
 
@@ -122,6 +153,7 @@ The AUR package and the script install everything Vice needs, including the `gpu
 | Key / Action | What happens |
 |---|---|
 | **F9** | Save the last 20 s |
+| **"Vice, clip that"** | Save a clip hands-free (Settings → Audio → Voice clipping) |
 | **Extra clip keys** | Save their own duration, e.g. F6 for 60 s (Settings → Hotkeys) |
 | **Key combos** | Rebind to a modifier combo like **Alt + F9** (Settings → Hotkeys) |
 | **F9 · F9** (double-tap) | Start / stop a session recording |
@@ -168,6 +200,7 @@ vice start --no-open-ui
                     Start the daemon without opening the browser UI
 vice stop           Stop the daemon
 vice clip           Save a clip right now
+vice clip 30        Save the last 30 seconds (for Stream Deck buttons and scripts)
 vice status         Show daemon status, backend, and share URL
 vice ui             Open the web UI in your browser
 vice clips          List saved clips
@@ -239,6 +272,9 @@ check_on_start = true   # ask GitHub once a day whether a newer release exists
 
 [notifications]
 sound_volume = 1.0   # clip and session tones, 0.0 to 1.0. 0 plays nothing
+
+[ui]
+close_to_tray = false # X / in-app Minimize release the GUI, not the recorder
 ```
 
 Notes:
@@ -254,6 +290,38 @@ Notes:
 - `recording.microphone_source` picks which microphone the mic toggle captures. `default_input` follows the system default; `device:<name>` pins a specific input without changing your system setting.
 - `recording.gsr_args` supports environment/tilde expansion and a `{default_sink_monitor}` placeholder for desktop-audio capture.
 - With the gpu-screen-recorder backend, `recording.encoder` also accepts `h264_vulkan`, `hevc_vulkan`, and `av1_vulkan`. Auto uses an available Vulkan encoder when GSR reports none of its usual hardware codecs. Other systems keep GSR's normal selection. Vulkan encoding requires support from GSR, FFmpeg, and the GPU driver.
+
+### Voice clipping (optional)
+
+Voice clipping runs completely offline using [Vosk](https://alphacephei.com/vosk/). It is not available on Nix or the Flatpak yet. To use it:
+
+1. Install the `vosk` package for your install method:
+   - Script install:
+     ```bash
+     ~/.local/share/vice/venv/bin/pip install vosk
+     ```
+   - Arch Linux (AUR):
+     ```bash
+     yay -S python-vosk-git
+     ```
+2. Download a small English speech model (~40 MB) and unpack it to Vice's models folder:
+   ```bash
+   mkdir -p ~/.local/share/vice/models
+   curl -LO https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+   unzip vosk-model-small-en-us-0.15.zip -d ~/.local/share/vice/models/
+   rm vosk-model-small-en-us-0.15.zip
+   ```
+3. Enable **Voice clipping** in Settings under **Audio** (or in `~/.config/vice/config.toml`). Vice listens for **"Vice, clip that"** and **"Clip that"**, plus any custom trigger phrase you set.
+
+### Matugen colours
+
+Vice can take its colours from [matugen](https://github.com/InioX/matugen), so it matches your wallpaper. Run:
+
+```bash
+vice matugen
+```
+
+It prints a few lines to add to `~/.config/matugen/config.toml`. Run matugen as usual, then pick Matugen under Settings, Appearance. Vice recolours itself each time matugen runs.
 
 ## Troubleshooting
 
@@ -373,7 +441,7 @@ Vice is better because these people sent patches:
 - [@quadruplea0](https://github.com/quadruplea0), for making the resolution setting actually reach gpu-screen-recorder
 - [@DeveloperSpoot](https://github.com/DeveloperSpoot), for themed Discord embeds, their idea and their first implementation
 - [@jethrothelion](https://github.com/jethrothelion), for Chivalry 2 and Clone Drone in The Danger Zone
-- [@voltek-laruelle](https://github.com/voltek-laruelle), for the clip volume slider, the French translation, and for GeoGuessr Steam Edition, Forza Horizon 4, Big Walk, Supermarket Simulator, Sandustry, and OpenFront
+- [@voltek-laruelle](https://github.com/voltek-laruelle), for the clip volume slider, the AZERTY / QWERTY choice for the keyboard overlay, the French translation, the overlapping trim fix, Reveal in file manager on NixOS, and for GeoGuessr Steam Edition, Forza Horizon 4, Big Walk, Supermarket Simulator, Sandustry, and OpenFront
 - [@20plays](https://github.com/20plays), for system tray support, preserving working Arch installations during installer dependency checks, and selecting the distro Python for QtWebEngine
 - [@KITE-Force](https://github.com/KITE-Force), for game detection on KDE Plasma Wayland through kdotool, and for fixing scroll dismissal in clip context menus
 - [@UMCEKO](https://github.com/UMCEKO), for the NixOS package and module
@@ -381,6 +449,9 @@ Vice is better because these people sent patches:
 - [@bryan-ovalle2](https://github.com/bryan-ovalle2), for Game Capture and Discord-sized sharing and exports
 - [@suriyahs](https://github.com/suriyahs), for game icons in Discord presence and naming any installed Steam game
 - [@MLG993](https://github.com/MLG993), for the German translation
+- [@milan483](https://github.com/milan483), for the Indonesian translation, freeing the window's memory on close, and keeping a session's game
+- [@Cryptorial0](https://github.com/Cryptorial0), for voice clipping
+- [@LeonnJD](https://github.com/LeonnJD), for the Futuristic sound pack
 
 And to everyone who has opened an issue with a log attached: that is most of how the hard bugs get found.
 

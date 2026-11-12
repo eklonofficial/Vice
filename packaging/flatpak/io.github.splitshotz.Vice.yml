@@ -1,0 +1,227 @@
+# Vice as a Flatpak, built from this repository at the commit being built, so
+# it is the same code as every other install. Releases build this in CI (see
+# .github/workflows/flatpak.yml). Recording goes through the official
+# gpu-screen-recorder Flatpak on the host, which Vice offers to install.
+id: io.github.splitshotz.Vice
+runtime: org.kde.Platform
+runtime-version: '6.11'
+sdk: org.kde.Sdk
+# PyQt6 and QtWebEngine, for the pywebview window.
+base: com.riverbankcomputing.PyQt.BaseApp
+base-version: '6.11'
+command: vice-app
+
+finish-args:
+  - --share=network
+  - --share=ipc
+  # X11 for xdotool/xprop/wmctrl and XWayland game windows, Wayland for the
+  # window itself and the layer-shell keyboard overlay.
+  - --socket=x11
+  - --socket=wayland
+  - --socket=pulseaudio
+  # The GPU for the window, and /dev/input for the global hotkeys. --device=input
+  # is newer than the flatpak on some SteamOS releases, so all is used.
+  - --device=all
+  # Clips can be saved anywhere the user picks, Steam libraries are read for
+  # game names, and the config is shared with a native install.
+  - --filesystem=home
+  - --filesystem=/run/media
+  - --filesystem=/media
+  # Discord Rich Presence, for the native and the Flatpak Discord.
+  - --filesystem=xdg-run/discord-ipc-0
+  - --filesystem=xdg-run/app/com.discordapp.Discord:ro
+  # Host commands: the gpu-screen-recorder Flatpak, compositor tools
+  # (hyprctl, swaymsg, niri, kdotool) and /proc lookups for window pids.
+  - --talk-name=org.freedesktop.Flatpak
+  # The tray icon.
+  - --talk-name=org.kde.StatusNotifierWatcher
+  # Chromium's own sandbox cannot nest inside bwrap.
+  - --env=QTWEBENGINE_DISABLE_SANDBOX=1
+  # The base app keeps the Chromium helper in /app, where Qt does not look.
+  - --env=QTWEBENGINEPROCESS_PATH=/app/bin/QtWebEngineProcess
+
+cleanup-commands:
+  - /app/cleanup-BaseApp.sh
+  # Spell-check dictionaries from the QtWebEngine base: Vice has no text field
+  # that needs them, and they were half the size of the app. They come from
+  # the base, so the cleanup list below does not reach them.
+  - rm -rf /app/share/locale/*/qtwebengine_dictionaries /app/qtwebengine_dictionaries
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/man
+  - /share/doc
+  - '*.a'
+  - '*.la'
+
+modules:
+  # wmctrl and xclip need it, and the runtime does not ship it.
+  - name: libXmu
+    config-opts:
+      - --disable-static
+    sources:
+      - type: archive
+        url: https://www.x.org/releases/individual/lib/libXmu-1.2.1.tar.xz
+        sha256: fcb27793248a39e5fcc5b9c4aec40cc0734b3ca76aac3d7d1c264e7f7e14e8b2
+
+  - name: xprop
+    sources:
+      - type: archive
+        url: https://www.x.org/releases/individual/app/xprop-1.2.8.tar.xz
+        sha256: d689e2adb7ef7b439f6469b51cda8a7daefc83243854c2a3b8f84d0f029d67ee
+
+  - name: xdotool
+    buildsystem: simple
+    build-commands:
+      - make PREFIX=${FLATPAK_DEST} WITHOUT_RPATH_FIX=1
+      - make PREFIX=${FLATPAK_DEST} WITHOUT_RPATH_FIX=1 install
+    sources:
+      - type: archive
+        url: https://github.com/jordansissel/xdotool/releases/download/v3.20211022.1/xdotool-3.20211022.1.tar.gz
+        sha256: 96f0facfde6d78eacad35b91b0f46fecd0b35e474c03e00e30da3fdd345f9ada
+
+  - name: wmctrl
+    sources:
+      - type: archive
+        url: https://deb.debian.org/debian/pool/main/w/wmctrl/wmctrl_1.07.orig.tar.gz
+        sha256: d78a1efdb62f18674298ad039c5cbdb1edb6e8e149bb3a8e3a01a4750aa3cca9
+
+  - name: xclip
+    sources:
+      - type: archive
+        url: https://github.com/astrand/xclip/archive/refs/tags/0.13.tar.gz
+        sha256: ca5b8804e3c910a66423a882d79bf3c9450b875ac8528791fb60ec9de667f758
+
+  - name: wl-clipboard
+    buildsystem: meson
+    config-opts:
+      - -Dzshcompletiondir=no
+      - -Dfishcompletiondir=no
+    sources:
+      - type: archive
+        url: https://github.com/bugaevc/wl-clipboard/archive/refs/tags/v2.3.0.tar.gz
+        sha256: b4dc560973f0cd74e02f817ffa2fd44ba645a4f1ea94b7b9614dacc9f895f402
+
+  # The keyboard overlay is a GTK3 layer-shell window driven from Python.
+  - name: pycairo
+    buildsystem: meson
+    sources:
+      - type: archive
+        url: https://github.com/pygobject/pycairo/releases/download/v1.28.0/pycairo-1.28.0.tar.gz
+        sha256: 26ec5c6126781eb167089a123919f87baa2740da2cca9098be8b3a6b91cc5fbc
+
+  - name: pygobject
+    buildsystem: meson
+    config-opts:
+      - -Dtests=false
+    sources:
+      - type: archive
+        url: https://download.gnome.org/sources/pygobject/3.50/pygobject-3.50.2.tar.gz
+        sha256: ece6b860aab77cb649fdfc6e88d8a83765e7a62f7ffd39a628d6e2a0d397a7ff
+
+  - name: gtk-layer-shell
+    buildsystem: meson
+    config-opts:
+      - -Dvapi=false
+      - -Dtests=false
+      - -Dexamples=false
+      - -Ddocs=false
+    sources:
+      - type: archive
+        url: https://github.com/wmww/gtk-layer-shell/archive/refs/tags/v0.10.1.tar.gz
+        sha256: 88c3a3e0a5300532f3d368d5df64838a87f1fb85273f22d41df0a6b8d0ec59c6
+
+  - name: cloudflared
+    only-arches:
+      - x86_64
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 cloudflared-linux-amd64 ${FLATPAK_DEST}/bin/cloudflared
+    sources:
+      - type: file
+        url: https://github.com/cloudflare/cloudflared/releases/download/2026.10.7/cloudflared-linux-amd64
+        sha256: 1f99fb518b83dec2ba8d870a7cc991d82a77e6196295a3d2754ba17ab9f91872
+
+  # Python dependencies of Vice. Wheels for Python 3.13 on x86_64, except evdev
+  # and proxy_tools, which only publish source.
+  - name: python-deps
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --no-index --find-links=file://${PWD} --prefix=${FLATPAK_DEST}
+        --no-build-isolation --no-deps QtPy aiohappyeyeballs aiohttp aiosignal attrs bottle click evdev frozenlist idna multidict packaging propcache proxy_tools psutil pywebview tomli_w typing_extensions yarl
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/32/51/395d225ef36f5a50d8e548dcd3141bfdbcd31fb6eed859022c573d2c4d66/aiohttp-3.14.5-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+        sha256: 1ffa3a523a36d8628f98c06492ae16a31a23d14c0b4ec721757b477319f656d6
+      - type: file
+        url: https://files.pythonhosted.org/packages/8f/85/15918b8f73aeb770c534f22b7dac256dc70b6fc7aa0571856c82b17bf3c5/multidict-7.2.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+        sha256: cd69c99affd1b4debc1f9a53058ea6e3a9b34f2e733840bb45891666cd8ede0a
+      - type: file
+        url: https://files.pythonhosted.org/packages/0e/b7/a82a49bf88340b837ef6972b508a1604ae377b9e6904b46b10cf5f1cf925/yarl-1.25.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+        sha256: be80550d9bfe83d9b62398a37081a90434e6df2d978ec345c3d2820de6beddab
+      - type: file
+        url: https://files.pythonhosted.org/packages/31/7d/164b7ffc8624fe9efb4221bf9af485d5c1e41b9ae118045d2b6dc5457d8b/click-8.5.1-py3-none-any.whl
+        sha256: 8bb5376d2006950386f8c6427613334a2acadc5f559cb80e638d00b4df957e37
+      - type: file
+        url: https://files.pythonhosted.org/packages/c7/18/c86eb8e0202e32dd3df50d43d7ff9854f8e0603945ff398974c1d91ac1ef/tomli_w-1.2.0-py3-none-any.whl
+        sha256: 188306098d013b691fcadc011abd66727d3c414c571bb01b1a174ba8c983cf90
+      - type: file
+        url: https://files.pythonhosted.org/packages/b5/70/5d8df3b09e25bce090399cf48e452d25c935ab72dad19406c77f4e828045/psutil-7.2.2-cp36-abi3-manylinux2010_x86_64.manylinux_2_12_x86_64.manylinux_2_28_x86_64.whl
+        sha256: 076a2d2f923fd4821644f5ba89f059523da90dc9014e85f8e45a5774ca5bc6f9
+      - type: file
+        url: https://files.pythonhosted.org/packages/69/76/37c0ccd5ab968a6a438f9c623aeecc84c202ab2fabc6a8fd927580c15b5a/QtPy-2.4.3-py3-none-any.whl
+        sha256: 72095afe13673e017946cc258b8d5da43314197b741ed2890e563cf384b51aa1
+      - type: file
+        url: https://files.pythonhosted.org/packages/83/f6/b55ec74cfe68c6584163faa311503c20b0da4c09883a41e8e00d6726c954/bottle-0.13.4-py2.py3-none-any.whl
+        sha256: 045684fbd2764eac9cdeb824861d1551d113e8b683d8d26e296898d3dd99a12e
+      - type: file
+        url: https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl
+        sha256: 481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8
+      - type: file
+        url: https://files.pythonhosted.org/packages/71/43/1947f06babed6b3f1d7f38b0c767f52df66bfb2bc10b468c4a7de9eceff2/aiohappyeyeballs-2.7.1-py3-none-any.whl
+        sha256: 9243213661e29250eb41368e5daa826fc017156c3b8a11440826b2e3ed376472
+      - type: file
+        url: https://files.pythonhosted.org/packages/fb/76/641ae371508676492379f16e2fa48f4e2c11741bd63c48be4b12a6b09cba/aiosignal-1.4.0-py3-none-any.whl
+        sha256: 053243f8b92b990551949e63930a839ff0cf0b0ebbe0597b0f3fb19e1a0fe82e
+      - type: file
+        url: https://files.pythonhosted.org/packages/64/b4/17d4b0b2a2dc85a6df63d1157e028ed19f90d4cd97c36717afef2bc2f395/attrs-26.1.0-py3-none-any.whl
+        sha256: c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309
+      - type: file
+        url: https://files.pythonhosted.org/packages/d5/4e/e4691508f9477ce67da2015d8c00acd751e6287739123113a9fca6f1604e/frozenlist-1.8.0-cp313-cp313-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl
+        sha256: fb30f9626572a76dfe4293c7194a09fb1fe93ba94c7d4f720dfae3b646b45027
+      - type: file
+        url: https://files.pythonhosted.org/packages/58/a2/bb081bab032533a855d44de1d56f8e8426114ff1ba5d1f07a438a0a654f8/idna-3.20-py3-none-any.whl
+        sha256: ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
+      - type: file
+        url: https://files.pythonhosted.org/packages/ed/74/08e6c1faf26ee2732023a3828787ba535557122774f4a386b1f715cbd8e0/propcache-0.5.4-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+        sha256: f85915e00dcb1cd9f2f890ead064ed40a27df06f0db65be427b29482ae357572
+      - type: file
+        url: https://files.pythonhosted.org/packages/63/34/ba1c580383c9eada3711951fef0795c80b829a078d72188184bcab9dd527/packaging-26.3-py3-none-any.whl
+        sha256: d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
+      - type: file
+        url: https://files.pythonhosted.org/packages/3d/25/9491695c22c4842c5b3903b4dc172e0eecf67a27c0af34a71512c9b76a0a/pywebview-6.2.1-py3-none-any.whl
+        sha256: 9d07275f53894ab4d5e2e0e996227193e7187dec276d9b624dccbce029216b46
+      - type: file
+        url: https://files.pythonhosted.org/packages/2e/07/eb30593524303d1367f0dc00c1c66582c994dba412a47751e34bad9fa29b/evdev-2.0.0.tar.gz
+        sha256: 442fb3f4c8dfc9e61e901133c356220c02d663eca8f34722e0cecdd637eba504
+      - type: file
+        url: https://files.pythonhosted.org/packages/f2/cf/77d3e19b7fabd03895caca7857ef51e4c409e0ca6b37ee6e9f7daa50b642/proxy_tools-0.1.0.tar.gz
+        sha256: ccb3751f529c047e2d8a58440d86b205303cf0fe8146f784d1cbcd94f0a28010
+
+  - name: vice
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --no-index --no-deps --no-build-isolation --prefix=${FLATPAK_DEST} .
+      - install -Dm644 vice.desktop ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
+      - desktop-file-edit --set-icon=${FLATPAK_ID} ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
+      - install -Dm644 assets/vice.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/${FLATPAK_ID}.svg
+      - install -Dm644 packaging/flatpak/${FLATPAK_ID}.metainfo.xml -t ${FLATPAK_DEST}/share/metainfo/
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - node_modules
+          - build
+          - .flatpak-builder
+          - flatpak-build

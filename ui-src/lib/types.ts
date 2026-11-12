@@ -19,6 +19,8 @@ export interface Clip {
   width: number | null;
   height: number | null;
   vcodec: string | null;
+  /** The H.264 preview used when this window cannot play the clip's codec. */
+  preview?: 'none' | 'working' | 'ready';
   audio_tracks?: Array<{
     index: number;
     title: string;
@@ -121,6 +123,36 @@ export interface Status {
   disk?: {free: number; total: number} | null;
   update?: UpdateInfo | null;
   key_overlay?: KeyOverlayState | null;
+  /** Where Vice runs; nothing switches on it yet beyond the Flatpak setup. */
+  platform?: PlatformInfo | null;
+  voice?: VoiceState | null;
+}
+
+export interface VoiceState {
+  enabled: boolean;
+  active: boolean;
+  error: string | null;
+  phrases: string[];
+}
+
+export interface PlatformInfo {
+  device: 'steamdeck' | 'desktop';
+  os_id: string;
+  variant: string;
+  immutable: boolean;
+  packaging: 'flatpak' | 'aur' | 'script' | 'nix' | 'unknown';
+  /** "gamescope" in Steam Deck Game Mode, else the desktop's name. */
+  session: string;
+}
+
+/** Installing the gpu-screen-recorder Flatpak from the Vice Flatpak. */
+export interface GsrInstall {
+  phase: 'preparing' | 'downloading' | 'installing' | 'done' | 'error';
+  /** Overall percent, or null while flatpak has not said. */
+  percent: number | null;
+  error?: string | null;
+  /** What to run by hand when the button could not do it. */
+  command?: string | null;
 }
 
 /** The on-screen keyboard overlay's process, as the daemon sees it. */
@@ -137,7 +169,7 @@ export interface UpdateInfo {
   notes?: string[];
   /**
    * How this machine should update, worked out by the daemon: "aur",
-   * "script" or "unknown". The command is empty for unknown.
+   * "flatpak", "nix", "script" or "unknown". The command is empty for unknown.
    */
   install?: {method?: string; command?: string};
 }
@@ -156,6 +188,12 @@ export interface Config {
   notifications: Record<string, unknown>;
   ui: Record<string, unknown>;
   overlay?: Record<string, unknown>;
+  voice?: Record<string, unknown> & {
+    enabled?: boolean;
+    custom_phrase?: string;
+    cooldown?: number;
+    min_confidence?: number;
+  };
 }
 
 /** Every message the daemon broadcasts. */
@@ -183,6 +221,8 @@ export type WsMessage =
   | {type: 'daemon_upgrading'; version?: string}
   | ({type: 'update_available'} & UpdateInfo)
   | ({type: 'key_overlay'} & KeyOverlayState)
+  | ({type: 'gsr_install'} & GsrInstall)
+  | {type: 'matugen'; colors: Record<string, string> | null}
   | {type: 'config_changed'};
 
 export type ViewName = 'home' | 'clips' | 'images' | 'editor' | 'settings' | 'about';

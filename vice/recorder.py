@@ -41,7 +41,7 @@ from .config import Config
 from .media import communicate_with_timeout
 from .media import get_duration as _get_duration
 from .media import probe_media_detailed
-from .runtime import actual_home_dir, recover_wayland_display, resolve_path
+from .runtime import actual_home_dir, host_argv, in_vice_flatpak, recover_wayland_display, resolve_path
 
 log = logging.getLogger("vice.recorder")
 
@@ -272,10 +272,18 @@ def set_gsr_source(pref: str) -> None:
 
 @lru_cache(maxsize=1)
 def gsr_flatpak_installed() -> bool:
-    if not _has("flatpak"):
+    if not in_vice_flatpak() and not _has("flatpak"):
         return False
-    code, _ = _run_command_capture(["flatpak", "info", GSR_FLATPAK_APP], timeout=5.0)
+    code, _ = _run_command_capture(host_argv(["flatpak", "info", GSR_FLATPAK_APP]), timeout=5.0)
     return code == 0
+
+
+def refresh_gsr_probes() -> None:
+    """Forget what was learned about gpu-screen-recorder, after it has been
+    installed while Vice was running."""
+    gsr_flatpak_installed.cache_clear()
+    _gsr_help_text.cache_clear()
+    _gsr_supported_codecs.cache_clear()
 
 
 def gsr_source() -> Optional[str]:
@@ -284,6 +292,9 @@ def gsr_source() -> Optional[str]:
     Auto keeps the distro's build whenever it is installed, so nothing changes
     for anyone who did not ask for the Flatpak.
     """
+    if in_vice_flatpak():
+        # Nothing records inside the sandbox; the GSR Flatpak runs on the host.
+        return "flatpak" if gsr_flatpak_installed() else None
     native = _has("gpu-screen-recorder")
     if _gsr_source_pref == "native":
         return "native" if native else None
@@ -300,19 +311,29 @@ def _gsr_prefix() -> Optional[list[str]]:
     if source == "native":
         return ["gpu-screen-recorder"]
     if source == "flatpak":
-        return list(GSR_FLATPAK_PREFIX)
+        return host_argv(GSR_FLATPAK_PREFIX, watch=True)
+    return None
+
+
+def _gsr_args_after_prefix(cmd: list[str]) -> Optional[list[str]]:
+    """The recorder's own arguments in a command that runs the GSR Flatpak,
+    with or without the host prefix in front, or None if it does not."""
+    n = len(GSR_FLATPAK_PREFIX)
+    for start in range(len(cmd) - n + 1):
+        if cmd[start:start + n] == GSR_FLATPAK_PREFIX:
+            return cmd[start + n:]
     return None
 
 
 def _program_name(cmd: list[str]) -> str:
     """The recorder a command runs, seeing through flatpak run."""
-    if cmd[:len(GSR_FLATPAK_PREFIX)] == GSR_FLATPAK_PREFIX:
+    if _gsr_args_after_prefix(cmd) is not None:
         return "gpu-screen-recorder"
     return cmd[0] if cmd else ""
 
 
 def _is_flatpak_capture(cmd: list[str]) -> bool:
-    return cmd[:2] == ["flatpak", "run"]
+    return _gsr_args_after_prefix(cmd) is not None
 
 
 @lru_cache(maxsize=None)
@@ -1447,6 +1468,10 @@ async def _spawn_capture(cmd: list[str], stderr) -> asyncio.subprocess.Process:
         start_new_session=True,
     )
     proc.vice_flatpak = _is_flatpak_capture(cmd)  # type: ignore[attr-defined]
+    # Inside the Vice Flatpak the recorder is a host process, out of reach of
+    # this pid namespace, so it is found and signalled on the host.
+    proc.vice_host_args = (  # type: ignore[attr-defined]
+        _gsr_args_after_prefix(cmd) if proc.vice_flatpak and in_vice_flatpak() else None)
     _register_capture(proc.pid, cmd)
     return proc
 
@@ -1488,6 +1513,69 @@ def _flatpak_recorder_pid(pid: int) -> Optional[int]:
     return None
 
 
+# Finds the host gpu-screen-recorder whose command line is exactly the one
+# Vice started, so a recorder the user runs themselves is never touched.
+_HOST_FIND_RECORDER = (
+    'want=$(printf "%s\\n" "$@"); '
+    'for d in /proc/[0-9]*; do '
+    '[ "$(cat "$d/comm" 2>/dev/null)" = gpu-screen-reco ] || continue; '
+    '[ "$(tr "\\000" "\\n" < "$d/cmdline" 2>/dev/null)" = "$want" ] '
+    '&& { echo "${d#/proc/}"; exit 0; }; '
+    'done; exit 1'
+)
+
+
+def _host_recorder_pid(gsr_args: list[str]) -> Optional[int]:
+    try:
+        result = subprocess.run(
+            host_argv(["sh", "-c", _HOST_FIND_RECORDER, "sh", "gpu-screen-recorder", *gsr_args]),
+            capture_output=True, text=True, timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log.debug("Could not look for the recorder on the host: %s", exc)
+        return None
+    pid = result.stdout.strip()
+    return int(pid) if result.returncode == 0 and pid.isdigit() else None
+
+
+def _host_args(proc) -> Optional[list[str]]:
+    """The recorder's arguments when it runs on the host, else None."""
+    args = getattr(proc, "vice_host_args", None)
+    return args if isinstance(args, list) else None
+
+
+def _inner_recorder_pid(proc: asyncio.subprocess.Process) -> Optional[int]:
+    host_args = _host_args(proc)
+    if host_args is not None:
+        return _host_recorder_pid(host_args)
+    return _flatpak_recorder_pid(proc.pid)
+
+
+def _kill_recorder(proc: asyncio.subprocess.Process, pid: int, sig: int) -> None:
+    """os.kill for the pid _recorder_pid returned, on the host when that is
+    where it lives. Raises ProcessLookupError when it has gone."""
+    if _host_args(proc) is None:
+        os.kill(pid, sig)
+        return
+    try:
+        result = subprocess.run(host_argv(["kill", f"-{int(sig)}", str(pid)]),
+                                capture_output=True, timeout=3)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ProcessLookupError(f"could not signal host pid {pid}: {exc}") from exc
+    if result.returncode != 0:
+        raise ProcessLookupError(f"host pid {pid} is gone")
+
+
+def _recorder_alive(proc: asyncio.subprocess.Process, pid: int) -> bool:
+    if _host_args(proc) is None:
+        return Path(f"/proc/{pid}").exists()
+    try:
+        _kill_recorder(proc, pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
 async def _recorder_pid(proc: asyncio.subprocess.Process, wait: float = 3.0) -> Optional[int]:
     """The pid that takes the recorder's signals. The sandbox needs a moment
     to start the recorder inside it, so a fresh one is waited for."""
@@ -1495,7 +1583,7 @@ async def _recorder_pid(proc: asyncio.subprocess.Process, wait: float = 3.0) -> 
         return proc.pid
     deadline = time.monotonic() + wait
     while True:
-        inner = _flatpak_recorder_pid(proc.pid)
+        inner = await asyncio.to_thread(_inner_recorder_pid, proc)
         if inner is not None or time.monotonic() >= deadline or proc.returncode is not None:
             return inner
         await asyncio.sleep(0.1)
@@ -1659,8 +1747,17 @@ async def _terminate_group(proc: asyncio.subprocess.Process, timeout: float = 5.
     The SIGKILL still reaches surviving members after the leader has been
     reaped, which is exactly the case that used to strand gsr-kms-server.
     """
-    inner = _flatpak_recorder_pid(proc.pid) if getattr(proc, "vice_flatpak", False) is True else None
-    _signal_group(proc, signal.SIGTERM)
+    inner = (await asyncio.to_thread(_inner_recorder_pid, proc)
+             if getattr(proc, "vice_flatpak", False) is True else None)
+    if inner is not None and _host_args(proc) is not None:
+        # flatpak-spawn would hand SIGTERM to bwrap on the host, so the
+        # recorder itself is asked to finish its file.
+        try:
+            await asyncio.to_thread(_kill_recorder, proc, inner, signal.SIGTERM)
+        except ProcessLookupError:
+            inner = None
+    else:
+        _signal_group(proc, signal.SIGTERM)
     deadline = time.monotonic() + timeout
     try:
         await asyncio.wait_for(proc.wait(), timeout=timeout)
@@ -1672,7 +1769,8 @@ async def _terminate_group(proc: asyncio.subprocess.Process, timeout: float = 5.
         log.warning("Error while stopping capture process: %s", exc)
     # bwrap goes at once, and the recorder inside carries on finishing the
     # file. The SIGKILL has to wait for it, not for bwrap.
-    while inner is not None and Path(f"/proc/{inner}").exists() and time.monotonic() < deadline:
+    while (inner is not None and time.monotonic() < deadline
+           and await asyncio.to_thread(_recorder_alive, proc, inner)):
         await asyncio.sleep(0.1)
     _signal_group(proc, signal.SIGKILL)
     try:
@@ -1680,6 +1778,22 @@ async def _terminate_group(proc: asyncio.subprocess.Process, timeout: float = 5.
     except Exception as exc:
         log.debug("Capture process %d was already reaped: %s", proc.pid, exc)
     _unregister_capture(proc.pid)
+
+
+async def _terminate_session_capture(proc: asyncio.subprocess.Process) -> None:
+    """Finish reaping before propagating cancellation to the session owner."""
+    cleanup = asyncio.create_task(_terminate_group(proc, timeout=8))
+    cancelled = False
+    while not cleanup.done():
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            # A second stop/shutdown cancellation must not orphan cleanup or
+            # let the daemon release its session lock while capture is alive.
+            cancelled = True
+    cleanup.result()
+    if cancelled:
+        raise asyncio.CancelledError
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1839,7 +1953,7 @@ class Recorder(ABC):
             return 0.0
         return time.time() - self._session_start
 
-    async def start_session(self) -> Optional[Path]:
+    async def start_session(self, tag: Optional[str] = None) -> Optional[Path]:
         """
         Begin a continuous session recording directly to a file.
         Returns the output path, or None on failure.
@@ -1852,7 +1966,7 @@ class Recorder(ABC):
 
         out_dir = resolve_path(self.cfg.output.directory)
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = _next_session_path(out_dir, _container(self.cfg.recording))
+        out_path = _next_session_path(out_dir, _container(self.cfg.recording), tag)
 
         self._session_tracks = None
         if getattr(self.cfg.recording, "auto_app_tracks", False):
@@ -1876,7 +1990,13 @@ class Recorder(ABC):
 
         self._session_program = _program_name(cmd)
         try:
-            await asyncio.wait_for(self._session_proc.wait(), timeout=1.0)
+            try:
+                await asyncio.wait_for(self._session_proc.wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                self._session_active = True
+                self._session_path = out_path
+                self._session_start = time.time()
+                return out_path
             stderr_text = await _read_stream_text(self._session_proc.stderr)
             detail = _summarize_process_error(
                 self._session_program,
@@ -1884,20 +2004,15 @@ class Recorder(ABC):
                 stderr_text,
             )
             log.error("Session recorder failed to start: %s", detail)
-            # Session recording uses GSR on Wayland, so the same helper can
-            # be left behind here (#129).
-            _signal_group(self._session_proc, signal.SIGKILL)
-            _unregister_capture(self._session_proc.pid)
-            self._session_proc = None
-            self._session_program = ""
             return None
-        except asyncio.TimeoutError:
-            pass
-
-        self._session_active = True
-        self._session_path = out_path
-        self._session_start = time.time()
-        return out_path
+        finally:
+            if not self._session_active:
+                try:
+                    await _terminate_session_capture(self._session_proc)
+                finally:
+                    self._session_proc = None
+                    self._session_path = None
+                    self._session_program = ""
 
     async def stop_session(self) -> Optional[Path]:
         """
@@ -1913,14 +2028,16 @@ class Recorder(ABC):
         proc = self._session_proc
         program = self._session_program
         self._session_active = False
-        self._session_proc = None
-        self._session_path = None
-        self._session_program = ""
 
         # Ask the recorder to stop gracefully, then reap anything it forked.
         # The SIGKILL only lands after the leader has exited, so it can never
         # cut a container short.
-        await _terminate_group(proc, timeout=8)
+        try:
+            await _terminate_session_capture(proc)
+        finally:
+            self._session_proc = None
+            self._session_path = None
+            self._session_program = ""
 
         stderr_text = await _read_stream_text(proc.stderr)
         if not path or not path.exists():
@@ -2214,9 +2331,11 @@ def _next_clip_path(
     return _next_numbered_path(out_dir, "Vice_Clip", ext, tag)
 
 
-def _next_session_path(out_dir: Path, ext: str = "mp4") -> Path:
-    """Return the next available Vice_Session_N.<ext> path in out_dir."""
-    return _next_numbered_path(out_dir, "Vice_Session", ext)
+def _next_session_path(
+    out_dir: Path, ext: str = "mp4", tag: Optional[str] = None,
+) -> Path:
+    """Return the next available Vice_Session_N[_Game].<ext> path."""
+    return _next_numbered_path(out_dir, "Vice_Session", ext, filename_tag(tag))
 
 
 def next_image_path(out_dir: Path, tag: Optional[str] = None, ext: str = "png") -> Path:
@@ -2930,6 +3049,10 @@ class GSRRecorder(Recorder):
         if getattr(self.cfg.recording, "auto_app_tracks", False):
             self._auto_tracks = await asyncio.to_thread(_detect_app_tracks)
 
+        if in_vice_flatpak() and gsr_source() is None:
+            # The UI's setup step installs it; until then say so plainly.
+            raise RuntimeError("The gpu-screen-recorder Flatpak is not installed")
+
         rc = self.cfg.recording
         detail = await self._try_start(cpu_encoder=False)
 
@@ -3049,7 +3172,7 @@ class GSRRecorder(Recorder):
             return None
         log.info("Sending SIGUSR1 to GSR (pid=%d) to save replay", target)
         try:
-            os.kill(target, signal.SIGUSR1)
+            await asyncio.to_thread(_kill_recorder, self._proc, target, signal.SIGUSR1)
             self.last_save_signal_at = time.monotonic()
         except ProcessLookupError:
             self.last_clip_error = "The recorder stopped before the clip could be saved."
@@ -3496,7 +3619,7 @@ def create_recorder(cfg: Config) -> Recorder:
                 break
 
     if pref == "gsr":
-        if not has_gsr:
+        if not has_gsr and not in_vice_flatpak():
             raise RuntimeError(
                 "gpu-screen-recorder is selected as the backend, but it is not installed or not on PATH."
             )
@@ -3539,6 +3662,12 @@ def create_recorder(cfg: Config) -> Recorder:
                     "README troubleshooting for systemd-launched daemons on Hyprland/Sway."
                 )
             log.info("Selected backend: gpu-screen-recorder")
+            return GSRRecorder(cfg)
+        if in_vice_flatpak():
+            # Inside the Flatpak the recorder is the GSR Flatpak, which Vice
+            # installs from its setup step. The daemon has to stay up for that,
+            # so the recorder is created and reports why it cannot start.
+            log.warning("The gpu-screen-recorder Flatpak is not installed yet")
             return GSRRecorder(cfg)
         raise RuntimeError(
             "gpu-screen-recorder is required by Vice's auto-backend mode but is not "

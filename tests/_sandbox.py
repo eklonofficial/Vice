@@ -33,10 +33,12 @@ REDIRECTS = {
 }
 SHARE_REDIRECTS = {
     "THUMB_DIR": ROOT / "thumbs",
+    "MATUGEN_PATH": ROOT / "matugen.json",
     "PROXY_DIR": ROOT / "proxies",
     "EXPORT_WORK_DIR": ROOT / "exports",
     "HIGHLIGHTS_DIR": ROOT / "highlights",
     "VIEWS_PATH": ROOT / "views.json",
+    "CLIP_GAMES_PATH": ROOT / "clip_games.json",
     "SHARE_TOKENS_PATH": ROOT / "share_tokens.json",
     "APP_STATE_PATH": ROOT / "ui_state.json",
 }

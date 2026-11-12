@@ -54,6 +54,12 @@
     color var(--duration-fast) var(--ease-standard);
 }
 
+@media (max-width: 1000px) {
+  .rail-chip {
+    padding: 8px 11px;
+  }
+}
+
 .rail-chip:hover {
   color: var(--color-text-primary);
   background: var(--color-overlay-hover);
@@ -778,13 +784,6 @@ select option {
 
 /* ── accent picker ──────────────────────────────────────────────── */
 
-.ap-lede {
-  margin: 0 0 var(--spacing-4);
-  font-size: 12.5px;
-  line-height: 1.6;
-  color: var(--color-text-secondary);
-}
-
 /* The saturation and value field. Two gradients over the hue rather than one
    compound one, because the white and black ramps have to cross. */
 .ap-square {
@@ -930,3 +929,80 @@ select option {
   line-height: 1.55;
   color: var(--color-error);
 }
+
+/* Which keys are on the keyboard overlay (#258): the panel itself, clickable. */
+.key-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: min(300px, 100%);
+}
+
+.key-picker-row {
+  display: grid;
+  grid-template-columns: repeat(11, 1fr);
+  gap: 5px;
+}
+
+.key-picker-key {
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: var(--vice-surface-low);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-medium) var(--ease-standard),
+    color var(--duration-medium) var(--ease-standard);
+}
+
+.key-picker-key[aria-pressed='true'] {
+  background: var(--vice-secondary-container);
+  color: var(--vice-on-secondary-container);
+}
+
+.key-picker-key:disabled {
+  cursor: default;
+}
+
+/* Built-in sound packs (#300): pick one, hear it. */
+.sound-packs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
+.sound-pack {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 16px 0 12px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--vice-secondary-container);
+  color: var(--vice-on-secondary-container);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color var(--duration-medium) var(--ease-standard),
+    color var(--duration-medium) var(--ease-standard);
+}
+
+.sound-pack[aria-checked='true'] {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+.sound-pack-play {
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 8px solid currentColor;
+}
+

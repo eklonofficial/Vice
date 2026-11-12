@@ -10,7 +10,10 @@ import {deriveAccent} from './deriveAccent';
  * 'custom' is not in AccentName because accents.ts is generated and the
  * generator has no business knowing about it.
  */
-export type AccentChoice = AccentName | 'custom';
+export type AccentChoice = AccentName | 'custom' | 'matugen';
+
+/** The roles matugen writes from vice/data/matugen.json (#295). */
+export type MatugenColors = Record<string, string>;
 
 export const CUSTOM_ACCENT: AccentChoice = 'custom';
 
@@ -180,17 +183,70 @@ export function customAccent(seed: string): {
   return {ramp, theme, failures};
 }
 
+function mix(a: string, b: string, amount: number): string {
+  const ch = (hex: string, i: number) => parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16);
+  return `#${[0, 1, 2]
+    .map(i => Math.round(ch(a, i) + (ch(b, i) - ch(a, i)) * amount).toString(16).padStart(2, '0'))
+    .join('')}`;
+}
+
+/**
+ * The ramp for a matugen scheme. Matugen writes the same M3 roles the
+ * generator does, so they map one to one; hover and press are nudged off the
+ * primary because M3 leaves those to state layers.
+ */
+export function matugenRamp(c: MatugenColors): AccentRamp {
+  return {
+    base: c.primary,
+    onBase: c.on_primary,
+    hover: mix(c.primary, '#ffffff', 0.12),
+    active: mix(c.primary, '#000000', 0.12),
+    bg: c.surface,
+    surfaceLowest: c.surface_container_lowest,
+    surfaceLow: c.surface_container_low,
+    surface: c.surface_container,
+    surfaceHigh: c.surface_container_high,
+    surfaceHighest: c.surface_container_highest,
+    onSurface: c.on_surface,
+    onSurfaceVariant: c.on_surface_variant,
+    primaryContainer: c.primary_container,
+    onPrimaryContainer: c.on_primary_container,
+    secondaryContainer: c.secondary_container,
+    onSecondaryContainer: c.on_secondary_container,
+    tertiaryContainer: c.tertiary_container,
+    onTertiaryContainer: c.on_tertiary_container,
+    outline: c.outline,
+    outlineVariant: c.outline_variant,
+    error: c.error,
+    onError: c.on_error,
+    errorContainer: c.error_container,
+    onErrorContainer: c.on_error_container,
+    ambient: mix(c.primary_container, c.surface, 0.3),
+  };
+}
+
+let cachedMatugen: {key: string; ramp: AccentRamp; theme: ReturnType<typeof accentTheme>} | null = null;
+
 /** The ramp and theme for whatever the user has chosen. */
 export function resolveAccent(
   accent: AccentChoice,
   seed: string | null,
+  matugen: MatugenColors | null = null,
 ): {ramp: AccentRamp; theme: ReturnType<typeof accentTheme>} {
+  if (accent === 'matugen' && matugen) {
+    const key = JSON.stringify(matugen);
+    if (cachedMatugen?.key !== key) {
+      const ramp = matugenRamp(matugen);
+      cachedMatugen = {key, ramp, theme: accentTheme('matugen', ramp)};
+    }
+    return {ramp: cachedMatugen.ramp, theme: cachedMatugen.theme};
+  }
   if (accent === 'custom' && seed) {
     const {ramp, theme} = customAccent(seed);
     return {ramp, theme};
   }
   // A custom accent with no seed saved falls back rather than rendering
   // nothing, which is what a cleared localStorage looks like.
-  const name = (accent === 'custom' ? 'blue' : accent) as AccentName;
+  const name = (accent === 'custom' || accent === 'matugen' ? 'blue' : accent) as AccentName;
   return {ramp: ACCENTS[name], theme: VICE_THEMES[name]};
 }

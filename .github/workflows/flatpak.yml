@@ -1,0 +1,108 @@
+name: flatpak
+
+# Pull requests and main only build the Flatpak, so a change that breaks it
+# fails here. Publishing a GitHub release builds the tag, signs it into the
+# Flatpak repo served from splitshotz/vice-flatpak, and attaches Vice.flatpak
+# to the release, so the Flatpak ships in the same step as everything else.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  release:
+    types: [published]
+  # Publishes an existing release again, with this branch's workflow, when
+  # its own run failed for a reason outside the tagged source.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish, like v2.18.0
+        required: true
+
+jobs:
+  build:
+    if: github.event_name != 'release' && github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.11
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the Flatpak
+        run: tools/ci/flatpak.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Vice.flatpak
+          path: Vice.flatpak
+          retention-days: 7
+
+  publish:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.11
+      options: --privileged
+    concurrency:
+      group: flatpak-repo
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - name: Check out the Flatpak repo site
+        uses: actions/checkout@v4
+        with:
+          repository: splitshotz/vice-flatpak
+          ssh-key: ${{ secrets.FLATPAK_SITE_DEPLOY_KEY }}
+          path: site
+
+      # Git does not keep empty directories, and OSTree refuses a repo
+      # without them.
+      - name: Restore the repo's empty directories
+        run: |
+          if [ -f site/repo/config ]; then
+            mkdir -p site/repo/refs/heads site/repo/refs/remotes site/repo/refs/mirrors \
+              site/repo/tmp/cache site/repo/extensions site/repo/state
+          fi
+
+      - name: Build, sign and publish
+        env:
+          FLATPAK_PUBLISH: "1"
+          SITE_DIR: site
+          GPG_KEY_ID: ${{ secrets.FLATPAK_GPG_KEY_ID }}
+          GPG_PRIVATE_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
+        run: tools/ci/flatpak.sh
+
+      - name: Push the repo site
+        working-directory: site
+        run: |
+          git config user.name "Andrew Marin"
+          git config user.email "andrewmarin367@gmail.com"
+          git add -A
+          git commit -q -m "Vice ${{ github.event.release.tag_name || inputs.tag }}"
+          git push
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Vice.flatpak
+          path: Vice.flatpak
+
+  # The build container has no gh, so the bundle goes on the release from a
+  # plain runner.
+  attach:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Vice.flatpak
+
+      - name: Attach Vice.flatpak to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name || inputs.tag }}" Vice.flatpak --clobber --repo "${{ github.repository }}"

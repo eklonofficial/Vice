@@ -11,10 +11,12 @@ import asyncio
 import json
 import logging
 import sys
+import os
 import time
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
-from .runtime import has_display
+from .keys import DEFAULT_KEY_LAYOUT, normalize_key_layout
+from .runtime import has_display, in_vice_flatpak
 
 log = logging.getLogger(__name__)
 
@@ -34,9 +36,13 @@ class KeyOverlayHost:
         self._wanted = False
         self._place: dict = {}
         self._accent = ""
+        self._hidden: list[str] = []
+        self._layout = DEFAULT_KEY_LAYOUT
         self._moving = False
         self._starts: list[float] = []
         self.error: Optional[str] = None
+        # Drawing through XWayland because the compositor hid layer-shell.
+        self._x11_fallback = False
 
     @property
     def running(self) -> bool:
@@ -45,12 +51,17 @@ class KeyOverlayHost:
     def state(self) -> dict:
         return {"running": self.running, "error": self.error, "moving": self._moving}
 
-    async def sync(self, enabled: bool, place: dict, accent: str) -> None:
+    async def sync(self, enabled: bool, place: dict, accent: str, hidden: Iterable[str] = (),
+                   layout: str = DEFAULT_KEY_LAYOUT) -> None:
         """Bring the overlay in line with the settings."""
         self._wanted = enabled
+        layout = normalize_key_layout(layout)
+        changed_layout = layout != self._layout
+        self._layout = layout
         changed_place = place != self._place
         changed_accent = accent != self._accent
-        self._place, self._accent = dict(place), accent
+        changed_hidden = sorted(hidden) != self._hidden
+        self._place, self._accent, self._hidden = dict(place), accent, sorted(hidden)
         if not enabled:
             self._moving = False
             await self.stop()
@@ -62,6 +73,10 @@ class KeyOverlayHost:
             self._send({"t": "place", **self._place})
         if changed_accent:
             self._send({"t": "style", "accent": self._accent})
+        if changed_hidden:
+            self._send({"t": "hide", "keys": self._hidden})
+        if changed_layout:
+            self._send({"t": "layout", "name": self._layout})
 
     def key(self, key: str, down: bool) -> None:
         if self.running:
@@ -86,12 +101,17 @@ class KeyOverlayHost:
             log.warning("The keyboard overlay keeps exiting, not starting it again")
             self._on_state()
             return
+        env = None
+        if self._x11_fallback:
+            env = {k: v for k, v in os.environ.items() if k != "WAYLAND_DISPLAY"}
+            env["GDK_BACKEND"] = "x11"
         try:
             self._proc = await asyncio.create_subprocess_exec(
                 *self._command,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=env,
             )
         except OSError as exc:
             self.error = "crashed"
@@ -101,8 +121,16 @@ class KeyOverlayHost:
         self.error = None
         self._send({"t": "style", "accent": self._accent})
         self._send({"t": "place", **self._place})
+        if self._hidden:
+            self._send({"t": "hide", "keys": self._hidden})
+        if self._layout != DEFAULT_KEY_LAYOUT:
+            # The overlay starts on the default, so only a choice needs saying.
+            self._send({"t": "layout", "name": self._layout})
         self._reader = asyncio.create_task(self._read(self._proc))
         self._on_state()
+
+    def _can_use_x11_instead(self) -> bool:
+        return in_vice_flatpak() and not self._x11_fallback and bool(os.environ.get("DISPLAY"))
 
     async def stop(self) -> None:
         proc, self._proc = self._proc, None
@@ -150,6 +178,17 @@ class KeyOverlayHost:
             return
         self._proc = None
         self._moving = False
+        if self.error == "no-layer-shell" and self._can_use_x11_instead():
+            # Flatpak gives the sandbox a filtered Wayland socket, and
+            # compositors that honour it (Hyprland, KWin) hide layer-shell
+            # from it. XWayland still draws a window kept above the game.
+            log.info("Layer-shell is not available to the Flatpak, drawing the "
+                     "keyboard overlay through XWayland instead")
+            self._x11_fallback = True
+            self.error = None
+            if self._wanted:
+                await self._start()
+            return
         if code != 0 and not self.error:
             self.error = "no-gtk" if "No module named 'gi'" in stderr or "Namespace Gtk" in stderr \
                 else "crashed"

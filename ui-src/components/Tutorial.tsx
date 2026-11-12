@@ -11,6 +11,7 @@ import {IconCheck, IconPlus} from './Icons';
 import {AccentPicker} from './AccentPicker';
 import {useAccentChoice} from '../lib/accentChoice';
 import {customAccent as deriveCustom} from '../theme/viceTheme';
+import {SoundPackPicker} from './settings/SoundPackPicker';
 import {KeyCapture} from './settings/KeyCapture';
 import {Slider, Toggle} from './settings/Fields';
 import {ACCENTS, ACCENT_NAMES} from '../theme/accents';
@@ -41,7 +42,8 @@ const PAGES = [
  */
 export function Tutorial({open, onClose}: {open: boolean; onClose: () => void}) {
   const {state, hotkey, notify, saveConfig} = useStore();
-  const {choose, chooseCustom, seed} = useAccentChoice();
+  const {choose, chooseCustom, chooseMatugen, seed} = useAccentChoice();
+  const matugenColors = state.matugen;
   const [page, setPage] = useState(1);
   const [picking, setPicking] = useState(false);
 
@@ -235,6 +237,19 @@ export function Tutorial({open, onClose}: {open: boolean; onClose: () => void}) 
                 onClick={() => setPicking(true)}>
                 {accent === 'custom' ? <IconCheck size={16} /> : <IconPlus size={16} />}
               </button>
+              {matugenColors ? (
+                <button
+                  type="button"
+                  className="swatch swatch-lg"
+                  data-active={accent === 'matugen' || undefined}
+                  style={{background: matugenColors.primary}}
+                  title={t('accents.matugen')}
+                  aria-label={t('accents.matugen')}
+                  aria-pressed={accent === 'matugen'}
+                  onClick={chooseMatugen}>
+                  {accent === 'matugen' ? <IconCheck size={16} /> : null}
+                </button>
+              ) : null}
             </div>
           </>
         ) : page === 2 ? (
@@ -268,6 +283,13 @@ export function Tutorial({open, onClose}: {open: boolean; onClose: () => void}) 
               </label>
             </div>
             <p className="tut-note">{t('tutorial.screenshotKeyNote')}</p>
+            <div className="tut-key">
+              <span>{t('sounds.label')}</span>
+              <SoundPackPicker
+                value={String(state.config?.notifications?.sound_pack ?? 'classic')}
+                onChange={pack => persist({notifications: {sound_pack: pack}})}
+              />
+            </div>
           </>
         ) : page === 3 ? (
           <>

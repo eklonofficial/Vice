@@ -87,6 +87,7 @@ const IGNORE = [
   /^JetBrains Mono$/,                // a typeface name, the same in every language
   /^GPL-[\d.]+$/,                    // an SPDX licence id
   /^-{1,2}[a-z]/,                    // command-line flags shown as placeholders
+  /^Bahasa Indonesia$/,              // a language named in its own words, never translated
 ];
 
 function walk(dir) {

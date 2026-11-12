@@ -29,7 +29,7 @@ export function Editor() {
   const {clips, accent, customAccent, editorProjectRevision, config} = state;
   // The editor paints its own timeline, so it needs the resolved accent
   // rather than a name it can look up in the generated table.
-  const accentBase = resolveAccent(accent, customAccent).ramp.base;
+  const accentBase = resolveAccent(accent, customAccent, state.matugen).ramp.base;
 
   const stageRef = useRef<HTMLDivElement>(null);
   const stageWrapRef = useRef<HTMLDivElement>(null);

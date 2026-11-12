@@ -39,6 +39,18 @@ export function PlaybackProvider({children}: {children: ReactNode}) {
 
   const [viewerSlug, setViewerSlug] = useState<string | null>(null);
   const [trimSlug, setTrimSlug] = useState<string | null>(null);
+  // Clips with a trim running on the daemon. Kept here, not in the trim
+  // window, so closing and reopening it cannot forget one is still going (#281).
+  const [trimming, setTrimming] = useState<ReadonlySet<string>>(() => new Set());
+  const setTrimBusy = useCallback((slug: string, busy: boolean) => {
+    setTrimming(current => {
+      if (current.has(slug) === busy) return current;
+      const next = new Set(current);
+      if (busy) next.add(slug);
+      else next.delete(slug);
+      return next;
+    });
+  }, []);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [confirmDelete, setConfirmDelete] = useState<Clip | null>(null);
   const [manualCopy, setManualCopy] = useState<string | null>(null);
@@ -148,6 +160,15 @@ export function PlaybackProvider({children}: {children: ReactNode}) {
     [notify],
   );
 
+  const copyDiscordFile = useCallback(
+    (clip: Clip) =>
+      void api
+        .copyClipFile(clip.slug, {discord: true})
+        .then(() => say(t('card.discordCopied'), t('card.discordCopiedDetail')))
+        .catch(fail(t('card.errCopyVideo'))),
+    [fail, say],
+  );
+
   const value = useMemo<Playback>(
     () => ({openViewer, openTrim, openShare: setShareSlug}),
     [openViewer, openTrim],
@@ -176,11 +197,18 @@ export function PlaybackProvider({children}: {children: ReactNode}) {
         notify={say}
       />
 
-      <ShareModal clip={shareClip} onClose={() => setShareSlug(null)} onCopyLink={copyLink} />
+      <ShareModal
+        clip={shareClip}
+        onClose={() => setShareSlug(null)}
+        onCopyLink={copyLink}
+        onCopyFile={copyDiscordFile}
+      />
 
       <TrimModal
         clip={trimClip}
         highlights={trimSlug && trimSlug === viewerSlug ? highlights : []}
+        busy={trimClip ? trimming.has(trimClip.slug) : false}
+        onBusy={setTrimBusy}
         onClose={() => setTrimSlug(null)}
         onSaved={refreshClips}
         notify={say}

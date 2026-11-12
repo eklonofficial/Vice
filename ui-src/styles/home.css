@@ -262,6 +262,7 @@ kbd {
   border-radius: var(--radius-container);
   overflow: hidden;
   background: var(--raised);
+  position: relative;
   /* The whole card opens the clip, so the whole card has to look like it does. */
   cursor: pointer;
   transition:
@@ -357,6 +358,68 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 
+/* A clip whose preview is not ready (#241). Quiet until the card is hovered,
+   and absent once it is ready. */
+.clip-preview-status {
+  position: absolute;
+  top: var(--spacing-2);
+  right: var(--spacing-2);
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: rgba(0, 0, 0, 0.72);
+  transition: opacity var(--duration-medium) var(--ease-standard);
+}
+
+.clip-preview-status[data-idle] {
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.clip-card:hover .clip-preview-status[data-idle],
+.clip-preview-status[data-idle]:focus-visible {
+  opacity: 1;
+}
+
+.clip-preview-ring,
+.clip-preview-spinner {
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.clip-preview-ring {
+  border: 2px solid #fff;
+}
+
+.clip-preview-spinner {
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  animation: clip-preview-spin 0.8s linear infinite;
+}
+
+@keyframes clip-preview-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clip-preview-spinner {
+    animation-duration: 2.4s;
+  }
+}
+
+.game-tag-help {
+  margin-top: var(--spacing-2);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
 .clip-body {
   display: flex;
   flex-direction: column;
@@ -392,10 +455,26 @@ kbd {
   color: var(--color-error);
 }
 
-.clip-game {
+.clip-tagline {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--spacing-2);
   margin-top: 2px;
+}
+
+.clip-game {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11px;
   color: var(--color-text-accent);
+}
+
+.clip-views {
+  flex: none;
+  font-size: 11px;
+  color: var(--color-text-disabled);
 }
 
 /* Says the same thing the empty space used to, but out loud. */
@@ -862,7 +941,7 @@ kbd {
   color: var(--color-text-secondary);
 }
 
-.credit-avatar {
+.credit .credit-avatar {
   flex: none;
   width: 34px;
   height: 34px;
@@ -875,7 +954,7 @@ kbd {
   font-weight: 700;
 }
 
-.credit-avatar-dim {
+.credit .credit-avatar-dim {
   background: var(--recessed);
   color: var(--color-text-secondary);
 }
@@ -1399,4 +1478,185 @@ kbd {
   margin: 0;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+/* ── gpu-screen-recorder setup (Vice Flatpak) ───────────────────────── */
+
+/* Stands in for Home until the GSR Flatpak is installed, because nothing
+   records without it. A surface container card, centred, no shadow. */
+.gsr-setup {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: var(--spacing-6) var(--spacing-4);
+}
+
+.gsr-setup-card {
+  width: min(520px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-3);
+  padding: var(--spacing-6) var(--spacing-5);
+  border-radius: var(--radius-container);
+  background: var(--vice-surface-low);
+  text-align: center;
+  animation: gsr-setup-in var(--duration-medium) var(--vice-ease-spring);
+}
+
+.gsr-setup-card h1 {
+  margin: 0;
+  font-size: var(--text-heading-2-size);
+  color: var(--color-text-primary);
+}
+
+.gsr-setup-card p {
+  margin: 0;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+.gsr-setup-eyebrow {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-accent);
+}
+
+.gsr-setup-go {
+  margin-top: var(--spacing-2);
+  padding-inline: var(--spacing-5);
+}
+
+.gsr-setup-note,
+.gsr-setup-copied {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.gsr-setup-card .gsr-setup-error {
+  color: var(--color-error);
+  font-size: 12.5px;
+  word-break: break-word;
+}
+
+.gsr-setup-command {
+  max-width: 100%;
+  padding: var(--spacing-2) var(--spacing-3);
+  border: 0;
+  border-radius: var(--radius-element);
+  background: var(--recessed);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-code);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.gsr-setup-ring {
+  position: relative;
+  width: 112px;
+  height: 112px;
+}
+
+.gsr-setup-ring svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.gsr-setup-ring circle {
+  fill: none;
+  stroke-width: 7;
+  stroke-linecap: round;
+}
+
+.gsr-setup-ring-track {
+  stroke: var(--control);
+}
+
+.gsr-setup-ring-fill {
+  stroke: var(--color-accent);
+  transition: stroke-dashoffset 420ms var(--ease-standard);
+}
+
+/* flatpak has not reported a percent yet: an arc that keeps turning. */
+.gsr-setup-ring[data-indeterminate] svg {
+  animation: gsr-setup-spin 1100ms linear infinite;
+}
+
+.gsr-setup-ring-value {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+/* Shown instead of the ring when motion is reduced. */
+.gsr-setup-bar {
+  display: none;
+  width: 100%;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--control);
+  overflow: hidden;
+}
+
+.gsr-setup-bar span {
+  display: block;
+  height: 100%;
+  background: var(--color-accent);
+}
+
+.gsr-setup-done {
+  width: 112px;
+  height: 112px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  animation: gsr-setup-pop 560ms var(--vice-ease-spring);
+}
+
+.gsr-setup-done svg {
+  animation: gsr-setup-check 420ms 160ms var(--ease-standard) both;
+}
+
+@keyframes gsr-setup-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes gsr-setup-spin {
+  to { transform: rotate(270deg); }
+}
+
+@keyframes gsr-setup-pop {
+  0% { transform: scale(0.4); opacity: 0; }
+  60% { transform: scale(1.08); opacity: 1; }
+  100% { transform: scale(1); }
+}
+
+@keyframes gsr-setup-check {
+  from { opacity: 0; transform: scale(0.5) rotate(-12deg); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gsr-setup-card,
+  .gsr-setup-done,
+  .gsr-setup-done svg {
+    animation: none;
+  }
+  .gsr-setup-ring {
+    display: none;
+  }
+  .gsr-setup-bar {
+    display: block;
+  }
 }
