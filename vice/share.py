@@ -2109,6 +2109,9 @@ class ShareServer:
                 return cached
             async with self._proxy_lock:
                 meta = await self._get_meta(slug, path)
+                # The copy that gets sent stream-copies the clip's video, so
+                # the clip's codec is the codec of the file being converted.
+                # It only changes the audio, to the one mixed track.
                 return await _make_discord_copy(
                     source,
                     meta.get("duration", 0),

@@ -24,6 +24,8 @@ log = logging.getLogger("vice.media")
 TEMP_FILE_GLOBS = ("*.trim.mp4", "*.wm.mp4", "*.fix.mp4", "*.trimming.mp4",
                    "*.trim.mkv", "*.wm.mkv", "*.fix.mkv", "*.trimming.mkv",
                    "*.export.mp4",
+                   # Track titles written after a save (_label_audio_tracks).
+                   "*.labels.mp4", "*.labels.mkv",
                    # Left behind when an image annotation is interrupted
                    # between writing the new picture and moving it into place.
                    "*.annotating.png", "*.annotating.jpg", "*.annotating.jpeg")

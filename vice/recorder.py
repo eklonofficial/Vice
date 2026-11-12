@@ -2149,7 +2149,7 @@ def _gsr_replay_candidates(current: set[str], baseline: set[str]) -> set[str]:
         name
         for name in current - baseline
         if not name.startswith(("Vice_Clip_", "Vice_Session_"))
-        and not any(t in name for t in (".trim.", ".trimming.", ".wm.", ".fix."))
+        and not any(t in name for t in (".trim.", ".trimming.", ".wm.", ".fix.", ".labels."))
     }
 
 
@@ -2892,20 +2892,40 @@ def _label_tracks_cmd(path: Path, tmp: Path, titles: list[str]) -> list[str]:
     return args + ["-y", str(tmp)]
 
 
+def _labelled_copy_problem(original: dict, labelled: Optional[dict]) -> str:
+    """Why the copy with track titles must not replace the clip, or "" when
+    it can. A stream copy changes nothing but the tags, so a copy that lost
+    an audio track or came out shorter is broken, and replacing the clip
+    with it would lose the recording."""
+    if not labelled:
+        return "cannot be read back"
+    if labelled["audio_streams"] != original["audio_streams"]:
+        return (f"has {labelled['audio_streams']} audio tracks, "
+                f"not {original['audio_streams']}")
+    want, got = original["duration"], labelled["duration"]
+    if abs(got - want) > max(0.5, want * 0.01):
+        return f"lasts {got:.2f}s, not {want:.2f}s"
+    return ""
+
+
 async def _label_audio_tracks(path: Path, rc) -> None:
     """Name each separate audio track after its source, so the editor (and
     any other editor) shows Spotify or Microphone instead of Track 3. Stream
-    copy only. A clip whose tracks do not match the settings, or any
-    failure, keeps the clip as recorded."""
+    copy only, and the copy replaces the clip only once it probes with the
+    same audio tracks and length. A clip whose tracks do not match the
+    settings, or any failure, keeps the clip as recorded."""
     if _gsr_has_any_flag(_extra_gsr_args(getattr(rc, "gsr_args", "") or ""), "-a"):
         return  # The user's own -a flags decide the tracks, not the settings.
     titles = _track_titles(rc)
     if not titles:
         return
-    streams = await _count_audio_streams(path)
-    if streams != len(titles):
+    original, _ = await probe_media_detailed(path)
+    if not original or original["duration"] <= 0:
+        log.info("Not naming the audio tracks of %s: it cannot be read", path.name)
+        return
+    if original["audio_streams"] != len(titles):
         log.info("Not naming the audio tracks of %s: it has %d, the settings "
-                 "describe %d", path.name, streams, len(titles))
+                 "describe %d", path.name, original["audio_streams"], len(titles))
         return
     ext = path.suffix.lstrip(".") or "mp4"
     tmp = path.with_suffix(f".labels.{ext}")
@@ -2928,6 +2948,13 @@ async def _label_audio_tracks(path: Path, rc) -> None:
         log.warning("Could not name the audio tracks of %s, keeping it as "
                     "recorded: %s", path.name,
                     (stderr or b"").decode(errors="replace").strip()[:300])
+        tmp.unlink(missing_ok=True)
+        return
+    labelled, _ = await probe_media_detailed(tmp)
+    problem = _labelled_copy_problem(original, labelled)
+    if problem:
+        log.warning("Not naming the audio tracks of %s: the copy with names %s, "
+                    "keeping it as recorded", path.name, problem)
         tmp.unlink(missing_ok=True)
         return
     tmp.replace(path)

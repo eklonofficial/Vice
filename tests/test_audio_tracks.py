@@ -548,6 +548,28 @@ class LabelTracksTests(unittest.IsolatedAsyncioTestCase):
             await _label_audio_tracks(path, _apps_rc([]))
             self.assertEqual(path.read_bytes(), before)
 
+    async def test_a_copy_that_lost_a_track_or_got_shorter_never_replaces_the_clip(self):
+        from unittest import mock
+        from vice import recorder
+        rc = _apps_rc(['everything_else', 'app:Spotify'])
+        broken = {
+            'lost a track': ['-map', '0:v', '-map', '0:a:0', '-map', '0:a:1', '-map', '0:a:2'],
+            'got shorter': ['-map', '0', '-t', '0.2'],
+        }
+        for problem, args in broken.items():
+            with self.subTest(problem), tempfile.TemporaryDirectory() as directory:
+                path = self._clip(Path(directory) / 'clip.mp4', 4)
+                before = path.read_bytes()
+
+                def cmd(path, tmp, titles, args=args):
+                    return ['ffmpeg', '-v', 'error', '-i', str(path), *args, '-c', 'copy', '-y', str(tmp)]
+
+                with mock.patch.object(recorder, '_label_tracks_cmd', cmd), \
+                        self.assertLogs('vice.recorder', 'WARNING'):
+                    await recorder._label_audio_tracks(path, rc)
+                self.assertEqual(path.read_bytes(), before)
+                self.assertEqual([p.name for p in Path(directory).iterdir()], ['clip.mp4'])
+
     async def test_the_users_own_audio_flags_win(self):
         from vice.recorder import _label_audio_tracks
         rc = _apps_rc(['everything_else', 'app:Spotify'])
@@ -557,6 +579,20 @@ class LabelTracksTests(unittest.IsolatedAsyncioTestCase):
             before = path.read_bytes()
             await _label_audio_tracks(path, rc)
             self.assertEqual(path.read_bytes(), before)
+
+
+class LabelLeftoverTests(unittest.TestCase):
+    def test_an_interrupted_label_pass_is_cleared_and_never_taken_for_a_replay(self):
+        from vice.media import cleanup_temp_files
+        from vice.recorder import _gsr_replay_candidates
+        with tempfile.TemporaryDirectory() as directory:
+            clips = Path(directory)
+            for name in ('Vice_Clip_3.labels.mp4', 'Vice_Session_2.labels.mkv', 'Vice_Clip_3.mp4'):
+                (clips / name).write_bytes(b'x')
+            cleanup_temp_files(clips)
+            self.assertEqual([p.name for p in clips.iterdir()], ['Vice_Clip_3.mp4'])
+        flushed = {'Replay_2026-11-12_20-00-00.mp4', 'Replay_2026-11-12_20-00-00.labels.mp4'}
+        self.assertEqual(_gsr_replay_candidates(flushed, set()), {'Replay_2026-11-12_20-00-00.mp4'})
 
 
 class AutoAppTracksTests(unittest.TestCase):
@@ -765,7 +801,25 @@ class SendWithTrackSettingsTests(unittest.IsolatedAsyncioTestCase):
         # Discord gets the same, and the clip itself keeps every track.
         discord = await self.server._prepare_discord_copy('clip', self.path)
         self.assertLess(_tone(discord, 0, 880), 0.002)
+        # A small H.264 clip goes as the copy that gets sent, unconverted.
+        self.assertEqual(discord.parent.parent.name, _share.SEND_SUBDIR)
         self.assertEqual(self.path.read_bytes(), before)
+
+    async def test_discord_gets_h264_when_the_clip_is_in_another_codec(self):
+        # The copy that gets sent keeps the clip's video, so a clip in another
+        # codec is converted for Discord rather than passed through (#289).
+        with tempfile.TemporaryDirectory() as directory:
+            other = Path(directory) / 'clip.mp4'
+            subprocess.run(['ffmpeg', '-v', 'error', '-i', str(self.path), '-map', '0',
+                            '-c:v', 'mpeg4', '-c:a', 'copy', str(other)], check=True, timeout=30)
+            other.replace(self.path)
+        self.server._meta.pop('clip', None)
+        await self._set([{'index': 2, 'enabled': False, 'volume': 1}])
+        discord = await self.server._prepare_discord_copy('clip', self.path)
+        self.assertEqual((await probe_media(discord))['vcodec'], 'h264')
+        self.assertEqual((await probe_media(discord))['audio_streams'], 1)
+        self.assertLess(_tone(discord, 0, 880), 0.002)
+        self.assertGreater(_tone(discord, 0, 440), 0.02)
 
     async def test_switching_it_back_on_sends_everything_again(self):
         await self._set([{'index': 2, 'enabled': False, 'volume': 1}])
