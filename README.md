@@ -134,7 +134,9 @@ The Flatpak also works on any other distro with Flatpak installed.
 
 **Hotkeys per clip.** Add your own rename-able, color-coded hotkeys to any clip for quick recall later.
 
-**Vice Sessions.** Double-tap your clip key to start recording a full match. Single-tap during the session to drop a marker at that moment, then pick up right where you left off once it lands in the editor. An optional setting stops a session five seconds after the game process active at session start exits. It follows that original process instance, so alt-tabbing or minimizing the game does not stop the session. If the process cannot be tracked for a session, stop it manually. This option is independent of Discord Rich Presence, filename game tagging, and Game Capture.
+**Vice Sessions.** Double-tap your clip key to start recording a full match. Single-tap during the session to drop a marker at that moment, then pick up right where you left off once it lands in the editor.
+
+On KDE Wayland and X11, Vice can start sessions automatically for recognized games, including games already running in the background. If you manually stop one, Vice suppresses automatic start for that game process until it exits. Suppression survives daemon restarts and changes to the setting. Enabling automatic start begins scanning immediately; disabling it does not stop a session already recording. Vice skips windows whose process ID is missing, unreliable, or belongs to a proxy process. Automatic start is independent of the optional setting that stops a session five seconds after the game process active at session start exits. That stop setting follows the original process instance, so alt-tabbing or minimizing the game does not stop a session. If that process cannot be tracked, stop the session manually. Neither setting changes Discord Rich Presence, filename game tagging, or Game Capture.
 
 **Clips the screen you're on.** Turn on Follow my mouse and Vice records whichever monitor the pointer is sitting on, instead of one you picked in advance. Works on X11, Hyprland and Sway.
 
@@ -221,6 +223,7 @@ Vice writes `~/.config/vice/config.toml` on first run. Everything below is also 
 [recording]
 buffer_duration = 120     # seconds kept in the rolling buffer
 clip_duration   = 20      # seconds saved per clip
+session_start_on_game_detect = false # automatically start sessions for detected games on KDE Wayland or X11
 session_stop_on_game_exit = false # stop sessions five seconds after the game active at session start exits
 fps             = 60
 display         = "DP-1"  # optional; omit to use the backend default display
