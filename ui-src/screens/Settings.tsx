@@ -377,6 +377,16 @@ export function Settings() {
       <div className="settings-body" ref={bodyRef}>
         {/* ── Recording ─────────────────────────────────────────── */}
         <Card id="recording" title={t('settings.secRecording')} register={register('recording')}>
+          <Row
+            label={t('settings.sessionStopOnGameExit')}
+            help={t('settings.sessionStopOnGameExitHelp')}>
+            <Toggle
+              label={t('settings.sessionStopOnGameExit')}
+              checked={draft.sessionStopOnGameExit}
+              onChange={sessionStopOnGameExit => update({sessionStopOnGameExit})}
+            />
+          </Row>
+
           <Row label={t('settings.bufferDuration')} note={buffer}>
             <Slider
               label={t('settings.bufferDuration')}

@@ -396,7 +396,13 @@ function reduceWs(state: State, msg: WsMessage): State {
         }),
       };
 
-    case 'session_start':
+    case 'session_start': {
+      const sessionStartDetail =
+        msg.auto_stop === 'armed'
+          ? t('events.sessionAutoStopArmed')
+          : msg.auto_stop === 'unavailable'
+            ? t('events.sessionAutoStopUnavailable')
+            : t('events.doubleTapToStop');
       return withEvent(
         {
           ...state,
@@ -406,11 +412,13 @@ function reduceWs(state: State, msg: WsMessage): State {
         {
           kind: 'info',
           title: t('events.sessionRecording'),
-          detail: t('events.doubleTapToStop'),
+          detail: sessionStartDetail,
           tone: 'live',
           holdMs: 5000,
         },
       );
+
+    }
 
     case 'session_stop':
       return withEvent(

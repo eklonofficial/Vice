@@ -37,6 +37,7 @@ import click
 
 from . import __version__
 from .active_window import steam_game_name
+from .session_process import ProcessIdentity, bind_game_process, probe_game_process
 from .config import (
     CLIP_DURATION_MIN,
     Config,
@@ -185,6 +186,8 @@ FOLLOW_MOUSE_INTERVAL = 2.0
 # just means the previous target keeps recording a bit longer, not a visible
 # glitch.
 WINDOW_CAPTURE_INTERVAL = 5.0
+SESSION_GAME_POLL_INTERVAL = 1.0
+SESSION_GAME_EXIT_DELAY = 5.0
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -207,6 +210,8 @@ class ViceDaemon:
         self._clip_count = 0
         # Session recording state
         self._session_lock = asyncio.Lock()
+        self._session_token: Optional[object] = None
+        self._session_monitor_task: Optional[asyncio.Task] = None
         self._session_game: Optional[str] = None
         self._session_active   = False
         self._session_path:    Optional[Path] = None
@@ -493,6 +498,8 @@ class ViceDaemon:
         recorder, so moving one must not restart it and empty the buffer."""
         recording = asdict(self.cfg.recording)
         recording.pop("audio_track_volumes", None)
+        # Session lifecycle settings are captured at start, not capture options.
+        recording.pop("session_stop_on_game_exit", None)
         return json.dumps(recording, sort_keys=True)
 
     def _clips_in_library(self) -> int:
@@ -1326,7 +1333,12 @@ class ViceDaemon:
             self._discord_game_comm = ""
 
     def _detect_game(self) -> Optional[str]:
-        """Recognized raw game name, independent of filename/playlist toggles.
+        """Recognized game label for existing replay/tagging callers."""
+        target = self._detect_game_target()
+        return target[0] if target else None
+
+    def _detect_game_target(self) -> Optional[tuple[str, dict]]:
+        """Recognized game and the matched window from the same detection.
 
         Sync (callers run it in a thread; window detection shells out to the
         compositor). Matches configured, bundled or Steam games, never
@@ -1367,7 +1379,7 @@ class ViceDaemon:
             adapter, (win or {}).get("process"), (win or {}).get("class"),
             game, scanned, candidates,
         )
-        return game
+        return (game, win) if game is not None and win is not None else None
 
     def _clip_game_tag(self) -> Optional[str]:
         """Capture replay identity even when filename tagging is disabled."""
@@ -1784,10 +1796,14 @@ class ViceDaemon:
     async def _stop_session(self) -> None:
         await self._change_session(False)
 
-    async def _change_session(self, start: Optional[bool]) -> None:
+    async def _change_session(
+        self, start: Optional[bool], *, expected_token: Optional[object] = None,
+    ) -> None:
         # Serialize start/stop through finalization: a new session must not
         # replace the identity or highlights of one still being saved.
         async with self._session_lock:
+            if expected_token is not None and expected_token is not self._session_token:
+                return
             if start is None:
                 start = not self._session_active
             try:
@@ -1798,6 +1814,8 @@ class ViceDaemon:
                     await self._stop_session_locked()
             finally:
                 if not self._session_active:
+                    self._session_token = None
+                    await self._cancel_session_monitor()
                     self._session_game = None
                     self._session_path = None
                     self._session_highlights = []
@@ -1814,28 +1832,96 @@ class ViceDaemon:
         click.echo("[Vice] Starting session recording…", err=True)
         self._session_game = None
         self._session_highlights = []
+        auto_stop_enabled = self.cfg.recording.session_stop_on_game_exit
+        identity = None
         try:
-            self._session_game = await asyncio.to_thread(self._detect_game)
+            if auto_stop_enabled:
+                target = await asyncio.to_thread(self._detect_game_target)
+                if target:
+                    self._session_game, win = target
+                    identity = await asyncio.to_thread(bind_game_process, win)
+            else:
+                self._session_game = await asyncio.to_thread(self._detect_game)
         except Exception:
-            log.exception("Session game detection failed; recording without a game tag")
+            log.exception("Session game detection failed; automatic stopping unavailable")
         tag = self._session_game if self.cfg.output.tag_clips_with_game else None
         path = await self.recorder.start_session(tag=tag)
         if path is None:
             click.echo("[Vice] Session recording failed to start", err=True)
             return
         self._session_active = True
+        self._session_token = object()
         self._session_path   = path
+        auto_stop = "off" if not auto_stop_enabled else ("armed" if identity else "unavailable")
         audio.play_session_start(self.cfg.notifications.sound_volume,
                                  self.cfg.notifications.session_start_sound,
                                  self.cfg.notifications.sound_pack)
         click.echo(f"[Vice] Session recording started → {path}", err=True)
+        if auto_stop == "armed":
+            message = "Session will stop five seconds after the original game exits."
+        elif auto_stop == "unavailable":
+            message = "Automatic stopping is unavailable for this session. Stop it manually."
+        else:
+            message = "Automatic session stopping is off."
+        log.info(message)
+        click.echo(f"[Vice] {message}", err=True)
         if self.share:
             asyncio.create_task(
                 self.share.broadcast({
                     "type": "session_start",
                     "path": str(path),
+                    "auto_stop": auto_stop,
                 })
             )
+
+        if identity is not None:
+            self._session_monitor_task = asyncio.create_task(
+                self._monitor_session_game(self._session_token, identity)
+            )
+
+    async def _cancel_session_monitor(self) -> None:
+        task = getattr(self, "_session_monitor_task", None)
+        self._session_monitor_task = None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    async def _monitor_session_game(self, token: object, identity: ProcessIdentity) -> None:
+        exited_since = None
+        try:
+            while self._session_active and self._session_token is token:
+                await asyncio.sleep(SESSION_GAME_POLL_INTERVAL)
+                if self.recorder.session_capture_exited():
+                    reason = "Session capture process exited"
+                    break
+                try:
+                    state = await asyncio.to_thread(probe_game_process, identity)
+                except Exception:
+                    log.exception("Session game process probe failed")
+                    state = "unknown"
+                now = time.monotonic()
+                if state != "exited":
+                    exited_since = None
+                    continue
+                if exited_since is None:
+                    exited_since = now
+                if now - exited_since >= SESSION_GAME_EXIT_DELAY:
+                    reason = "Original session game exited"
+                    break
+            else:
+                return
+            log.info("%s; finalizing session", reason)
+            await self._change_session(False, expected_token=token)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Automatic session stop failed")
+        finally:
+            if getattr(self, "_session_monitor_task", None) is asyncio.current_task():
+                self._session_monitor_task = None
 
     async def _stop_session_locked(self) -> None:
         click.echo("[Vice] Stopping session recording…", err=True)

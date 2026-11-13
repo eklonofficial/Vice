@@ -187,13 +187,19 @@ def _active_window_geometry_niri() -> Optional[tuple[int, int]]:
 
 # ─── KDE Plasma / KWin ─────────────────────────────────────────────────────
 def _get_active_window_kde() -> Optional[ActiveWindow]:
-    pid_text = _run(["kdotool", "getactivewindow", "getwindowpid"]).strip()
+    window_id = _run(["kdotool", "getactivewindow"]).strip()
+    if not window_id:
+        if os.environ.get("DISPLAY"):
+            return _get_active_window_x11()
+        return None
+
+    pid_text = _run(["kdotool", "getwindowpid", window_id]).strip()
     try:
         pid = int(pid_text) if pid_text else 0
     except ValueError:
         pid = 0
 
-    cls = _run(["kdotool", "getactivewindow", "getwindowclassname"]).strip()
+    cls = _run(["kdotool", "getwindowclassname", window_id]).strip()
 
     proc = _read_proc_comm(pid) if pid else ""
     if not (cls or proc):
