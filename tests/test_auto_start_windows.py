@@ -14,6 +14,9 @@ class KdeWindowScanTests(unittest.TestCase):
         self.adapter_patch = mock.patch.object(aw, "_ADAPTER", aw._get_active_window_kde)
         self.adapter_patch.start()
         self.addCleanup(self.adapter_patch.stop)
+        self.display_patch = mock.patch.dict(os.environ, {'DISPLAY': ''})
+        self.display_patch.start()
+        self.addCleanup(self.display_patch.stop)
 
     def test_native_kde_scan_returns_windows_and_focused_id_from_one_command(self):
         payload = {
@@ -93,6 +96,27 @@ class KdeWindowScanTests(unittest.TestCase):
             self.assertTrue(aw.auto_start_scan_supported())
             self.assertEqual(aw.scan_game_windows(), aw.WindowScan([], None))
         scan_x11.assert_called_once_with()
+
+    def test_kde_scan_fallback_only_after_failure_with_display(self):
+        fallback = aw.WindowScan([{'process': 'cs2', 'class': 'cs2',
+                                   'pid': 42, 'window_id': '0x1'}], '0x1')
+        empty = aw.WindowScan([], None)
+        cases = [
+            ('KDE fails, X11 succeeds', None, ':1', fallback, fallback, 1),
+            ('both fail', None, ':1', None, None, 1),
+            ('no DISPLAY', None, '', fallback, None, 0),
+            ('empty KDE is success', empty, ':1', fallback, empty, 0),
+            ('nonempty KDE is success', fallback, ':1', empty, fallback, 0),
+        ]
+        for label, kde_result, display, x11_result, expected, x11_calls in cases:
+            with self.subTest(label=label), \
+                 mock.patch.object(aw, 'host_which', return_value=True), \
+                 mock.patch.object(aw, '_scan_kde_game_windows', return_value=kde_result) as kde, \
+                 mock.patch.object(aw, '_scan_x11_game_windows', return_value=x11_result) as x11, \
+                 mock.patch.dict(os.environ, {'DISPLAY': display}):
+                self.assertEqual(aw.scan_game_windows(), expected)
+                kde.assert_called_once_with()
+                self.assertEqual(x11.call_count, x11_calls)
 
 
 class ScanCommandTests(unittest.TestCase):

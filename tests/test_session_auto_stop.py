@@ -6,6 +6,7 @@ import unittest
 from unittest import mock
 
 from tests import test_session_game_tagging as tagging
+from vice.main import AutoStartTarget
 from vice.session_process import ProcessIdentity
 
 
@@ -39,6 +40,96 @@ class SessionAutoStopTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.daemon._session_active)
         self.assertIsNotNone(self.daemon._session_monitor_task)
         return self.daemon._session_monitor_task
+
+    async def _check_unfocused_background_tag(self, focus, windows, *, auto_start_only=False):
+        d = self.daemon
+        d.cfg.recording.session_stop_on_game_exit = not auto_start_only
+        d.cfg.recording.session_start_on_game_detect = auto_start_only
+        d.cfg.output.tag_clips_with_game = True
+        names = {'cs2': 'Counter-Strike 2', 'dota2': 'Dota 2'}
+        self.target.side_effect = lambda **kwargs: type(d)._detect_game_target(d, **kwargs)
+        with mock.patch('vice.active_window.get_active_window', return_value=focus), \
+             mock.patch('vice.active_window.list_candidate_windows', return_value=windows), \
+             mock.patch.object(d, '_match_game', side_effect=lambda win: names.get(win['class'])), \
+             mock.patch.object(d, '_scan_visible_for_game', side_effect=lambda: type(d)._scan_visible_for_game(d)), \
+             mock.patch.object(d.recorder, 'start_session', wraps=d.recorder.start_session) as start, \
+             mock.patch.object(d.share, 'add_clip', wraps=d.share.add_clip) as add, \
+             mock.patch.object(d, '_suppress_manually_stopped_session', new=mock.AsyncMock()):
+            await d._start_session()
+            await asyncio.sleep(0)
+            path = d._session_path
+            self.assertTrue(d._session_active)
+            self.assertEqual(d._session_game, 'Counter-Strike 2')
+            self.assertIsNone(d._session_process_identity)
+            self.assertIsNone(getattr(d, '_session_monitor_task', None))
+            self.bind.assert_not_called()
+            events = [call.args[0] for call in d.share.broadcast.call_args_list]
+            event = next(event for event in events if event['type'] == 'session_start')
+            self.assertEqual(event['auto_stop'], 'off' if auto_start_only else 'unavailable')
+            self.assertEqual(event['origin'], 'manual')
+            start.assert_awaited_once_with(tag='Counter-Strike 2')
+            d._session_highlights = [{'time': 1.25, 'label': 'Moment', 'color': '#fff'}]
+            await d._stop_session()
+            add.assert_called_once_with(path, game='Counter-Strike 2', session=True)
+        highlights = json.loads((self.root / 'highlights' / f'{path.stem}.json').read_text())
+        self.assertEqual(highlights[0]['time'], 1.25)
+
+    async def test_manual_unrecognized_focus_does_not_bind_background(self):
+        await self._check_unfocused_background_tag(
+            {'process': 'browser', 'class': 'firefox', 'pid': 99}, [self.window])
+
+    async def test_manual_absent_focus_with_two_games_avoids_ambiguous_binding(self):
+        await self._check_unfocused_background_tag(
+            None, [self.window, {'process': 'dota2', 'class': 'dota2', 'pid': 88}])
+
+    async def test_manual_auto_start_setting_does_not_bind_background(self):
+        await self._check_unfocused_background_tag(
+            {'process': 'browser', 'class': 'firefox', 'pid': 99},
+            [self.window], auto_start_only=True)
+
+    async def test_recognized_focus_binds_even_with_background_game(self):
+        d = self.daemon
+        d.cfg.recording.session_stop_on_game_exit = True
+        self.target.side_effect = lambda **kwargs: type(d)._detect_game_target(d, **kwargs)
+        with mock.patch('vice.active_window.get_active_window', return_value=self.window), \
+             mock.patch('vice.active_window.list_candidate_windows', return_value=[
+                 {'process': 'dota2', 'class': 'dota2', 'pid': 88}]) as scan, \
+             mock.patch.object(d, '_match_game', return_value='Counter-Strike 2'), \
+             mock.patch('vice.main.probe_game_process', return_value='running'):
+            task = await self.start_armed()
+            self.assertEqual(d._session_game, 'Counter-Strike 2')
+            self.assertEqual(d._session_process_identity, self.identity)
+            self.bind.assert_called_once_with(self.window)
+            scan.assert_not_called()
+            await d._stop_session()
+        self.assertTrue(task.done())
+
+    async def test_automatic_background_target_keeps_selected_identity(self):
+        d = self.daemon
+        d._ready = True
+        d.cfg.recording.session_stop_on_game_exit = True
+        d.cfg.recording.session_start_on_game_detect = True
+        d.cfg.output.tag_clips_with_game = True
+        selected = AutoStartTarget('Counter-Strike 2', self.window, self.identity)
+        with mock.patch('vice.main.probe_game_process', return_value='running'), \
+             mock.patch('vice.active_window.get_active_window') as focused, \
+             mock.patch.object(d.recorder, 'start_session', wraps=d.recorder.start_session) as start, \
+             mock.patch.object(d.share, 'add_clip', wraps=d.share.add_clip) as add:
+            await d._change_session(True, automatic_target=selected)
+            self.assertTrue(d._session_active)
+            self.assertEqual(d._session_game, selected.game)
+            self.assertEqual(d._session_process_identity, selected.identity)
+            self.assertIsNotNone(d._session_monitor_task)
+            start.assert_awaited_once_with(tag=selected.game)
+            self.target.assert_not_called()
+            self.bind.assert_not_called()
+            focused.assert_not_called()
+            path = d._session_path
+            d._session_highlights = [{'time': 2.5, 'label': 'Selected game', 'color': '#fff'}]
+            await d._change_session(False, stop_reason='automatic')
+            add.assert_called_once_with(path, game=selected.game, session=True)
+        highlights = json.loads((self.root / 'highlights' / f'{path.stem}.json').read_text())
+        self.assertEqual(highlights[0]['time'], 2.5)
 
     async def test_confirmed_exit_saves_once_with_original_identity_and_highlights(self):
         d = self.daemon

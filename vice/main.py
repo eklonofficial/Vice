@@ -1352,7 +1352,7 @@ class ViceDaemon:
         target = self._detect_game_target()
         return target[0] if target else None
 
-    def _detect_game_target(self) -> Optional[tuple[str, dict]]:
+    def _detect_game_target(self, *, focused_only: bool = False) -> Optional[tuple[str, dict]]:
         """Recognized game and the matched window from the same detection.
 
         Sync (callers run it in a thread; window detection shells out to the
@@ -1360,6 +1360,7 @@ class ViceDaemon:
         arbitrary window titles.
 
         Shared by replays and sessions; callers own their captured identity.
+        focused_only excludes background matches when binding a manual session.
         """
         game = None
         win = None
@@ -1371,7 +1372,7 @@ class ViceDaemon:
             adapter = adapter_name()
             win = get_active_window()
             game = self._match_game(win) if win else None
-            if game is None:
+            if game is None and not focused_only:
                 # Focus detection is unreliable on KDE and GNOME under Wayland,
                 # where it goes through XWayland. Discord presence has fallen
                 # back to a visible-window scan since #102; without the same
@@ -2084,10 +2085,13 @@ class ViceDaemon:
                 self._session_game = target.game
                 identity = target.identity
             elif auto_stop_enabled or self.cfg.recording.session_start_on_game_detect:
-                detected = await asyncio.to_thread(self._detect_game_target)
+                detected = await asyncio.to_thread(self._detect_game_target, focused_only=True)
                 if detected:
                     self._session_game, win = detected
                     identity = await asyncio.to_thread(bind_game_process, win)
+                else:
+                    # Background detection remains useful for tags, not binding.
+                    self._session_game = await asyncio.to_thread(self._detect_game)
             else:
                 self._session_game = await asyncio.to_thread(self._detect_game)
         except Exception:

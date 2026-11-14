@@ -590,7 +590,9 @@ def scan_game_windows() -> WindowScan | None:
     adapter = _current_adapter()
     if adapter is _get_active_window_kde:
         if host_which("kdotool"):
-            return _scan_kde_game_windows()
+            scan = _scan_kde_game_windows()
+            if scan is not None:
+                return scan
         if os.environ.get("DISPLAY"):
             return _scan_x11_game_windows()
         return None
